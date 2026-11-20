@@ -1,0 +1,31 @@
+  libzync: inputs 0..8006: 2170 pubkey hints, 7031 signature hints
+R0VM[280644777] liftx: hits=2188 misses=0
+R0VM[347370789] batch: deferred=7021 (schnorr=191) distinct_keys=2102 fallback=10 window=11 ok=true transcript=1748937 prep=13349656 msm=51622609 finish_cycles=66721285
+  chunk   0 [0..8006) executed: 352092950 cycles
+  chunk   0 padded 439877632 (420 segments)
+  libzync: ECMH COLLECT (no bundle)
+capture_pprof: $OUT/cap/v2_agg.0.pb (113607 bytes)
+  coinlog SYNTH: log size 2321904695 (k = 1.64), 2542 spends, 24969 siblings
+capture_pprof: $OUT/cap/v2_agg.1.pb (83938 bytes)
+  trie: 2542 marks, 7246 inserts, witness 689496 words; trie update executed: 47599783 cycles, padded 59768832 (57 segments)
+  coinlog: 2542 spends of earlier coins, 1782 appends
+  libzync: 296368 bytes of ECMH hints, no hints file
+capture_pprof: $OUT/cap/v2_agg.2.pb (184989 bytes)
+R0VM[55491590] swiftsync: adds=1782 subs=2542 collect=false acc_x_top_word=4b4318a6
+R0VM[66238061] undo: block 962000 inputs 8006 hash 013d6a7ff612f421e126bf36d56852b585353921452d3bb0713c307a1cf43dcf
+=== AGGREGATE, EXECUTE ONLY (no proving) ===
+  block validation cycles  66434430
+  block validation padded  85000192 (82 segments)
+  journal sha256           d2a9ee3d6793ee42b6873023314fe3f86a62ede46d4ca86c4de37ebd5ca0cfad
+  segments at po2 20        ~64
+  executed in              11.8s
+
+  Scale: chunk 9 is 948,436,992 cycles and proved in ~915 s on a B200, so this much
+  block-validation work is roughly 64 s of segment proving. Whatever the FULL
+  aggregate cost beyond that (measured: >3,300 s) is the assumption resolutions.
+capture_pprof: $OUT/cap/v2_agg.3.pb (84912 bytes)
+	Command being timed: "env HAZYNC_BLOCK=$REPO/prover/block_962000.json HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_LZ_HINTS=$OUT/v2_block962000_c1.lzb HAZYNC_COINLOG_TXCOUNTS=$REPO/experimental/libzync-bench/cost/txcounts.txt RISC0_PPROF_OUT=$OUT/cap/live.pb python3 -I $REPO/experimental/libzync-bench/profiles/capture_pprof.py $OUT/cap/live.pb $OUT/cap/v2_agg -- $OUT/v0.27.0/hazync-host-x86_64-linux-gnu agg-exec-fake"
+	User time (seconds): 133.68
+	System time (seconds): 0.66
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 2:04.66
+	Maximum resident set size (kbytes): 644476
