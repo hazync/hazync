@@ -51,9 +51,8 @@ headers  de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07   (the
 v0.26.0's images commit each block's undo data in its block-forest leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)),
 and the board proves the chain again from genesis under them; the verifier keeps v0.24.0's `8888d59c…` so its receipts
 still verify. The other zyncAPPs' images are in [`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS) too,
-
 and the build is reproducible: [`reproduce/libzync.Dockerfile`](reproduce/libzync.Dockerfile) gives
-the same ids bit for bit ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS)), and CI rebuilds them on
+the same ids bit for bit, and CI rebuilds them on
 every change. A proof made by any other program is a proof of something else — that is what stops
 "trust us" from creeping back in.
 
@@ -66,8 +65,8 @@ the sources are under [`experimental/libzync-bench/`](experimental/libzync-bench
 **Works today**
 
 - **The public board proves Hazync v2.** [hazync.org](https://hazync.org/) switched to it on 12 November 2026 and
-  restarted from genesis under `8888d59c`, and restarts from genesis again under v0.26.0's `46666b6f` (the undo-data
-  commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card claims a block, proves it and submits it,
+  restarted from genesis under `8888d59c`, and from genesis again under v0.26.0's `46666b6f` on 16.11.2026 (the undo-data
+  commitment, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)): anyone with an NVIDIA card, or slowly with a CPU, claims a block, proves it and submits it,
   and proved blocks are joined into one genesis-anchored proof ([`CONTRIBUTING.md`](CONTRIBUTING.md)). Its first
   proving run, on 4× RTX PRO 6000, proved 1,287 blocks in 2 h 32 min of proving (about 510 an hour), $27.13 in all,
   about $0.021 a block on these early, nearly empty blocks
