@@ -46,8 +46,15 @@ BLOCKS=${BLOCKS:-$D/blocks}
 # fetch block files lo..hi into $BLOCKS (prover/fetch_block_rpc.py range; the node needs txindex). Only the bodies of
 # the step's blocks are fetched; the link to the core tip is headers only (getblockheader), review L4
 FETCH=${FETCH:-python3 $BIN/fetch_block_rpc.py range}
-# PRUNE_BLOCKS=1: delete block files at or below the proven height once a forest cache is there (a fall-back then needs
-# them again from genesis, which this test-scale witness source replays; §10.5.1)
+# the witness source (zyncapp --source): forest = the production source (UTREEXO_ZAPP.md §10.5.1: the compact forest,
+# kept as $D/forest-<H>-<hash>.bin, the spent coins from the block files' prevouts); native = the test-scale MemForest
+# replay (all live coins in memory), kept for comparison
+WITNESS_SOURCE=${WITNESS_SOURCE:-forest}
+# how many forest caches to keep (the newest by height, each the state of a kept proof): a fall-back to one of them
+# starts there instead of replaying from genesis. Each is the size of the forest (UTREEXO_ZAPP.md §10.5.1)
+FOREST_KEEP=${FOREST_KEEP:-3}
+# PRUNE_BLOCKS=1: delete block files at or below the proven height once a forest cache is there (a fall-back to a height
+# without a kept cache then needs them again from genesis)
 PRUNE_BLOCKS=${PRUNE_BLOCKS:-0}
 BITCOIN_CLI=${BITCOIN_CLI:-bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind}
 MARGIN=${MARGIN:-6}
@@ -102,6 +109,8 @@ if [ -n "$ELF" ] && [ -n "$WANT_ELF" ]; then
   [ "$(sha256sum "$ELF" | cut -c1-64)" = "$WANT_ELF" ] || die "$ELF is not the tip ELF $WANT_ELF"
 fi
 NETFLAG=(); [ "$NETWORK" = signet ] && NETFLAG=(--signet)
+[[ "$FOREST_KEEP" =~ ^[1-9][0-9]*$ ]] || die "FOREST_KEEP must be 1 or more (the cache of the newest state is always kept)"
+case "$WITNESS_SOURCE" in forest|native) ;; *) die "WITNESS_SOURCE: forest or native";; esac
 
 # new_state <receipt> <H> <hash>: a state directory (written, synced, then renamed into place); prints its name. Every
 # step is checked: a half-written state is never installed (review M1)
@@ -280,7 +289,13 @@ if [ "$NPX_" != "$PX" ]; then
   for f in $(cd "$BLOCKS" && ls block_*.json 2>/dev/null); do
     h=${f#block_}; h=${h%.json}; if [ "$h" -gt "$NP" ]; then mv "$BLOCKS/$f" "$O/blocks/" || die "mv $f"; fi
   done
-  for f in "$D"/forest-*.bin "$D/forest.bin"; do if [ -f "$f" ]; then mv "$f" "$O/" || die "mv $f"; fi; done
+  # forest caches ABOVE the fall-back height are the orphaned branch's; the one AT it (if kept) is where the step
+  # starts, and those below stay for a deeper fall-back
+  for f in "$D"/forest-*.bin "$D/forest.bin"; do
+    [ -f "$f" ] || continue
+    h=$(basename "$f"); h=${h#forest-}; h=${h%%-*}
+    if [ "$f" = "$D/forest.bin" ] || [ "$h" -gt "$NP" ]; then mv "$f" "$O/" || die "mv $f"; fi
+  done
   log "fell back to the kept proof of block $NP $NPX (orphaned states and receipts moved to $O); stepping forward on the node's branch"
   P=$NP; PX=$NPX
   # publish the fall-back state at once: pub/latest.json must not name the orphaned receipt while the new branch is
@@ -317,7 +332,7 @@ fi
 HX=$(node_hash "$H")
 
 if [ "$H" -gt "$P" ]; then
-  # the bodies P+1..H (or 1..H when the native replay must start from genesis: no forest cache at P), and the link
+  # the bodies P+1..H (or 1..H when the source must replay from genesis: no forest cache at P), and the link
   # H+1..T as headers only
   # the forest cache is named by the height AND hash it is for: only the cache of exactly (P, PX) lets the step start at
   # P+1; any other (a kill between `point latest` and its rename, a fall-back) means a replay from genesis, so every
@@ -336,7 +351,8 @@ if [ "$H" -gt "$P" ]; then
   # the host reads the cache for (P, PX) and writes the one for H to work/forest.next, renamed to forest-<H>-<hash>.bin
   # only once latest points at H: a failed or killed run leaves the cache for P in place (review of 0d9683a LOW 2)
   rm -f "$D/work/forest.next"
-  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$FC" --cache-out "$D/work/forest.next" --headers "$HDRS" "${NETFLAG[@]}")
+  args=(utreexo-tip-prove "$BLOCKS" "$D/latest/rcpt" "$H" "$CORE" "$OUT" --cache "$FC" --cache-out "$D/work/forest.next" --headers "$HDRS"
+        --source "$WITNESS_SOURCE" "${NETFLAG[@]}")
   [ -n "$ELF" ] && args+=(--elf "$ELF")
   [ -n "$BASE_ID" ] && args+=(--base-id "$BASE_ID")
   log "step $P -> $H (node tip $NT, core tip $T)"
@@ -349,7 +365,12 @@ if [ "$H" -gt "$P" ]; then
   point latest "$n"
   if [ -f "$D/work/forest.next" ]; then
     mv "$D/work/forest.next" "$D/forest-$H-$HX.bin" || die "mv forest.next"
-    for f in "$D"/forest-*.bin "$D/forest.bin"; do [ "$f" = "$D/forest-$H-$HX.bin" ] || rm -f "$f"; done
+    # the FOREST_KEEP newest caches by height (the new one first); a legacy forest.bin goes
+    rm -f "$D/forest.bin"
+    k=0
+    for f in $(cd "$D" && ls forest-*.bin 2>/dev/null | sort -t- -k2,2nr); do
+      k=$((k + 1)); [ "$k" -le "$FOREST_KEEP" ] || rm -f "${D:?}/$f"
+    done
   fi
   # keep the KEEP newest states below latest, the base and latest itself
   keep_b=$(basename "$(readlink "$D/base")"); keep_l=$(basename "$(readlink "$D/latest")")

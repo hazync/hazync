@@ -267,3 +267,90 @@ fn tx_len(b: &[u8]) -> Result<usize, String> {
     for _ in 0..vi(b, &mut o) { o += 8; let l = vi(b, &mut o) as usize; o += l; }
     Ok(o + 4)
 }
+
+/// Where a step's witness comes from (`zyncapp utreexo-tip-prove --source`): `forest` (the production source,
+/// utreexo_witness.rs: the compact forest kept on disk, the spent coins from the block files' prevouts) or `native`
+/// (the test-scale MemForest replay above, kept as a cross-check). Both run every block through step.rs and
+/// `Stump::modify` before proving; the frames they give are the same bytes (zapps/utreexo/tip-source-tests.sh).
+pub enum Source {
+    Native(Native),
+    Forest(crate::utreexo_witness::ForestSource),
+}
+
+pub const FOREST_MAGIC: &[u8; 8] = b"HZUFOR01";
+pub const NATIVE_MAGIC: &[u8; 8] = b"HZUTIP01";
+
+impl Source {
+    pub fn genesis(forest: bool, signet: bool) -> Self {
+        if forest {
+            Source::Forest(crate::utreexo_witness::ForestSource::genesis(step::dsha(&utreexo_host::genesis(signet))))
+        } else {
+            Source::Native(Native::genesis(signet))
+        }
+    }
+
+    /// A cache file of the chosen kind (by its magic); another kind is an error the caller turns into a replay.
+    pub fn load(forest: bool, path: &str) -> Result<Self, String> {
+        let mut m = [0u8; 8];
+        std::io::Read::read_exact(&mut std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?, &mut m).map_err(|e| format!("{path}: {e}"))?;
+        match (forest, &m) {
+            (true, FOREST_MAGIC) => Ok(Source::Forest(crate::utreexo_witness::ForestSource::load(path)?)),
+            (false, NATIVE_MAGIC) => Ok(Source::Native(Native::load(path)?)),
+            _ => Err(format!("a cache of the other witness source (magic {:?}), not --source {}", String::from_utf8_lossy(&m),
+                             if forest { "forest" } else { "native" })),
+        }
+    }
+
+    pub fn save(&self, path: &str) -> Result<u64, String> {
+        match self {
+            Source::Native(n) => { n.save(path)?; Ok(std::fs::metadata(path).map_err(|e| e.to_string())?.len()) }
+            Source::Forest(f) => f.save(path),
+        }
+    }
+
+    pub fn height(&self) -> u32 {
+        match self { Source::Native(n) => n.height, Source::Forest(f) => f.height }
+    }
+
+    pub fn last(&self) -> H {
+        match self { Source::Native(n) => n.last, Source::Forest(f) => f.last }
+    }
+
+    pub fn leaves(&self) -> u64 {
+        match self { Source::Native(n) => n.stump.leaves, Source::Forest(f) => f.stump.leaves }
+    }
+
+    pub fn roots(&self) -> Vec<H> {
+        match self { Source::Native(n) => n.roots(), Source::Forest(f) => f.roots() }
+    }
+
+    pub fn forest_agrees(&self) -> bool {
+        match self { Source::Native(n) => n.forest_agrees(), Source::Forest(f) => f.forest_agrees() }
+    }
+
+    pub fn counts(&mut self) -> &mut step::Counts {
+        match self { Source::Native(n) => &mut n.counts, Source::Forest(f) => &mut f.counts }
+    }
+
+    pub fn block(&mut self, b: &utreexo_host::Block) -> Result<TipFrame, String> {
+        match self {
+            Source::Native(n) => n.block(&b.stripped),
+            Source::Forest(f) => {
+                let w = f.block(&b.stripped, &b.prevouts)?;
+                Ok(TipFrame { stripped: b.stripped.clone(), spent: w.spent, proof: w.proof, hash: w.hash })
+            }
+        }
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self { Source::Native(_) => "native", Source::Forest(_) => "forest" }
+    }
+
+    /// (live nodes, live leaves, heap bytes) of the forest source; None for the native one
+    pub fn forest_stats(&self) -> Option<(usize, usize, usize)> {
+        match self {
+            Source::Native(_) => None,
+            Source::Forest(f) => { let (n, l) = f.forest.counts(); Some((n, l, f.forest.heap_bytes())) }
+        }
+    }
+}
