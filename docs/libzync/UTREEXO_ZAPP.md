@@ -525,10 +525,24 @@ second, independent source to compare against; nothing here prevents it.
   step's blocks, deletions, spent and proof bytes, proof hashes, the sha256 of the frames, the source's own seconds,
   the forest's nodes, leaves and heap bytes) and `UTREEXO_TIP_CACHE_SAVED` (bytes, seconds).
   `UTREEXO_TIP_SOURCE_LIE=node|store` (execute only, never with a prover) makes the source lie and skip its own checks.
-- The follower: `WITNESS_SOURCE` (forest), `FOREST_KEEP` (3): the newest forests by height are kept, a fall-back moves
-  aside only those above its height, so it starts from a kept forest instead of genesis (in place of undo records:
-  each step's forest is its own undo). Units `hazync-utreexo-follow.service` / `.timer` and the exact install
-  procedure: coordinator/deploy/utreexo/README.md (NOT EXECUTED; nothing is deployed).
+- The follower: `WITNESS_SOURCE` (forest) and the forests it keeps, in place of undo records (each step's forest is its
+  own undo). After the review of 20.11.2026 (F1): a step starts from the newest kept forest AT OR BELOW its previous
+  height whose block is the node's (`zyncapp --cache` accepts a forest below P and replays forward over the block
+  files; the hash chain from the forest's block and the previous statement's block, leaf count and roots are checked
+  as before), so only P − (that height) bodies are fetched; `FOREST_KEEP` defaults to `KEEP` + 1, one forest per kept
+  state; a run killed between switching `latest` and renaming its forest leaves it in `work/forest.next`, which the
+  next run adopts when its header names `latest` (the rename is synced); `--set-base` and a fall-back move forests to
+  `orphaned/` (pruned after `ORPHANED_FOREST_MIN`, 2 days), never delete them; and a replay from genesis (no kept
+  forest at all) above `GENESIS_REPLAY_MAX` (100,000) blocks is refused unless `ALLOW_GENESIS_REPLAY=1`. F2: the
+  host refuses to prove from, or save, a forest whose roots are not its Stump's. F3: the source is saved at H before
+  proving (as `.pending`, renamed after the guest's statement is checked) and dropped, so the forest is not held through
+  the proof; the follower records the forest's heap after each step (`forest-heap`) and warns above
+  `FOREST_HEAP_WARN_BYTES` (half the unit's `MemoryMax`). F5: the counts in a saved file are bounded by its length before
+  anything is allocated. F7: `hazync-check-utreexo-follow` (through `hazync-run-check`) fails when the published block
+  is below min(node tip − 6, core height) and `latest.json` is older than 6 h, or the forest heap passes the warning
+  line. Units `hazync-utreexo-follow.service` / `.timer`, `hazync-check-utreexo-follow.service` / `.timer` and the exact
+  install procedure: coordinator/deploy/utreexo/README.md (NOT EXECUTED; nothing is deployed; install only from `main`,
+  the box's drift check compares with `origin/main`).
 
 **Measured** (synthetic forests, `zapps/utreexo/tip-step/examples/forest_bench.rs`, hazync-coord at a load average of
 ~50 from other work, so the times are upper bounds; uniform random deletions, which share fewer proof paths than real
@@ -563,7 +577,10 @@ hash recomputed and saves it again: scaled linearly from 8M leaves, **~4 min to 
 larger arena misses the cache more, so likely slower). The forest work per block of ~3,000 deletions (proof, check,
 modify) was 0.22 s at 24 rows, so **under a second** at the tip's 32 rows (ESTIMATE). The proof of the step, not the
 witness, sets the pace (§10.8: ~10^9 cycles per modern block, ESTIMATE): a long-running source that keeps the forest in
-memory between runs would save the load, and is not built.
+memory between runs would save the load, and is not built. The forest is dropped before the proof (F3), so the unit's
+`MemoryMax` has to hold the larger of the two, not their sum. ⚠ The leaf index is a hash table whose bucket count is a
+power of two: at ~165M live coins it has 2^28 buckets (~4.6 GB); past ~235M (7/8 of 2^28) it doubles to 2^29 (~9.1
+GB) in one step, holding both tables while it rehashes (ESTIMATE ~14 GB for the index alone at that moment).
 
 ### 10.6 What is served, where, and reorgs
 
@@ -597,9 +614,9 @@ does not verify, or a wrong ELF leaves the published folder untouched.
 
 **Known limits of the follower (documented, not fixed):** the two-pass upload (receipts, then `latest.json`) is
 ordered but not atomic across files: a reader can briefly see a new receipt next to the previous `latest.json`, which
-still names a receipt that is there. A fall-back keeps the saved forests at or below its height (`FOREST_KEEP`, §10.5.1)
-and starts from the one at its height; a fall-back below every kept forest replays from genesis (and, with
-`PRUNE_BLOCKS=1`, fetches every body again). One run at a time (`flock`); a crash between a state's rename and the `latest` switch
+still names a receipt that is there. A fall-back keeps the saved forests at or below its height (one per kept state by
+default, §10.5.1) and starts from the newest of them, replaying forward from it; only with no kept forest at all does
+the source replay from genesis, refused above `GENESIS_REPLAY_MAX` blocks unless `ALLOW_GENESIS_REPLAY=1`. One run at a time (`flock`); a crash between a state's rename and the `latest` switch
 leaves an unused state directory, which the retention removes.
 
 ### 10.7 What a Floresta node checks
@@ -770,7 +787,7 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
 
 ### 10.9.1 Tested: the production witness source (20.11.2026, §10.5.1)
 
-- `zapps/utreexo/tip-step` `src/forest_tests.rs` (CI's zapps job, `zapps/utreexo/test.sh`; 10 tests, under a second):
+- `zapps/utreexo/tip-step` `src/forest_tests.rs` (CI's zapps job, `zapps/utreexo/test.sh`; 13 tests since the review, under a second):
   ArenaForest against rustreexo's own MemForest over 160 random histories (adds, single deletions, large and complete
   deletions in random order, Empty roots, deleted roots, 40 of them with every third leaf sharing its 8-byte index key):
   every batch proof equal byte for byte (targets and hashes) and accepted by `Stump::modify`, the roots equal after
@@ -785,7 +802,14 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   inner node makes the proof differ, `Stump::modify` refuse, `check` fail and `read_from` refuse; the forest with the
   left/right bit of `get_pos` inverted fails 8 of the 10 tests, without `recompute_hashes` 6 (two of four mutations
   tried; the other two, no sort of the deletions and no promotion from the overflow map, change no result: deletion order
-  does not change the forest, and the overflow map is searched anyway).
+  does not change the forest, and the overflow map is searched anyway; the promotion step was then deleted).
+  **After the review (F2, F4, F5)**: `read_from` refuses a wrong node count, a header claiming 2^31 nodes in a file of a
+  few bytes (before allocating), and a tree deeper than its root's row (a control of the same bytes in a legal shape
+  reads); `ForestSource::load` refuses a hash table longer than the file; a forest that diverged from its Stump is not
+  saved and the earlier file stays. Mutations, each killed: the depth check (1 test fails), the count check (1), the
+  byte bound (the process aborts: "memory allocation of 106300485632 bytes failed"), the load's hash-table bound
+  (abort), the save's agreement check (1), `get_pos`'s root-row lookup with `root_idx` never stepped (8) or every row
+  taken as populated (7), `add_single` keeping an Empty root instead of skipping it (8).
 - `zapps/utreexo/tip-source-tests.sh` (executed on hazync-coord, mainnet blocks 1..100,000): **54 of 54** (`UTREEXO_TIP_SOURCE_TESTS_OK`, 20.11.2026, `zyncapp` built from
   `3fccfe3` on hazync-coord, whose tip and base ids are the pinned `ab6f7a26` / `27bea7da`): the chain base(1,999) →
   10,000 → 20,000 → 50,000 → 91,722 → 91,812 → 91,842 → 91,880 → 100,000 executed twice, from the forest source and
@@ -798,13 +822,35 @@ untouched, a reorg at 180 falling back to 103 and stepping to 175 (`steps` 2), a
   control: the honest step 1,999 → 9,000 passes. Two lying sources that skip their own checks: **refused by the guest**
   at block 2,277 ("the deletions do not open in the accumulator", exit 3), the node's lie and the store's; and
   `UTREEXO_TIP_SOURCE_LIE` refused outright when proving.
-- `coordinator/deploy/utreexo/test/test_follow_logic.sh`: **76 of 76** (laptop, mainnet blocks 1..500): besides the
+- `coordinator/deploy/utreexo/test/test_follow_logic.sh`: **92 of 92** after the review (76 before; laptop, mainnet
+  blocks 1..500, and the same in `run_ci.sh` on header-only files from `test/headers_1_500.txt`): the crash window
+  (latest switched, forest left in `work/forest.next`: adopted, the next step fetches 10..12, not from 1; a forest.next
+  naming another height not adopted), a fall-back to a state whose forest was lost starting from the forest below it
+  (80, fetching 81..110), a genesis replay above `GENESIS_REPLAY_MAX` refused with nothing moved and allowed with the
+  switch, `--set-base` moving forests aside, the forest heap recorded and warned, orphaned forests pruned after
+  `ORPHANED_FOREST_MIN` and nothing else in `orphaned/`. Controls (`run_ci.sh`, each the follower with one guard taken
+  out): the old fall-back fails 4 checks, the old retention 5, no adoption 2, no forest below P 2, no genesis limit 4,
+  `--set-base` deleting forests 1. `test_check.sh`: 13 of 13 on the check's paths; its control (no stall comparison)
+  misses the stall. CI job `utreexo-follower` runs `run_ci.sh` (~8 min on a laptop).
+- Before the review the logic test was: besides the
   earlier cases, the forest source asked for, the `FOREST_KEEP` (3) newest forests kept (50, 80, 100), a reorg at 100
   moving only the orphaned forest (100) aside, the step from the fall-back at 80 starting from the KEPT forest of 80,
   a bad `FOREST_KEEP` or `WITNESS_SOURCE` refused. Controls: the script with the old fall-back (every forest moved
   aside) and with the old retention (only the newest kept) each fail 2 checks.
-- Not re-run: `test/test_follow.sh` (three real CPU proofs, ~4 h on a loaded box). Its follower runs the forest source
-  by default now; the step logic it exercises is covered by the logic test and the source by the executed tests above.
+- `zapps/utreexo/tip-source-tests.sh` again after the review: **60 of 60** (`UTREEXO_TIP_SOURCE_TESTS_OK`, hazync-coord, `zyncapp`
+  from `62bc131`'s source, ids still `ab6f7a26` / `27bea7da`): the 54 above, and two restarts of 91,880 → 100,000 more,
+  each with the same witness bytes: from the forest saved at 50,000 ("cache below at 50000 … replaying 50001..91880",
+  2.2 s) and from the forest at 100,000, above the previous height (not used: replayed from genesis, 3.4 s). The cache
+  is now saved before the proof ("pending until the statement is checked") and renamed after it.
+- `test/test_follow.sh` with real CPU proofs (hazync-coord, the follower and `zyncapp` after the review, the spine's
+  core receipt 1..4,856 copied read-only from hazync-proof, sha256 `95ae169a…`): **34 of 34** (`UTREEXO_FOLLOW_TESTS_OK`, three real
+  CPU proofs of ~60-90 min each, 20.11.2026; `test_follow.sh` now takes the core height T from the receipt and a node
+  tip T + 164): the base install (a wrong hash refused), the step 3 → 103 published and verified (DEMO), no new height,
+  the choice of H (margin, core tip, step cap), the step 103 → 180 **started from the saved forest of 103** (no
+  replay) with the forests of 103 and 180 both kept, a lying prover and a wrong ELF refused with the folder untouched, a
+  reorg at 180 falling back to 103 and stepping to 175 **from the kept forest of 103**, a reorg below the base stopping.
+  (A first run that afternoon used the test file from before its T parametrisation against the newer spine and failed
+  23 checks at the first step, the node tip 4,000 being below T = 4,856; it is not counted.)
 
 ### 10.10 Layout (tip mode)
 
