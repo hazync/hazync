@@ -127,11 +127,12 @@ def _board_servable_high():
         return _tip_cache.get("board")
 
 
-def _skip_gap(h):
+def _skip_gap(h, board=False):
     """`h`, or TIP_FROM when h lies in the gap no run serves (above the board pass's highest bundle, below TIP_FROM): a
-    scan from 1 to the tip run's bundles would otherwise test ~970,000 heights for a file under the claim lock."""
+    scan from 1 to the tip run's bundles would otherwise test ~970,000 heights for a file under the claim lock. A scan
+    passes `board` (_board_servable_high(), read once per scan)."""
     if TIP_FROM and h < TIP_FROM:
-        b = _board_servable_high()
+        b = _board_servable_high() if board is False else board
         if b is None or h > b:
             return TIP_FROM
     return h
@@ -1099,10 +1100,11 @@ def pick(body):
     # the exact check and the ceiling is what stops it running away: without the bound, a coordinator
     # with no bundles would stat its way through two million heights before admitting it has nothing.
     _ceiling = provable_tip()
+    _board_hi = _board_servable_high()
     for avoid_busy in (True, False):
         n = max(1, fr + 1)
         for _ in range(2_000_000):
-            n = _skip_gap(n)
+            n = _skip_gap(n, _board_hi)
             if n >= _ceiling:
                 break
             # The SAME test claim() applies, so what this suggests is what that would hand out. The
@@ -4871,9 +4873,10 @@ def _claim_scan(start, ceiling, proven, held):
     """The first block claim() may hand out at or above `start` and below `ceiling`, or None: open (not proven, not
     held), in the open era, with a witness. The gap no run serves (_skip_gap) is jumped. With a tip run and
     TIP_CLAIM_FIRST=1, the tip run's blocks [TIP_FROM, ceiling) are scanned before [start, TIP_FROM)."""
+    board = _board_servable_high()
     def scan(h, top):
         while h < top:
-            g = _skip_gap(h)
+            g = _skip_gap(h, board)
             if g != h:
                 h = g
                 continue
