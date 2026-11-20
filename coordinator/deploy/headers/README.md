@@ -2,8 +2,10 @@
 
 `hazync-headers-follow` keeps the header-chain zyncAPP proof at Bitcoin's tip. The page reads two receipts:
 
-- **the base**, genesis..B, proved once on a GPU (`experimental/libzync-bench/headers/run_headers_pod.sh`; the
-  3.1.0 base, genesis..975,278, took 59.4 min, ~$2.50, on one RTX PRO 6000);
+- **the base**, genesis..B, proved once on a GPU (`experimental/libzync-bench/headers/run_headers_pod.sh`; the MMR
+  base of image `de54b94f`, genesis..975,278, took 99.5 min on one RTX PRO 6000, $4.63 of pod time for the proof,
+  `experimental/libzync-bench/headers/RESULT_gpu_whole_chain_mmr.txt`; the `2db34e12` base without the MMR took
+  59.4 min, ~$2.50);
 - **one run**, B+1..tip, chained to the base with `--after`, re-proved on the CPU every time the tip moves.
 
 The page never reads more than two receipts, and a reorg above B needs nothing special: the next run follows the new
@@ -15,18 +17,20 @@ tip. When the run gets long (the script warns at 20,000 headers, `REBASE_WARN`),
 A run of N headers re-proves **all N** every time the timer fires, so both its time and its memory grow with the
 distance from the base. Measured on hazync-proof: at **250 headers** the run peaked at **9.8 GB** of RAM. The unit's
 old `MemoryMax=6G` OOM-killed every run from 2026-11-11 19:10 until it was raised; the box now runs it with
-`MemoryMax=24G`. ⚠ **The `hazync-headers-follow.service` in this directory still says `MemoryMax=6G`**: on a fresh
-install raise it (a drop-in or an edit) to well above 6G, or the first long run is killed.
+`MemoryMax=24G`, which is what the `hazync-headers-follow.service` in this directory says.
 
 Do not let the run grow unbounded: prove a fresh base on a GPU (`run_headers_pod.sh`) and install it with
 `--set-base` as the run grows. How far a run can grow before 24G is not enough has not been measured.
 
 A run is published only after `zapp-headers --expect <tip>:<the node's hash>` (the header-chain zAPP's CLI, zapps/headers) prints
-`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
+`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the ELF whose sha256 is `WANT_ELF`. ⚠ The script's default
+is still `5bd8011d…`, the ELF of image `2db34e12`; for the released MMR image `de54b94f` set `WANT_ELF` to the
+`GUEST_ELF_SHA256` on the `zyncapp-headers` line of `reproduce/LIBZYNC_IDS` (`0401a2d7…`), for example in a drop-in
+for the service (below).
 
 ## Block inclusion (the MMR)
 
-Since the MMR image (feat/headers-mmr) the state also carries the peaks of a Merkle Mountain Range of every block
+Since the MMR image (`de54b94f`, released in v0.27.0) the state also carries the peaks of a Merkle Mountain Range of every block
 hash (`prover/zyncapps/methods/headers/src/mmr.rs`), so the published pair answers "is block X at height h on this
 chain": `zyncapp headers-mmr-path <headers file from 0> <h> --tip <tip> > path.txt`, then
 `zapp-headers --include <h>:<hash> --path path.txt <base> <run>`. For a transaction in that block, add
@@ -55,7 +59,7 @@ install -d /opt/hazync-headers/bin /var/lib/hazync-headers
 install -m755 hazync-headers-follow /opt/hazync-headers/bin/
 # zyncapp + zapp-headers (zapps/headers) from this commit (release builds), and the container-built ELF:
 install -m755 zyncapp zapp-headers /opt/hazync-headers/bin/
-install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 5bd8011d…
+install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 0401a2d7… (de54b94f; set WANT_ELF to match, above)
 ssh-keygen -t ed25519 -N '' -C hazync-headers-publish -f /root/.ssh/hazync_headers_publish
 #   web box, /root/.ssh/authorized_keys:
 #   command="/usr/bin/rrsync -wo /var/www/hazync-headers",restrict ssh-ed25519 AAAA… hazync-headers-publish
@@ -64,6 +68,14 @@ HEADERS_DIR=/var/lib/hazync-headers HEADERS_BIN=/opt/hazync-headers/bin \
 cp hazync-headers-follow.service hazync-headers-follow.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 ```
+
+## Upgrading to the MMR image (`de54b94f`, v0.27.0)
+
+The same steps as the 3.1.0 upgrade below, with v0.27.0's files: `zyncapp` and `zapp-headers` from the release commit,
+the container-built `zyncapp-headers.bin` (sha256 `0401a2d7…`) with `WANT_ELF` set to it, and a base of the new image,
+because a `2db34e12` base has no MMR peaks: the MMR `headers_0_tip.rcpt` in `experimental/libzync-bench/headers/`
+(sha256 `b44e4a74…`, 227,474 bytes, genesis..975,278) with the same `--set-base` line as above. hazync.org's follower
+moves to it on 20.11.2026.
 
 ## Upgrading the image (risc0 3.1.0, done 2026-11-12)
 
