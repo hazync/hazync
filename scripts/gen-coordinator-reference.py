@@ -84,7 +84,9 @@ ROUTES = {
         "peer, not held, not (on the first pass) being proven at a peer, and has a witness. `404` if none.",
     "GET /api/meta":
         "Pre-flight: `method_id` (the `method-id` output of `HAZYNC_HOST`), `frontier`, `reproduce` "
-        "(`reproduce/METHOD_ID`) and `source_sha256` of the running `server.py`.",
+        "(`reproduce/METHOD_ID`) and `source_sha256` of the running `server.py`; the newest `reorg`, `reorg_alert`, "
+        "and `tip_run` (REORG.md §19: the handover height, each run's highest bundle, the tip run's position; null with "
+        "one run).",
     "GET /api/foldable":
         "Sibling pairs of the canonical fold tree whose parent is not yet verified. `?limit=` clamped to "
         "1-32, default 32 (`FOLDABLE_DEFAULT`; 8 before #333). A pair under a live fold claim is left out.",
@@ -103,8 +105,9 @@ ROUTES = {
     "GET /api/zync/<rest>":
         "zyncAPP facts (hazync.org/zapp/), relayed from the box's own `zync-serve` when `ZYNC_SERVE_URL` is set: only "
         "`/tip`, `/trie/balance/<spk>`, `/trie/history/<spk>` and `/trie/coin/<spk>/<txid>/<vout>`; anything else is "
-        "`400` before it reaches the service, a query string is dropped, `404` when no service is set, `502` when it is "
-        "down. Untrusted: the page checks every fact against a proof it verifies itself.",
+        "`400` before it reaches the service, a query string is dropped (but `at=<height>`, passed on as a height with "
+        "`ZYNC_RELAY_AT=1`), `404` when no service is set, `502` when it is down. Untrusted: the page checks every fact "
+        "against a proof it verifies itself.",
     "GET /api/proof/<id>":
         "A retained verified receipt for range id `n` or `lo-hi`, served as `hazync-<lo>[-<hi>].hzk`. The "
         "id is shape-checked by `parse_any_range` before it becomes a path. Re-verify with "
@@ -188,6 +191,13 @@ ROUTES = {
 ENV = {
     "server:ZYNC_PROOF": "The receipt `/api/zync/proof` serves: the proof of 1..H the zync-serve facts are at. Unset: `404`.",
     "server:ZYNC_SERVE_URL": "The local `zync-serve` behind `/api/zync/*` (e.g. `http://127.0.0.1:8601`). Unset: no relay.",
+    "server:ZYNC_RELAY_AT": "`1`: the relay passes `?at=<height>` on (zync-serve's tip mode serves two heights, ZAPP_FOLLOWER Z4). Unset: dropped (an older zync-serve refuses it).",
+    "server:HAZYNC_LZ_TIP_FROM": "D1 (REORG.md §19): the first block the TIP RUN serves (X); blocks below come from the board pass. `0`: one run.",
+    "server:HAZYNC_LZ_TIP_STATE_DIR": "The tip run's `out/` (its `state_<h>.json` for h >= X - 1, `PREP_TIP.json`, `REWIND`, `reorg/records`).",
+    "server:HAZYNC_LZ_TIP_BRIDGE_OUT": "The tip run's leaf bundles (blocks from X).",
+    "server:HAZYNC_LZ_TIP_REORG_DIR": "The tip run's reorg records. Default: `<HAZYNC_LZ_TIP_STATE_DIR>/reorg/records`.",
+    "server:HAZYNC_LZ_TIP_REORG_ACK_DIR": "Where its records are acked (the tip run's prep `HAZYNC_REORG_ACK_DIR`); must differ from the board pass's (start-up refuses one directory for both, exit 3).",
+    "server:TIP_CLAIM_FIRST": "`1`: claims hand out the tip run's blocks before the backfill's. Default off (REORG.md §19, decision 3).",
     # coordinator/server.py
     "server:COORD_PORT": "Listen port.",
     # reorg handling (docs/libzync/REORG.md §5–§7)
