@@ -19,7 +19,7 @@ open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rou
 [`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
 **In service (2026-11-12):** the public board (api.hazync.org) runs Hazync v2 under `8888d59c` since 2026-11-12 (from genesis again under `46666b6f` at v0.26.0),
-restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 38 min); the whole header chain is
+restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 32 min of proving); the whole header chain is
 proved in one receipt (under `2db34e12`, and again under `de54b94f` with the MMR on 15.11.2026) and followed at the
 tip on CPU; zyncAPP pages are live on hazync.org
 (`/zapps/`, `/headers/`, `/zapp/`); the Windows CUDA host proves natively.
@@ -154,7 +154,7 @@ core proof, checked in the browser by the WASM verifier). New core facts are app
 | header chain zyncAPP, proved | `2db34e12` (risc0 3.1.0), one RTX PRO 6000, 11-11 | genesis..975,278 in one receipt: **59.4 min** (3.0.5 image `4d04d6bf`, now retired: 57.2 min), ~$2.50; 224,138 bytes; WASM verifier 39 ms on a laptop under Node | `RESULT_risc0_3_1_gpu.txt` |
 | mainnet 1..200 from genesis | `8888d59c` (risc0 3.1.0), one RTX PRO 6000, 11-11 | **3,074 s** (block 1 21.0 s, then ~15.1 s each); receipt 227,362 bytes; verifier DEMO (below minimum work) | `RESULT_risc0_3_1_gpu.txt` |
 | v2 vs v1 (CORE `37987b85`), real mainnet state | 8 blocks 200k-300k | **19.9x** fewer proven cycles on block 200,000, 9.5x across the eight; GPU time up to 15.1x less, 7.0x across the eight | `results/CYCLES_REAL_STATE.md` |
-| first public-board run | `8888d59c`, 4× RTX PRO 6000, 2026-11-12, from genesis | 1,287 blocks in 2 h 38 min (~490 blocks/hr), ~$0.021 a block on these early blocks, $27.13 | board run, 11-12 (operator's measurement; not in the repo) |
+| first public-board run | `8888d59c`, 4× RTX PRO 6000, 2026-11-12, from genesis | 1,287 blocks in 2 h 32 min of proving (~510 blocks/hr; 2 h 38 min from pod deploy to teardown), ~$0.021 a block on these early blocks, $27.13 | board run, 11-12 (operator's measurement; not in the repo) |
 
 The GPU benchmark's coin log and trie around block 962,000 are **MODELLED** (`lz::cl_synth_around`, from the block's
 own spends and real transaction counts): the cycles are a real block's, the coin state is not mainnet history
