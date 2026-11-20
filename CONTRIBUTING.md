@@ -29,6 +29,14 @@ smoke test (600 s limit, below) timed out once this way and passed when retried
 
 Two routes, both proving on an NVIDIA card.
 
+**Most people: the installer.** Download `hazync-setup-x86_64-windows.exe` from the
+[latest release](https://github.com/hazync/hazync/releases/latest) (its sha256 is in the PGP-signed `SHA256SUMS.txt`)
+and run it: it installs for your user with no admin prompt, and holds the app, the worker, the GPU prover and a CPU
+prover for machines without an NVIDIA card. Windows SmartScreen may warn on first run (More info, then Run anyway).
+Open Hazync and press Start; from v0.27.0 the app offers updates itself, checked against the release's PGP signature.
+Pascal cards (GTX 10-series) prove too, behind an opt-in in the app. The rest of this section is for running the
+pieces by hand.
+
 **Native: the Windows CUDA host.** Every release carries `hazync-host-x86_64-windows-cuda.zip`: `host.exe` and
 `cudart64_12.dll`, zipped so the DLL keeps the name Windows looks for. It proves: mainnet blocks 170 and 400,000 were
 proved on an RTX PRO 6000 under Windows' WDDM driver model, and both receipts verified on Windows and again on Linux
