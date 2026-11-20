@@ -137,18 +137,42 @@ build "$T/wsA" >/dev/null; build "$T/wsB" >/dev/null
 check "$([ "$(runs "$T/wsA" depnaive)" = "$nA" ] && [ "$(runs "$T/wsB" depnaive)" = "$nB" ] && [ "$(runs "$T/wsB" depwatch)" = "$nW" ] && echo 1)" \
       "a build with nothing changed re-runs nothing (the watch is not 'always rebuild')"
 
+# Did sppark's build script RUN? Not read from cargo's -v text: "Running `…/sppark-<hash>/build-script-build`" is a
+# path in the build directory, whose LAYOUT changed in cargo 1.100 (build/sppark/<hash>/…), so a grep for it found
+# nothing on CI (and the negative check passed by finding nothing). Instead: the run unit's captured stdout, which
+# cargo rewrites on every run of the script and never otherwise -- `output` beside `root-output` (cargo <= 1.99:
+# build/sppark-<hash>/), `stdout` beside it (1.100: build/sppark/<hash>/run/); root-output names the OUT_DIR,
+# /build/sppark…. Its mtime in ns, and inode; exactly one such unit per workspace, or the check fails loudly.
+bs_run() {   # bs_run <workspace>: "<mtime_ns>:<inode>" of sppark's build-script-run output, or NONE / MANY
+    python3 - "$1" <<'PY'
+import os, re, sys
+hits = []
+for root, _dirs, files in os.walk(os.path.join(sys.argv[1], "target")):
+    cap = "output" if "output" in files else ("stdout" if "stdout" in files else None)
+    if cap and "root-output" in files:
+        if re.search(r"/build/sppark[-/]", open(os.path.join(root, "root-output")).read()):
+            st = os.stat(os.path.join(root, cap))
+            hits.append(f"{st.st_mtime_ns}:{st.st_ino}")
+print(hits[0] if len(hits) == 1 else ("NONE" if not hits else "MANY"))
+PY
+}
+sA0=$(bs_run "$T/wsA"); sB0=$(bs_run "$T/wsB")
+check "$([[ "$sA0" =~ ^[0-9]+: ]] && [[ "$sB0" =~ ^[0-9]+: ]] && echo 1)" \
+      "each workspace has exactly one sppark build-script run to watch (A: $sA0, B: $sB0)"
+
 sleep 1.1   # past any coarse mtime granularity
 echo '// touched by test-build-rerun.sh: a stream_t layout change' >> "$T/sppark-fixed/sppark/util/gpu_t.cuh"
 echo '// touched by test-build-rerun.sh: a stream_t layout change' >> "$T/sppark-prefix/sppark/util/gpu_t.cuh"
-outA=$(build "$T/wsA"); outB=$(build "$T/wsB")
-check "$(printf '%s' "$outA" | grep -q 'Running `.*sppark-.*build-script-build' && echo 1)" \
+build "$T/wsA" >/dev/null; build "$T/wsB" >/dev/null
+sA1=$(bs_run "$T/wsA"); sB1=$(bs_run "$T/wsB")
+check "$([[ "$sA1" =~ ^[0-9]+: ]] && [ "$sA1" != "$sA0" ] && echo 1)" \
       "A: the vendored sppark re-runs its own build script (libsppark_cuda.a) when gpu_t.cuh changes"
 check "$([ "$(runs "$T/wsA" depnaive)" = $((nA + 1)) ] && echo 1)" \
       "A: ...and that re-runs a dependent -sys build script that watches only itself"
 check "$([ "$(runs "$T/wsB" depwatch)" = $((nW + 1)) ] && echo 1)" \
       "B: a dependent using watch_dep re-runs even under the PRE-FIX sppark"
 # The bug itself, reproduced -- asserted in both modes, so the test also shows it was real.
-check "$([ "$(runs "$T/wsB" depnaive)" = "$nB" ] && ! printf '%s' "$outB" | grep -q 'Running `.*sppark-.*build-script-build' && echo 1)" \
+check "$([ "$(runs "$T/wsB" depnaive)" = "$nB" ] && [[ "$sB1" =~ ^[0-9]+: ]] && [ "$sB1" = "$sB0" ] && echo 1)" \
       "the bug, reproduced: PRE-FIX sppark + a self-watching dependent rebuild NOTHING on the header change"
 
 sleep 1.1
