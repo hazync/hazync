@@ -15,17 +15,31 @@ mkdir -p "$W/bin" "$W/www" "$W/blocks"
 fails=0
 t () { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got '$3', want '$2')"; fails=$((fails + 1)); fi; }
 export FAKE_BLOCKS=$SRC FAKE_TIP=300 STUB_T=290 W
+# fwrite <file> <h>: a saved source's header for block h (as zyncapp writes it); fhh <file>: the height in one
+cat > "$W/bin/fhelp" <<'EOF'
+fwrite () { python3 - "$1" "$2" "$("$CLI" getblockhash "$2")" <<'PY'
+import sys, struct
+open(sys.argv[1], 'wb').write(b'HZUFOR01' + struct.pack('<I', int(sys.argv[2])) + bytes.fromhex(sys.argv[3])[::-1] + b'stub')
+PY
+}
+fhh () { python3 -c 'import sys,struct; print(struct.unpack("<I", open(sys.argv[1],"rb").read()[8:12])[0])' "$1"; }
+EOF
+. "$W/bin/fhelp"
 cli () { "$HERE/fake-bitcoin-cli" "$@"; }
 
 cat > "$W/bin/zyncapp" <<'EOF'
 #!/bin/bash
+. "$W/bin/fhelp"
 # stub prover: core-info, utreexo-tip-prove (writes the --cache file and counts the --headers lines)
 case "$1" in
   core-info) echo "CORE height=$STUB_T tip=$("$CLI" getblockhash "$STUB_T") image=$(printf '0%.0s' $(seq 64))";;
   utreexo-tip-prove)
     read -r _ _ _ steps _ < "$3"; h=$4; out=$6
-    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) if [ -f "$2" ]; then echo "hit $(cat "$2")"; else echo miss; fi > "$W/cache.state"; shift;;
-      --source) echo "$2" > "$W/source.arg"; shift;; --cache-out) echo "$h" > "$2"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
+    # a saved source's header as zyncapp writes it (magic, height u32 LE, block hash in internal order), the forest
+    # source's heap line, and the --cache it was given (its own header's height: "hit <h>", or "miss")
+    shift 6; while [ $# -gt 0 ]; do case "$1" in --cache) if [ -f "$2" ]; then echo "hit $(fhh "$2")"; else echo miss; fi > "$W/cache.state"; shift;;
+      --source) echo "$2" > "$W/source.arg"; shift;; --cache-out) fwrite "$2" "$h"; shift;; --headers) wc -l < "$2" > "$W/headers.count"; shift;; esac; shift; done
+    echo "UTREEXO_TIP_WITNESS source=forest blocks=1 dels=0 forest_nodes=1 forest_leaves=1 forest_heap_bytes=${STUB_HEAP:-1000}"
     echo "STUB $h $STUB_T $((steps + 1)) $("$CLI" getblockhash "$h") $("$CLI" getblockhash "$STUB_T")" > "$out";;
   *) exit 1;;
 esac
@@ -133,11 +147,11 @@ t "  no body at or below 100 is left" 0 "$(find "$W/blocks" -name 'block_*.json'
 # PRUNE_BLOCKS=1: the host wrote the cache at H to work/forest.next, never over the cache for P, which stays valid
 echo 105 > "$W/vfail"
 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/11.log" 2>&1; t "a step that fails after the prove (M2)" 1 $?
-t "  keeps the forest cache of 100 (the one at 105 is not promoted), latest stays 100 (LOW 2)" "100 100" "$(cat "$W"/d/forest-100-*.bin) $(cut -d' ' -f1 "$W/d/latest/meta")"
+t "  keeps the forest cache of 100 (the one at 105 is not promoted), latest stays 100 (LOW 2)" "100 100" "$(fhh "$W"/d/forest-100-*.bin) $(cut -d' ' -f1 "$W/d/latest/meta")"
 rm -f "$W/vfail"
 FOREST_KEEP=1 PRUNE_BLOCKS=1 MAX_STEP=5 "$F" > "$W/12.log" 2>&1; t "  the next run recovers (FOREST_KEEP=1)" 0 $?
 t "  from the cache: bodies 101..105 only" "101 105" "$(tail -1 "$W/fetch.log")"
-t "  the cache now is forest-105-<hash>.bin, alone" "105 1" "$(cat "$W"/d/forest-105-*.bin) $(find "$W/d" -maxdepth 1 -name 'forest-*.bin' | wc -l)"
+t "  the cache now is forest-105-<hash>.bin, alone" "105 1" "$(fhh "$W"/d/forest-105-*.bin) $(find "$W/d" -maxdepth 1 -name 'forest-*.bin' | wc -l)"
 
 # M1: a state that cannot be written (disk full) is never installed; latest stays complete; the next run recovers
 mkdir -p "$W/shim"; printf '#!/bin/bash\ncase "$*" in *"/state/."*) echo "cp: write error: No space left on device" >&2; exit 1;; esac\nexec /usr/bin/cp "$@"\n' > "$W/shim/cp"; chmod +x "$W/shim/cp"
@@ -193,12 +207,16 @@ t "  check_blocks still sees the whole range: the stale block 6 is moved aside" 
 mkdir -p "$W/pyshim"; printf '#!/bin/bash\n[ "$2" = %q ] && exit 1\nexec /usr/bin/python3 "$@"\n' "$W/blocks" > "$W/pyshim/python3"; chmod +x "$W/pyshim/python3"
 PATH=$W/pyshim:$PATH MAX_STEP=3 "$F" > "$W/20.log" 2>&1; t "a block listing that fails" "1 1" "$? $(grep -c 'listing the cached block files failed' "$W/20.log")"
 
-# (3) the cache is tied to (P, hash): a cache left for an older height (a kill between `point latest` and its rename)
-# means a replay from genesis, so the bodies from 1 are checked and fetched, under PRUNE_BLOCKS too
+# review F1 (a): a run killed between `point latest` and the forest's rename leaves latest's forest in work/forest.next.
+# It is ADOPTED (its header names latest), so the next step starts there, not from genesis, under PRUNE_BLOCKS too
 PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/21.log" 2>&1; t "step 6 -> 9 with PRUNE_BLOCKS=1" 0 $?
-f9=$(ls "$W"/d/forest-9-*.bin); mv "$f9" "$W/d/forest-6-$(cli getblockhash 6).bin"   # as if the rename never happened
-PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/22.log" 2>&1; t "a cache for the wrong height (review of 7806f4b, 3)" 0 $?
-t "  bodies fetched from 1, not 10" "1 12" "$(tail -1 "$W/fetch.log")"
+f9=$(ls "$W"/d/forest-9-*.bin); mv "$f9" "$W/d/work/forest.next"   # as if the run died before the rename
+PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/22.log" 2>&1; t "a run after a kill between point latest and the forest's rename (F1 a)" 0 $?
+t "  work/forest.next adopted as the forest of 9" 1 "$(grep -c 'adopted work/forest.next as the forest of latest (9 ' "$W/22.log")"
+t "  the step started from it: bodies 10..12 only, not from 1" "10 12 hit 9" "$(tail -1 "$W/fetch.log") $(cat "$W/cache.state")"
+# a work/forest.next whose header names another block is never adopted
+fwrite "$W/d/work/forest.next" 7
+PRUNE_BLOCKS=1 MAX_STEP=3 "$F" > "$W/22b.log" 2>&1; t "  a forest.next for another height (7) is not adopted" "0 0 hit 12" "$? $(grep -c adopted "$W/22b.log") $(cat "$W/cache.state")"
 
 # (4) --set-base with a garbage getblockcount: refused, no file moved
 printf '#!/bin/bash\n[ "$1" = getblockcount ] && { echo garbage; exit 0; }\nexec %q "$@"\n' "$HERE/fake-bitcoin-cli" > "$W/bin/cli_garbage"; chmod +x "$W/bin/cli_garbage"
@@ -215,6 +233,34 @@ STUB_T=296 FAKE_HASH_AT=80:$(printf 'e%.0s' $(seq 64)),290:$(printf 'd%.0s' $(se
 t "a reorg that orphans the kept receipt's core tip too: the run steps on (review of 7806f4b, 1)" 0 $?
 t "  the fall-back is not published, and says so" 1 "$(grep -c 'not published; stepping on' "$W/27.log")"
 t "  the new step is published" 60 "$(python3 -c "import json;print(json.load(open('$W/d/pub/latest.json'))['height'])")"
+
+# review F1 (b): a step starts from the newest kept forest AT OR BELOW its previous height. A new base, steps to 120
+# with three forests (80, 100, 120); the forest of 100 lost; a reorg at 120 falls back to the state at 100, whose
+# forest is gone: the step starts from 80's and replays 81..100, fetching only from 81 (PRUNE_BLOCKS removed 1..120)
+"$F" --set-base "$W/base.rcpt" 3 "$X3" > "$W/30.log" 2>&1; t "--set-base again (F1 c)" 0 $?
+t "  the old base's forests moved aside, not deleted" "0 yes" "$(find "$W/d" -maxdepth 1 -name 'forest-*.bin' | wc -l) $([ "$(find "$W/d/orphaned" -path '*base-*' -name 'forest-*.bin' | wc -l)" -gt 0 ] && echo yes)"
+for m in 47 30 20 20; do FOREST_KEEP=3 PRUNE_BLOCKS=1 MAX_STEP=$m "$F" > "$W/31.log" 2>&1 || { echo "FAIL setup step"; fails=$((fails + 1)); }; done
+t "  (setup: forests 80 100 120, latest 120)" "80 100 120 120" "$(cd "$W/d" && ls forest-*.bin | sed 's/forest-\([0-9]*\)-.*/\1/' | sort -n | tr '\n' ' ')$(cut -d' ' -f1 "$W/d/latest/meta")"
+mv "$W"/d/forest-100-*.bin "$W/lost-forest.bin"
+FAKE_HASH_AT=120:$(printf 'e%.0s' $(seq 64)) FOREST_KEEP=3 PRUNE_BLOCKS=1 MAX_STEP=10 "$F" > "$W/32.log" 2>&1
+t "a fall-back to a state without a forest (F1 b)" 0 $?
+t "  started from the newest kept forest below it (80)" "hit 80" "$(cat "$W/cache.state")"
+t "  and fetched from 81, not from 1" "81 110" "$(tail -1 "$W/fetch.log")"
+# no forest at all: a replay from genesis above GENESIS_REPLAY_MAX is refused (nothing moves), allowed with the switch
+mkdir -p "$W/lost"; mv "$W"/d/forest-*.bin "$W/lost/"
+before=$(snap)
+GENESIS_REPLAY_MAX=50 MAX_STEP=5 "$F" > "$W/33.log" 2>&1; t "a genesis replay above GENESIS_REPLAY_MAX is refused (F1)" "1 1" "$? $(grep -c 'needs ALLOW_GENESIS_REPLAY=1' "$W/33.log")"
+t "  nothing moved" "$before" "$(snap)"
+ALLOW_GENESIS_REPLAY=1 GENESIS_REPLAY_MAX=50 MAX_STEP=5 "$F" > "$W/34.log" 2>&1; t "  and runs with ALLOW_GENESIS_REPLAY=1, from block 1" "0 1" "$? $(tail -1 "$W/fetch.log" | cut -d' ' -f1)"
+# review F3: the forest's heap is recorded for the check, and a warning logged above FOREST_HEAP_WARN_BYTES
+STUB_HEAP=5000 FOREST_HEAP_WARN_BYTES=4000 MAX_STEP=5 "$F" > "$W/35.log" 2>&1; t "a step whose forest heap passes the warning line (F3)" 0 $?
+t "  recorded in forest-heap, warned in the log" "5000 120 1" "$(cat "$W/d/forest-heap") $(grep -c 'WARNING: the forest holds 5000 bytes' "$W/35.log")"
+# review F7: orphaned forests go after ORPHANED_FOREST_MIN minutes; other orphaned files stay
+n_or=$(find "$W/d/orphaned" -type f ! -name 'forest*' | wc -l)
+MAX_STEP=5 "$F" > "$W/36.log" 2>&1; t "  (default: orphaned forests kept)" "0 yes" "$? $([ "$(find "$W/d/orphaned" -name 'forest*' | wc -l)" -gt 0 ] && echo yes)"
+sleep 1; ORPHANED_FOREST_MIN=0 MAX_STEP=5 "$F" > "$W/37.log" 2>&1
+t "orphaned forests pruned after ORPHANED_FOREST_MIN (F7)" "0 0" "$? $(find "$W/d/orphaned" -name 'forest*' | wc -l)"
+t "  the rest of orphaned/ untouched" "$n_or" "$(find "$W/d/orphaned" -type f ! -name 'forest*' | wc -l)"
 
 # settings: a bad FOREST_KEEP or WITNESS_SOURCE is refused before anything runs
 FOREST_KEEP=0 "$F" > "$W/28.log" 2>&1; t "FOREST_KEEP=0 is refused" "1 1" "$? $(grep -c 'FOREST_KEEP must be' "$W/28.log")"

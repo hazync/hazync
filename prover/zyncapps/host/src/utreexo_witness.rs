@@ -165,6 +165,10 @@ impl ForestSource {
     // ---- persistence: one file, written to <path>.tmp, synced and renamed; a sha256 of everything before it at the end
 
     pub fn save(&self, path: &str) -> Result<u64, String> {
+        // never save a forest that is not the Stump's accumulator (review F2)
+        if !self.forest_agrees() {
+            return Err("forest source: the forest's roots are not the Stump's; not saving".into());
+        }
         let tmp = format!("{path}.tmp");
         let f = std::fs::File::create(&tmp).map_err(|e| format!("{tmp}: {e}"))?;
         let mut w = HashingWriter { inner: BufWriter::with_capacity(1 << 22, f), sha: Sha256::new(), n: 0 };
@@ -221,6 +225,10 @@ impl ForestSource {
         let mut last = [0u8; 32];
         r.read_exact(&mut last).map_err(|e| e.to_string())?;
         let n = u32_(&mut r)?;
+        // bounded by the file before anything is allocated (review F5)
+        if (n as u64).saturating_mul(32) > len {
+            return Err("forest source: the hash table is longer than the file".into());
+        }
         if n != height + 1 {
             return Err("forest source: the hash table is not one per height".into());
         }
@@ -247,7 +255,7 @@ impl ForestSource {
             roots.push(x);
         }
         let stump = step::stump(leaves, &roots).map_err(|e| format!("forest source: {e}"))?;
-        let forest = ArenaForest::read_from(&mut r).map_err(|e| format!("forest source: {e}"))?;
+        let forest = ArenaForest::read_from(&mut r, len).map_err(|e| format!("forest source: {e}"))?;
         let mut rest = [0u8; 1];
         if r.read(&mut rest).map_err(|e| e.to_string())? != 0 {
             return Err("forest source: trailing bytes".into());

@@ -97,7 +97,7 @@ fn main() {
         let ws = t.elapsed().as_secs_f64();
         let bytes = std::fs::metadata(path).unwrap().len();
         let t = Instant::now();
-        let y = ArenaForest::read_from(&mut std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(path).unwrap())).unwrap();
+        let y = ArenaForest::read_from(&mut std::io::BufReader::with_capacity(1 << 22, std::fs::File::open(path).unwrap()), bytes).unwrap();
         let rs = t.elapsed().as_secs_f64();
         assert_eq!(y.get_roots(), x.get_roots());
         println!("FOREST_BENCH snapshot bytes={bytes} bytes_per_live_leaf={:.1} write_s={ws:.1} read_and_check_s={rs:.1} \

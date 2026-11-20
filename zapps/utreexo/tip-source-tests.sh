@@ -20,6 +20,7 @@ rm -f "$W/forest.bin" "$W/native.bin"
 for spec in 10000:$S10 20000:$S100 50000:$S100 91722:$S100 91812:$S100 91842:$S100 91880:$S100 100000:$S100; do
   h=${spec%%:*}; s=${spec#*:}
   [ "$h" = 100000 ] && cp "$W/forest.bin" "$W/forest_91880.bin"
+  [ "$h" = 91722 ] && cp "$W/forest.bin" "$W/forest_50000.bin"
   "$Z" utreexo-tip-prove "$B" "$prev" "$h" "$s" "$W/f_$h" --execute --source forest --cache "$W/forest.bin" > "$W/f_$h.log" 2>&1
   t "forest source: step $p -> $h" 0 $?
   "$Z" utreexo-tip-prove "$B" "$prev" "$h" "$s" "$W/n_$h" --execute --source native --cache "$W/native.bin" > "$W/n_$h.log" 2>&1
@@ -34,10 +35,15 @@ done
 [ -n "$fs" ] || { echo "FAIL no witness digest"; fails=$((fails + 1)); }
 
 # restarts of the last step 91,880 -> 100,000: from a kept copy (a hit, the same bytes); from a corrupt copy (refused,
-# a replay from genesis, the same bytes); from the native source's file (the other kind: a replay)
+# a replay from genesis, the same bytes); from the native source's file (the other kind: a replay); from an OLDER kept
+# forest (50,000: replayed forward 50,001..91,880, review F1 b); from a forest ABOVE the previous height (100,000: a
+# replay from genesis)
 want=$(field UTREEXO_TIP_WITNESS "$W/f_100000.log" frames_sha256)
-for c in copy corrupt other; do
+cp "$W/forest.bin" "$W/forest_100000.bin"
+for c in copy corrupt other below above; do
   cp "$W/forest_91880.bin" "$W/r_$c.bin"
+  [ $c = below ] && cp "$W/forest_50000.bin" "$W/r_$c.bin"
+  [ $c = above ] && cp "$W/forest_100000.bin" "$W/r_$c.bin"
   [ $c = corrupt ] && printf '\x01' | dd of="$W/r_$c.bin" bs=1 seek=$(( $(stat -c %s "$W/r_$c.bin") / 2 )) conv=notrunc status=none
   [ $c = other ] && cp "$W/native.bin" "$W/r_$c.bin"
   "$Z" utreexo-tip-prove "$B" "$W/f_91880.journal" 100000 "$S100" "$W/r_$c" --execute --source forest --cache "$W/r_$c.bin" --cache-out "$W/r_$c.out" > "$W/r_$c.log" 2>&1
@@ -47,6 +53,8 @@ for c in copy corrupt other; do
     copy) t "  a cache hit" 1 "$(grep -c 'UTREEXO_TIP_CACHE hit at 91880' "$W/r_$c.log")";;
     corrupt) t "  the corrupt file refused, replayed from genesis" "1 1" "$(grep -c 'UTREEXO_TIP_CACHE unusable (forest source' "$W/r_$c.log") $(grep -c 'UTREEXO_TIP_REPLAY 1..91880' "$W/r_$c.log")";;
     other) t "  the other source's file refused, replayed" "1 1" "$(grep -c 'UTREEXO_TIP_CACHE unusable.*other witness source' "$W/r_$c.log") $(grep -c 'UTREEXO_TIP_REPLAY 1..91880' "$W/r_$c.log")";;
+    below) t "  started from the forest at 50,000 and replayed 50,001..91,880 only" "1 1" "$(grep -c 'UTREEXO_TIP_CACHE below at 50000' "$W/r_$c.log") $(grep -c 'UTREEXO_TIP_REPLAY 50001..91880' "$W/r_$c.log")";;
+    above) t "  a forest above the previous height is not used: replayed from genesis" "1 1" "$(grep -c 'not at or below the previous step' "$W/r_$c.log") $(grep -c 'UTREEXO_TIP_REPLAY 1..91880' "$W/r_$c.log")";;
   esac
   grep -h -E 'UTREEXO_TIP_(CACHE|REPLAY)' "$W/r_$c.log"
 done

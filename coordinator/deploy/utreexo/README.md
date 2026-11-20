@@ -23,10 +23,24 @@ own full Utreexo forest (a compact port of rustreexo 0.7.0's MemForest), saved a
 `$UTREEXO_DIR/forest-<H>-<hash>.bin`, and the spent coins' data from the block files' prevouts (the node's undo data,
 `getblock` verbosity 3 via `fetch_block_rpc.py`). The source holds no UTXO set. Every block is checked natively
 (rustreexo `Stump::modify`) before anything is proved, and the guest checks it again: the source is never trusted.
-A saved forest is refused at load if its checksum, any inner hash (all are recomputed) or its roots are wrong; the run
-then replays from genesis. The `FOREST_KEEP` newest forests are kept, so a fall-back to one of their heights starts
-there instead of replaying from genesis. `WITNESS_SOURCE=native` is the old test-scale replay (every live coin and
-the forest as `Rc` nodes in memory), kept for comparison.
+A saved forest is refused at load if its checksum, any inner hash (all are recomputed), its counts or its roots are
+wrong. `WITNESS_SOURCE=native` is the old test-scale replay (every live coin and the forest as `Rc` nodes in memory),
+kept for comparison.
+
+**Losing a forest** (review F1). A step starts from the newest kept forest AT OR BELOW its previous height whose block is
+the node's, and replays forward from there over the block files (only those are fetched); `zyncapp` checks the result
+is the previous receipt's block, leaf count and roots. The forests of the `FOREST_KEEP` newest states are kept
+(default `KEEP + 1`: one per kept state, so any fall-back finds one at or below it). A run killed between switching
+`latest` and renaming its forest leaves it in `work/forest.next`: the next run adopts it when its header names `latest`.
+`--set-base` and a fall-back move forests to `orphaned/`, never delete them; forests there go after
+`ORPHANED_FOREST_MIN` (2 days). Only with NO kept forest at or below the previous height does the source replay from
+genesis, and above `GENESIS_REPLAY_MAX` (100,000) blocks that is refused unless `ALLOW_GENESIS_REPLAY=1` (at the tip
+it fetches ~970,000 bodies with prevouts onto this disk).
+
+**Memory** (review F3). `zyncapp` saves the source at H before proving (`<cache-out>.pending`, renamed after the
+statement is checked) and drops it, so the forest is not held through the proof. After each step the follower writes
+the forest's heap to `$UTREEXO_DIR/forest-heap`, logs a warning above `FOREST_HEAP_WARN_BYTES` (12 GiB, half of the
+unit's `MemoryMax=24G`), and `hazync-check-utreexo-follow` alerts on it.
 
 Sizes (UTREEXO_ZAPP.md §10.5.1): MEASURED on a synthetic forest of 8M live leaves: ~130 bytes of heap per live leaf after a load
 (MemForest: ~3x), the saved file 66 bytes per live leaf. ESTIMATED at the tip's ~165M live coins: ~21 GB of memory and
@@ -44,15 +58,26 @@ directory.
 `UTREEXO_DIR`, `UTREEXO_BIN`, `ZYNCAPP`, `VERIFY` (zapp-utreexo), `ELF` / `WANT_ELF` (the tip guest and its sha256),
 `BASE_ID` / `TIP_IMAGE` (image ids, default the built-in ones), `CORE` (the core receipt, default the spine copy),
 `BLOCKS` and `FETCH` (block files and how to fetch them), `BITCOIN_CLI`, `MARGIN` (6), `MAX_STEP` (2016), `KEEP` (12),
-`WITNESS_SOURCE` (forest), `FOREST_KEEP` (3, at least 1), `PRUNE_BLOCKS` (0; the unit sets 1), `ALLOW_DEMO` (0),
+`WITNESS_SOURCE` (forest), `FOREST_KEEP` (`KEEP` + 1, at least 1), `GENESIS_REPLAY_MAX` (100000) /
+`ALLOW_GENESIS_REPLAY` (0), `FOREST_HEAP_WARN_BYTES` (12 GiB), `ORPHANED_FOREST_MIN` (2880), `PRUNE_BLOCKS` (0; the unit
+sets 1), `ALLOW_DEMO` (0),
 `NETWORK` (mainnet), `PUBLISH` / `PUBLISH_KEY` (rsync target). `fetch_block_rpc.py` reads `HAZYNC_RPC_COOKIE`.
 
 ## Install (hazync-proof) — the procedure, NOT EXECUTED
 
 Where: hazync-proof (bitcoind with txindex at 127.0.0.1:8332, the spine at `/var/lib/hazync-lz/spine/spine.bin`).
 State on the root disk (`/var/lib/hazync-utreexo`; not `/srv/bulk`, whose writes are capped at ~40 MB/s and a forest
-file is rewritten every step). Disk: block files for one step (pruned after it), `FOREST_KEEP` forests, `KEEP`
-receipts of ~230 KB.
+file is rewritten every step). Disk: block files for one step (pruned after it), `FOREST_KEEP` forests (13 by default:
+~143 GB at the tip, ESTIMATE; tiny at today's heights), orphaned forests for 2 days, `KEEP` receipts of ~230 KB.
+Checked read-only on hazync-proof (20.11.2026): `bitcoind.service`, `hazync-alert@.service`,
+`/usr/local/sbin/hazync-run-check`, `/usr/local/bin/bitcoin-cli`, the cookie `/var/lib/bitcoind/.cookie`, python3,
+flock and rsync are there; the root disk had 1.7 T free.
+
+⚠ **Order.** Install only from a commit that is ON `main`: the box's `hazync-check-unit-drift` compares every installed
+`hazync-*` unit with a fresh clone of `origin/main`, so a unit from an unmerged branch is reported as drift.
+Every setting lives in the repo's unit files: publishing (`PUBLISH`) and a larger `MemoryMax` are changes to
+`hazync-utreexo-follow.service` here, merged, then installed — never a drop-in made on the box (it is drift too, and a
+repo drop-in that is not installed is reported as missing).
 
 On a build box, from the commit being deployed:
 
@@ -76,25 +101,41 @@ cp hazync-utreexo-follow.service hazync-utreexo-follow.timer /etc/systemd/system
 E="UTREEXO_DIR=/var/lib/hazync-utreexo UTREEXO_BIN=/opt/hazync-utreexo/bin ELF=/opt/hazync-utreexo/bin/zyncapp-utreexo-tip.bin
    WANT_ELF=dd9d09bd0ea181f2d8518a330cd20820754e2362c094763d3b23e80724b32250 CORE=/var/lib/hazync-lz/spine/spine.bin
    HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie ALLOW_DEMO=1"
+export PATH=/usr/local/bin:$PATH    # bitcoin-cli is in /usr/local/bin, not on a non-interactive ssh shell's PATH
 env $E /opt/hazync-utreexo/bin/hazync-utreexo-follow --init
 env $E /opt/hazync-utreexo/bin/hazync-utreexo-follow --set-base mainnet-3.receipt 3 0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449
 env $E DRY_RUN=1 /opt/hazync-utreexo/bin/hazync-utreexo-follow     # logs the H it would prove; proves nothing
 systemctl start hazync-utreexo-follow.service && journalctl -u hazync-utreexo-follow -n 30   # one real step, by hand
 systemctl enable --now hazync-utreexo-follow.timer
+# the check (stall and forest memory), through the box's hazync-run-check
+install -m755 hazync-check-utreexo-follow.sh /usr/local/sbin/hazync-check-utreexo-follow
+cp hazync-check-utreexo-follow.service hazync-check-utreexo-follow.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now hazync-check-utreexo-follow.timer
 ```
 
 The first steps replay and prove from the base (H = 3) to the spine's height in runs of `MAX_STEP` blocks; the forest
-is then saved and later runs start from it. Nothing is uploaded until `PUBLISH` is set (a drop-in
+is then saved and later runs start from it. Nothing is uploaded until `PUBLISH` is set (in the unit, by a repo change:
 `Environment=PUBLISH=root@<web box>:./`), after the web box has the target: a key pinned with
 `command="/usr/bin/rrsync -wo /var/www/hazync-utreexo",restrict` and an nginx alias `/utreexo-live/` outside the site
 root, as for `/headers-live/` (coordinator/deploy/headers/README.md). Before the core proof nears the tip, raise
-`MemoryMax` (the forest's ESTIMATED ~21 GB at the tip, plus the prover) and check the root disk for `FOREST_KEEP` forest
-files (~11 GB each, ESTIMATED).
+`MemoryMax` in the unit (the forest's ESTIMATED ~21 GB at the tip while it is loaded and saved; the prover's own peak
+after it is dropped) and `FOREST_HEAP_WARN_BYTES` in both units, and check the root disk for the forest files.
+
+**The timer and the load** (review F7). At the tip a run loads the forest (~4 min, ESTIMATE) and saves it (~40 s) besides
+proving. The timer fires every 10 minutes, but a oneshot that is still running is not started again (and the
+follower's `flock` would turn a second run away), so a long run only delays the next one. A long-running source that
+keeps the forest in memory would remove the load; it is not built.
 
 Undo: `systemctl disable --now hazync-utreexo-follow.timer`, remove the two units, `/opt/hazync-utreexo` and
 `/var/lib/hazync-utreexo`. Nothing else on the box is touched.
 
 ## Test
+
+`test/run_ci.sh` (CI, job `utreexo-follower`; ~8 min on a laptop): `test_check.sh` (the check on every path) and its
+control, then `test_follow_logic.sh` on header-only block files made from `test/headers_1_500.txt` (mainnet 1..500,
+`mkblocks.py`), and six controls run beside it, each the follower with one guard taken out (the old fall-back, the old
+retention, no adoption of `work/forest.next`, no forest below P, no genesis-replay limit, `--set-base` deleting
+forests): each must fail checks.
 
 `test/test_follow_logic.sh <block dir with block_1..300.json>`: the script's own logic with a stub prover and checker
 (seconds): RPC failures and a node below the proven height are errors, reorg fall-back and what moves aside, retention,

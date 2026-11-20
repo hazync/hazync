@@ -19,19 +19,23 @@ Environment=WANT_ELF=dd9d09bd0ea181f2d8518a330cd20820754e2362c094763d3b23e80724b
 Environment=CORE=/var/lib/hazync-lz/spine/spine.bin
 Environment=HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie
 Environment=WITNESS_SOURCE=forest
-Environment=FOREST_KEEP=3
+# FOREST_KEEP: the default, KEEP + 1 (13): a forest for every kept state (README, review F1)
 # the bodies at or below the proven height go once its forest is saved: a step needs only P+1..H (a fall-back to a height
-# with no kept forest fetches from genesis again)
+# whose forest was not kept fetches from the newest kept forest below it)
 Environment=PRUNE_BLOCKS=1
 # every proof is DEMO while the core proof is below Core's minimum work; remove once it is not
 Environment=ALLOW_DEMO=1
-# empty: nothing is uploaded (pub/ is still written). Set with a drop-in once the web box's target exists (README)
+# empty: nothing is uploaded (pub/ is still written). Set HERE, by a repo change, once the web box's target exists
+# (README): a drop-in made on the box would be drift
 Environment=PUBLISH=
 ExecStart=/opt/hazync-utreexo/bin/hazync-utreexo-follow
 Nice=19
 IOSchedulingClass=idle
 # the forest grows with the proven height: ~1 GB at 8M live coins, an ESTIMATED ~21 GB at the tip's ~165M
 # (UTREEXO_ZAPP.md §10.5.1), plus the CPU prover. Raise before the core proof nears the tip
+# the forest is saved and DROPPED before the proof (review F3); FOREST_HEAP_WARN_BYTES (here and in
+# hazync-check-utreexo-follow.service) is half of this: change them together, in the repo
+Environment=FOREST_HEAP_WARN_BYTES=12884901888
 MemoryMax=24G
 PrivateTmp=true
 TimeoutStartSec=6h

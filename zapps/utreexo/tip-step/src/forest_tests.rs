@@ -15,7 +15,7 @@ use crate::step;
 use crate::utreexo_forest::ArenaForest;
 use crate::utreexo_witness::{ForestSource, Lie, PrevCoin};
 use rustreexo::mem_forest::MemForest;
-use rustreexo::node_hash::BitcoinNodeHash;
+use rustreexo::node_hash::{AccumulatorHash, BitcoinNodeHash};
 use rustreexo::proof::Proof;
 use rustreexo::stump::Stump;
 use sha2::{Digest, Sha256};
@@ -94,7 +94,7 @@ fn differential(seed: u64, rounds: usize, collide_every: u64) {
             a.check().unwrap();
             let mut b = Vec::new();
             a.write_to(&mut b).unwrap();
-            a = ArenaForest::read_from(&mut &b[..]).unwrap_or_else(|e| panic!("seed {seed}: read back: {e}"));
+            a = ArenaForest::read_from(&mut &b[..], u64::MAX).unwrap_or_else(|e| panic!("seed {seed}: read back: {e}"));
             assert_eq!(a.get_roots(), mr);
         }
     }
@@ -157,7 +157,7 @@ fn forest_control_a_corrupt_inner_node_is_caught() {
     assert!(a.check().is_err(), "check must see the stale inner hash");
     let mut b = Vec::new();
     a.write_to(&mut b).unwrap();
-    let e = ArenaForest::read_from(&mut &b[..]).err().expect("read_from must refuse a forest whose inner hashes lie");
+    let e = ArenaForest::read_from(&mut &b[..], u64::MAX).err().expect("read_from must refuse a forest whose inner hashes lie");
     assert!(e.contains("not the hash of its children"), "{e}");
 }
 
@@ -463,4 +463,103 @@ fn source_lies_get_past_the_source_but_not_the_guest() {
         assert!(e.contains("do not open"), "{lie:?}: {e}");
         let _ = std::fs::remove_file(tmp("ctl2.bin"));
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Review fixes (F2, F4, F5): a diverged forest is never saved; read_from's count, size and depth checks each refuse.
+
+/// A forest file by hand: header (leaves, roots, live nodes, live leaves) and the preorder bytes.
+fn forest_file(leaves: u64, nodes: u64, live: u64, body: &[u8]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&leaves.to_le_bytes());
+    b.extend_from_slice(&(leaves.count_ones() as u64).to_le_bytes());
+    b.extend_from_slice(&nodes.to_le_bytes());
+    b.extend_from_slice(&live.to_le_bytes());
+    b.extend_from_slice(body);
+    b
+}
+
+fn raw32(n: &BitcoinNodeHash) -> H {
+    match n { BitcoinNodeHash::Some(h) => *h, _ => panic!() }
+}
+
+#[test]
+fn forest_read_from_refuses_impossible_headers() {
+    // control: an honest forest of 5 leaves reads back
+    let mut a = ArenaForest::new();
+    let l: Vec<BitcoinNodeHash> = (0..5).map(|i| leaf(3000 + i, false)).collect();
+    a.modify(&l, &[]).unwrap();
+    let mut b = Vec::new();
+    a.write_to(&mut b).unwrap();
+    assert!(ArenaForest::read_from(&mut &b[..], b.len() as u64).is_ok(), "control");
+    // the stored node count changed to another plausible value: refused (the trees hold 9 nodes)
+    let mut x = b.clone();
+    x[16..24].copy_from_slice(&7u64.to_le_bytes());
+    let e = ArenaForest::read_from(&mut &x[..], x.len() as u64).err().expect("a wrong node count was accepted");
+    assert!(e.contains("not the stored one"), "{e}");
+    // a header claiming 2^31 nodes (below the arena's 2^32 index limit) in a file of a few bytes: refused BEFORE any
+    // allocation (F5; without the bound, reserve_exact of ~106 GB aborts the process)
+    let huge = forest_file(1 << 31, 1 << 31, 1 << 30, &[]);
+    let e = ArenaForest::read_from(&mut &huge[..], huge.len() as u64).err().expect("an impossible count was accepted");
+    assert!(e.contains("impossible"), "{e}");
+    // a tree deeper than its root's row: leaves = 5 (roots of rows 2 and 0); the row-2 root a lone leaf (its 3
+    // siblings deleted, it moved up), the row-0 root a BRANCH of two leaves, hashed correctly
+    let (p, q, r) = (raw32(&leaf(1, false)), raw32(&leaf(2, false)), raw32(&leaf(3, false)));
+    let pq = raw32(&BitcoinNodeHash::parent_hash(&BitcoinNodeHash::Some(q), &BitcoinNodeHash::Some(r)));
+    let mut body = vec![1u8];
+    body.extend_from_slice(&p);
+    body.push(2);
+    body.extend_from_slice(&pq);
+    body.push(1);
+    body.extend_from_slice(&q);
+    body.push(1);
+    body.extend_from_slice(&r);
+    let deep = forest_file(5, 4, 3, &body);
+    let e = ArenaForest::read_from(&mut &deep[..], deep.len() as u64).err().expect("a tree deeper than its row was accepted");
+    assert!(e.contains("deeper than its root's row"), "{e}");
+    // control for that construction: the same bytes with the branch as the ROW-2 tree and the leaf as the row-0 one read
+    let mut body2 = vec![2u8];
+    body2.extend_from_slice(&pq);
+    body2.push(1);
+    body2.extend_from_slice(&q);
+    body2.push(1);
+    body2.extend_from_slice(&r);
+    body2.push(1);
+    body2.extend_from_slice(&p);
+    let ok = forest_file(5, 4, 3, &body2);
+    assert!(ArenaForest::read_from(&mut &ok[..], ok.len() as u64).is_ok(), "control: a legal shape");
+}
+
+#[test]
+fn source_load_bounds_its_hash_table_by_the_file() {
+    // magic, height 2^32 - 2, a block hash, a hash count of 2^32 - 1: refused before allocating 128 GiB (F5)
+    let mut b = b"HZUFOR01".to_vec();
+    b.extend_from_slice(&(u32::MAX - 1).to_le_bytes());
+    b.extend_from_slice(&[7u8; 32]);
+    b.extend_from_slice(&u32::MAX.to_le_bytes());
+    b.extend_from_slice(&[0u8; 64]);
+    let p = tmp("huge.bin");
+    std::fs::write(&p, &b).unwrap();
+    let e = ForestSource::load(&p).err().expect("a hash count beyond the file was accepted");
+    assert!(e.contains("longer than the file"), "{e}");
+    let _ = std::fs::remove_file(&p);
+}
+
+#[test]
+fn source_never_saves_a_diverged_forest() {
+    let c = chain(11, 80);
+    let mut src = ForestSource::genesis(c.genesis);
+    run(&mut src, &c, 0, 80);
+    let p = tmp("diverged.bin");
+    assert!(src.save(&p).is_ok(), "control: the agreeing source saves");
+    // the Stump moved on without the forest (a bug's shape): refused, and nothing replaces the good file
+    let good = std::fs::read(&p).unwrap();
+    let mut s = src.stump.clone();
+    s = s.modify(&[leaf(9999, false)], &[], &Proof::default()).unwrap();
+    src.stump = s;
+    assert!(!src.forest_agrees());
+    let e = src.save(&p).err().expect("a diverged forest was saved");
+    assert!(e.contains("not the Stump's"), "{e}");
+    assert_eq!(std::fs::read(&p).unwrap(), good, "the earlier file must be untouched");
+    let _ = std::fs::remove_file(&p);
 }

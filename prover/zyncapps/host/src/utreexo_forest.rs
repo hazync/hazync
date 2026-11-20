@@ -137,12 +137,9 @@ impl ArenaForest {
         let p = prefix(h);
         if let Some(&i) = self.map.get(&p) {
             if self.nodes[i as usize].hash == *h {
+                // a leaf in `more` with the same prefix stays there (`get` falls back to `more`); promoting it would cost a
+                // scan of `more` on every such delete and changes no result (review F4)
                 self.map.remove(&p);
-                // promote a leaf with the same prefix from `more`, so `map` keeps one entry per prefix in use
-                if let Some(k) = self.more.keys().find(|k| prefix(k) == p).copied() {
-                    let j = self.more.remove(&k).unwrap();
-                    self.map.insert(p, j);
-                }
                 return Some(i);
             }
         }
@@ -386,7 +383,9 @@ impl ArenaForest {
     /// Reads [`write_to`]'s format and checks it: every branch hash is recomputed from its children and must equal the
     /// stored one (a store that lies about an inner node is refused here), every tree's height is the one its root
     /// row says, and no leaf hash repeats.
-    pub fn read_from<R: Read>(r: &mut R) -> Result<Self, String> {
+    /// `max_bytes`: the bytes the forest can occupy in its file; the stored counts are refused above what that many
+    /// bytes can hold before anything is allocated (a corrupt count must not abort the allocator, review F5).
+    pub fn read_from<R: Read>(r: &mut R, max_bytes: u64) -> Result<Self, String> {
         let mut f = ArenaForest::new();
         let mut b8 = [0u8; 8];
         r.read_exact(&mut b8).map_err(|e| e.to_string())?;
@@ -400,7 +399,8 @@ impl ArenaForest {
         let want_nodes = u64::from_le_bytes(b8);
         r.read_exact(&mut b8).map_err(|e| e.to_string())?;
         let want_live = u64::from_le_bytes(b8);
-        if want_live > f.leaves || want_nodes > 2 * want_live || want_nodes >= (NIL - 1) as u64 {
+        // a node takes at least 33 bytes in the file (tag and hash)
+        if want_live > f.leaves || want_nodes > 2 * want_live || want_nodes >= (NIL - 1) as u64 || want_nodes.saturating_mul(33) > max_bytes {
             return Err("forest: impossible node or leaf counts".into());
         }
         // the arena sized once, with an eighth to grow into (a run's adds), not by doubling

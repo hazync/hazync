@@ -989,8 +989,12 @@ fn utreexo_tip_prove(a: &[String]) {
     let t0 = std::time::Instant::now();
     let cache = flag(a, "--cache");
     let mut nat = match cache.map(|c| Source::load(forest, c)) {
+        // the cache of exactly P, or of a height BELOW P from which the source replays forward over the block files: each
+        // replayed block must follow the cache's block by hash (parse_block), and the result must be the previous
+        // statement's block, leaf count and roots (checked below), so a cache of another branch cannot get through
         Some(Ok(n)) if n.height() == p_height && n.last() == p_hash => { println!("UTREEXO_TIP_CACHE hit at {p_height} ({}, {:.1} s)", n.name(), t0.elapsed().as_secs_f64()); n }
-        Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not the previous step's {p_height}: replaying from genesis", n.height(), utreexo_tip_host::disp(&n.last())); Source::genesis(forest, signet) }
+        Some(Ok(n)) if n.height() < p_height => { println!("UTREEXO_TIP_CACHE below at {} {} ({}): replaying {}..{p_height}", n.height(), utreexo_tip_host::disp(&n.last()), n.name(), n.height() + 1); n }
+        Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not at or below the previous step's {p_height}: replaying from genesis", n.height(), utreexo_tip_host::disp(&n.last())); Source::genesis(forest, signet) }
         Some(Err(e)) => { println!("UTREEXO_TIP_CACHE unusable ({e}): replaying from genesis"); Source::genesis(forest, signet) }
         None => Source::genesis(forest, signet),
     };
@@ -1000,6 +1004,7 @@ fn utreexo_tip_prove(a: &[String]) {
         nat.block(&b).unwrap_or_else(|e| die(&format!("native replay: {e}")));
     }
     if nat.height() > replay_from { println!("UTREEXO_TIP_REPLAY {}..{p_height} ({}) in {:.1} s", replay_from + 1, nat.name(), t0.elapsed().as_secs_f64()); }
+    if !nat.forest_agrees() { die("the source's forest and its Stump disagree at the previous height: not proving"); }
     if nat.last() != p_hash { die(&format!("block {p_height} of the block files is {}, the previous statement's is {}", utreexo_tip_host::disp(&nat.last()), disp(&p_hash))); }
     if nat.leaves() != p_leaves || nat.roots() != p_roots {
         die(&format!("the native accumulator after {p_height} (leaves {}, roots {}) is not the previous statement's (leaves {p_leaves}, roots {})",
@@ -1052,6 +1057,9 @@ fn utreexo_tip_prove(a: &[String]) {
     println!("UTREEXO_TIP_NATIVE from={p_height} H={stop} T={} block={} leaves={} roots={} blocks={} adds={} dels={} proof_hashes={} forest_agrees={} ({:.1} s)",
              cs.height, utreexo_tip_host::disp(&nat.last()), nat.leaves(), roots_str(&nat.roots()), c.blocks, c.adds, c.dels, c.proof_hashes,
              nat.forest_agrees(), t0.elapsed().as_secs_f64());
+    // the forest the next step starts from must be the accumulator the guest will commit (review F2): a forest that
+    // drifted from the Stump would give proofs that fail later, or a cache that is wrong
+    if lie.is_none() && !nat.forest_agrees() { die("the source's forest and its Stump disagree after the step: not proving, nothing saved"); }
     if let Some(rf) = flag(a, "--ref") {
         let log = std::fs::read_to_string(rf).unwrap_or_else(|e| die(&format!("--ref: {e}")));
         let key = format!("UTREEXO_REF height={stop} ");
@@ -1073,6 +1081,20 @@ fn utreexo_tip_prove(a: &[String]) {
     }
     let prev_kind_in = if tc.as_deref() == Some("prev_kind") { 3 - prev_kind } else { prev_kind };
 
+    // F3: the source's state at H is saved BEFORE proving, to <cache-out>.pending (renamed into place only after the
+    // guest's statement is checked), and the source is dropped, so the forest (~21 GB at the tip, ESTIMATE) is not held
+    // through the proof. What the statement check needs is kept: the block, the leaf count and the roots
+    let (n_roots, n_leaves, n_last, n_name) = (nat.roots(), nat.leaves(), nat.last(), nat.name());
+    let cache_target = flag(a, "--cache-out").or(cache).cloned();
+    let pending = cache_target.as_ref().map(|c| format!("{c}.pending"));
+    if let Some(pp) = &pending {
+        if lie.is_none() {
+            let ts = std::time::Instant::now();
+            let n = nat.save(pp).unwrap_or_else(|e| die(&format!("--cache-out: {e}")));
+            println!("UTREEXO_TIP_CACHE_SAVED {n_name} at {stop}: {n} bytes in {:.1} s (pending until the statement is checked)", ts.elapsed().as_secs_f64());
+        }
+    }
+    drop(nat);
     let words = utreexo_tip_host::frame_words(&fr);
     let link_w: Vec<u32> = link.iter().flat_map(|l| l.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()))).collect();
     let mut b = ExecutorEnv::builder();
@@ -1112,15 +1134,14 @@ fn utreexo_tip_prove(a: &[String]) {
         r.journal.bytes.clone()
     };
     let z: TipStatement = risc0_zkvm::serde::from_slice(&jwords(&jb)).unwrap_or_else(|e| die(&format!("journal: {e}")));
-    if z.roots != nat.roots() || z.leaves != nat.leaves() || z.block_hash != nat.last() || z.height != stop || z.from != p_height {
+    if z.roots != n_roots || z.leaves != n_leaves || z.block_hash != n_last || z.height != stop || z.from != p_height {
         die("the guest's statement is not the native replay's");
     }
-    // --cache-out: where the state at H is written (default: over --cache). A follower writes it aside and renames it
-    // over its cache only once the step is accepted, so a failed run never leaves a cache for the wrong height
-    if let Some(c) = flag(a, "--cache-out").or(cache) {
-        let ts = std::time::Instant::now();
-        let n = nat.save(c).unwrap_or_else(|e| die(&format!("--cache-out: {e}")));
-        println!("UTREEXO_TIP_CACHE_SAVED {} at {stop}: {n} bytes in {:.1} s", nat.name(), ts.elapsed().as_secs_f64());
+    // --cache-out: where the state at H goes (default: over --cache). A follower writes it aside and renames it over its
+    // cache only once the step is accepted, so a failed run never leaves a cache for the wrong height
+    if let (Some(c), Some(pp)) = (&cache_target, &pending) {
+        std::fs::rename(pp, c).unwrap_or_else(|e| die(&format!("--cache-out {c}: {e}")));
+        println!("UTREEXO_TIP_CACHE_SAVED {n_name} at {stop}: {c}");
     }
     println!("UTREEXO_TIP_JOURNAL height={} block={} leaves={} steps={} base_height={} from={} roots={} core={} core_height={}{}", z.height, disp(&z.block_hash),
              z.leaves, z.steps, z.base_height, z.from, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,

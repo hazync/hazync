@@ -302,6 +302,9 @@ impl Source {
     }
 
     pub fn save(&self, path: &str) -> Result<u64, String> {
+        if !self.forest_agrees() {
+            return Err("the source's forest and its Stump disagree: not saving (review F2)".into());
+        }
         match self {
             Source::Native(n) => { n.save(path)?; Ok(std::fs::metadata(path).map_err(|e| e.to_string())?.len()) }
             Source::Forest(f) => f.save(path),
