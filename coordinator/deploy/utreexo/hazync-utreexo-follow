@@ -64,8 +64,8 @@ ALLOW_GENESIS_REPLAY=${ALLOW_GENESIS_REPLAY:-0}
 FOREST_HEAP_WARN_BYTES=${FOREST_HEAP_WARN_BYTES:-12884901888}
 # forests moved to orphaned/ (a fall-back, a new base) are deleted this many minutes after they were moved (review F7)
 ORPHANED_FOREST_MIN=${ORPHANED_FOREST_MIN:-2880}
-# PRUNE_BLOCKS=1: delete block files at or below the proven height once a forest cache is there (a fall-back to a height
-# without a kept cache then needs them again from genesis)
+# PRUNE_BLOCKS=1: delete block files at or below the proven height once a forest cache is there (a step from an older
+# kept forest fetches the bodies above it again)
 PRUNE_BLOCKS=${PRUNE_BLOCKS:-0}
 BITCOIN_CLI=${BITCOIN_CLI:-bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind}
 MARGIN=${MARGIN:-6}
@@ -298,6 +298,9 @@ if [ -f "$D/work/forest.next" ]; then
     log "adopted work/forest.next as the forest of latest ($P $PX): the last run stopped before renaming it"
   fi
 fi
+# review F7: forests moved to orphaned/ more than ORPHANED_FOREST_MIN minutes ago go (~11 GB each at the tip), on every
+# run; the rest of orphaned/ (receipts, states, block files) is small and stays
+find "$D/orphaned" -name 'forest*' -type f -cmin +"$ORPHANED_FOREST_MIN" -print -delete 2>/dev/null | sed 's/^/pruned orphaned forest /' >&2 || true
 NT=$(cli getblockcount) || die "the node did not answer getblockcount"
 [[ "$NT" =~ ^[0-9]+$ ]] || die "getblockcount: '$NT'"
 [ "$NT" -ge "$P" ] || die "the node's tip $NT is below the proven height $P (still syncing?): not a reorg, nothing done"
@@ -372,9 +375,8 @@ HX=$(node_hash "$H")
 if [ "$H" -gt "$P" ]; then
   # the bodies P+1..H (or 1..H when the source must replay from genesis: no forest cache at P), and the link
   # H+1..T as headers only
-  # the forest cache is named by the height AND hash it is for: only the cache of exactly (P, PX) lets the step start at
-  # P+1; any other (a kill between `point latest` and its rename, a fall-back) means a replay from genesis, so every
-  # body from 1 is checked and fetched (review of 7806f4b, 3)
+  # a forest is named by the height AND hash it is for, and only one whose block is the node's is used; the bodies from
+  # its height + 1 (from 1 with none) are checked and fetched (review of 7806f4b, 3; review F1)
   # the newest kept forest at or below P whose block is the node's: the source replays forward from it (review F1 b)
   FC=; FH=0
   for f in $(cd "$D" && ls forest-*.bin 2>/dev/null | sort -t- -k2,2nr); do
@@ -449,6 +451,3 @@ fi
 
 rm -f "$D/work"/step_*.rcpt
 publish_latest "$H" "$HX" "$V" "$SECS"
-# review F7: forests moved to orphaned/ more than ORPHANED_FOREST_MIN minutes ago go (~11 GB each at the tip); the rest
-# of orphaned/ (receipts, states, block files) is small and stays
-find "$D/orphaned" -name 'forest*' -type f -cmin +"$ORPHANED_FOREST_MIN" -print -delete 2>/dev/null | sed 's/^/pruned orphaned forest /' >&2 || true
