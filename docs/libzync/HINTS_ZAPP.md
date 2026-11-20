@@ -3,7 +3,8 @@
 Status: design APPROVED 2026-11-14; built on `feat/hints-zapp` (§10: what exists, measured, tested). Base: `feat/undo-commit`
 (the U0 undo commitment, UNDO.md).
 
-SwiftSync is Ruben Somsen's protocol; the hints file and block-undo formats are Robert Netzke's
+SwiftSync was originally proposed by Ruben Somsen; the hints file and block-undo formats are specified in the SwiftSync
+BIP drafts
 (`2140-dev/swiftsync-bips`: `swiftsync.md`, `hintsfile.md`, `block-undo.md`, `test_vectors/`; the `hintsfile` crate).
 This zyncAPP adds nothing to SwiftSync. It is an additive product on top of a Hazync chain proof: "this hints file for
 height H is exactly right", so a node can check a downloaded file before it spends a sync on it. A wrong file is

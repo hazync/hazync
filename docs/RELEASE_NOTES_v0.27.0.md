@@ -54,7 +54,8 @@ the proof commits to. A lying service can refuse to answer, never make a block o
 
 ## SwiftSync hints zyncAPP (new)
 
-SwiftSync is Ruben Somsen's protocol; the hints file format is Robert Netzke's. This zyncAPP proves that **a hints file
+SwiftSync was originally proposed by Ruben Somsen; its hints-file format is specified in the SwiftSync BIP drafts
+(2140-dev/swiftsync-bips). This zyncAPP proves that **a hints file
 for height H is exactly right**, so a node can check a downloaded file before it spends a sync on it. (A wrong file is
 already safe in SwiftSync; the proof saves the wasted sync.)
 
