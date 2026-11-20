@@ -1,0 +1,24 @@
+The header-chain follower on the MMR image de54b94f, hazync-proof, 2026-11-20 (v0.27.0 deploy).
+
+WHAT
+  hazync-headers-follow (coordinator/deploy/headers/, WANT_ELF default from #773) on hazync-proof's CPU (16 cores,
+  62 GB RAM; MemoryMax 24G by the box's drop-in). zyncapp and zapp-headers built from v0.27.0 (fbf9454a);
+  zyncapp-headers.bin = the container-built ELF, sha256 0401a2d7bf7eeb1f9c729057bc0725672c7283a91bde036fa82a818d82070cb8
+  (reproduce/LIBZYNC_IDS, image de54b94f). Base: headers_0_tip.rcpt in this directory (genesis..975,278, sha256
+  b44e4a74..., 227,474 bytes), installed with --set-base. Before the switch the follower ran image 2db34e12.
+
+MEASURED (systemd journal of hazync-headers-follow.service, times CET)
+  2026-11-20T09:28:57  proving 1429 headers 975279..976707
+  2026-11-20T09:42:26  proved and verified 975279..976707 in 809 s
+  2026-11-20T09:42:27  published genesis..976707 00000000000000000001edd07eeb2d4b2319da51867db070bdba3e4b6cd1609a
+  2026-11-20T09:42:27  Consumed 3h 6min 40.764s CPU time, 9.1G memory peak
+  The next run that proved (runs.json, 2026-11-20T09:24:19Z): tip 976,715, prove_seconds 811, run receipt
+  run_975279_976715.rcpt 227,218 bytes, sha256 2aed73cac2ae5d2846c4e7329f49afba56bd7d45a5b2d1364c666c202d4e3a32.
+
+CHECKS
+  zapp-headers --expect 976707:<the node's hash> base + run: SWIFTSYNC_VERIFY_OK; the published tip hash equals
+  bitcoin-cli getblockhash 976707 on the same box. Off-production first: test_follow.sh with these binaries, 17/17
+  (HEADERS_FOLLOW_TESTS_OK; with the release's old WANT_ELF default, 11 checks failed, which #773 fixed).
+
+NOT MEASURED HERE
+  Cost: the box is a fixed-price server, so there is no per-run bill.

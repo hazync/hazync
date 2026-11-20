@@ -182,7 +182,7 @@ publish at heights we choose, any H is valid because each file is proved (Q4); R
 cadence, full files or per-epoch deltas, not blocking (Q5); bit 6 is in the images, the coin log is used (Q8, §3);
 mainnet first.
 
-Asked of the maintainers, open: **Q1** the bit order (format 1 follows the BIP's vectors; a change is a new format id)
+To ask the maintainers (not yet asked): **Q1** the bit order (format 1 follows the BIP's vectors; a change is a new format id)
 and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as the input-hash file.
 
 ## 10. Built (2026-11-14)
