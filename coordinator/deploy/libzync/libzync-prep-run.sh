@@ -3,11 +3,13 @@
 # when there is no save point yet, else CONTINUING the same chain from the newest save point (state_<h>.json with its
 # .smt / .coinlog / .trie). Fed by libzync-fetch.service (fetch_block_rpc.py range ... --after-saves).
 #   LZ_ROOT  (default /var/lib/libzync-prep)  blocks/ cl/ trie/ out/ leaves/ bin/
-#   LZ_HI    the last height of this run (a slice, or the tip)
+#   LZ_HI    the last height of this run (a slice), or `follow`: no last height, the run follows the node's tip (the tip
+#            run, docs/libzync/REORG.md §19 D1; its fetcher runs `range 1 follow`)
 #   other HAZYNC_PREP_* settings pass through (SAVE_EVERY, LEAF_AT, MIN_FREE_GB, REPORT_EVERY, CHECK)
 set -euo pipefail
 R="${LZ_ROOT:-/var/lib/libzync-prep}"
 HI="${LZ_HI:?set LZ_HI}"
+case "$HI" in follow) ;; ''|*[!0-9]*) echo "libzync-prep: LZ_HI=$HI: a height or follow" >&2; exit 2;; esac
 mkdir -p "$R/blocks" "$R/cl" "$R/trie" "$R/out" "$R/leaves"
 export HAZYNC_COINLOG_DIR="$R/cl" HAZYNC_TRIE_DIR="$R/trie" HAZYNC_PREP_CONSUME=1 HAZYNC_PREP_LEAF_BUNDLES="$R/leaves"
 # A reorg rewind first (docs/libzync/REORG.md §5-§6, P3): an interrupted one (out/REWIND), or the fetcher's REORG marker
@@ -36,7 +38,7 @@ if [ -z "$last" ]; then
 else
     lo=$((last + 1)); anchor="$R/out/state_$last.json"; export HAZYNC_PREP_CONTINUE=1
 fi
-[ "$lo" -le "$HI" ] || { echo "libzync-prep: already at $last >= LZ_HI=$HI"; exit 0; }
+if [ "$HI" != follow ] && [ "$lo" -gt "$HI" ]; then echo "libzync-prep: already at $last >= LZ_HI=$HI"; exit 0; fi
 echo "libzync-prep: $lo..$HI from ${anchor##*/}"
 # only the two newest BIP30 snapshots are kept (a restart needs the newest; each is the whole tree, tens of MB on mainnet)
 ( while sleep 60; do

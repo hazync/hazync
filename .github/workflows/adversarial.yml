@@ -896,6 +896,22 @@ jobs:
           python3 test_reorg.py --control-m3
           python3 test_reorg.py --control-h1
           python3 test_reorg.py --control-latch
+      # REORG.md §19 (D1): the board follows two prep runs, the board pass below X and the tip run from X (bundles,
+      # states, the verification view, claims across the gap, reorg records and acks per run, the handover check).
+      - name: The coordinator follows the tip run above the handover height (REORG.md §19, D1)
+        run: cd coordinator && python3 test_reorg_tip.py
+      - name: Tip-run POSITIVE CONTROLS (no view; one ack directory; no gap jump; no handover check; a fork below X applied - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_reorg_tip.py --control-view
+          python3 test_reorg_tip.py --control-acks
+          python3 test_reorg_tip.py --control-gap
+          python3 test_reorg_tip.py --control-handover
+          python3 test_reorg_tip.py --control-belowx
+      - name: The leaf pruner frees the tip run's proven bundles (REORG.md §19)
+        run: cd coordinator && python3 test_prune_leaves_tip.py
+      - name: Tip-pruner POSITIVE CONTROL (the pruner before D1 - must FAIL)
+        run: cd coordinator && python3 test_prune_leaves_tip.py --control
       - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
         run: cd coordinator && python3 test_offsite_reorg.py
       - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)

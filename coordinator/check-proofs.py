@@ -22,21 +22,40 @@ host binary). Verified ranges with no file are counted and listed, not failed: p
 check's job, and whether a missing fold file matters is not settled.
 Environment: COORD_DB, COORD_PROOFS, HAZYNC_HOST, CHECK_PROOFS_WORKERS (4), CHECK_PROOFS_MIN_AGE (600 s); on the libzync
 board HAZYNC_LIBZYNC=1 (verify-any is given each range's start height), HAZYNC_BRIDGE_OUT and HAZYNC_LZ_STATE_DIR (where
-the host finds the state before that height once its leaf bundle is pruned).
+the host finds the state before that height once its leaf bundle is pruned). With a tip run (docs/libzync/REORG.md
+§19, D1) also HAZYNC_LZ_TIP_FROM and HAZYNC_LZ_TIP_STATE_DIR, as the coordinator's: each proof is then checked against a
+view of exactly the two states it reads, each from the run that holds its height (the coordinator's _lz_verify_env).
 """
 import argparse
 import concurrent.futures
 import hashlib
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 
 NAME = re.compile(r"^proof_(\d+(?:-\d+)?)\.bin$")
 LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
 FIELDS = ("lo", "hi", "in_tip", "out_tip", "in_bhash", "out_bhash")
+TIP_FROM = int(os.environ.get("HAZYNC_LZ_TIP_FROM", "0") or 0)
+TIP_STATE_DIR = os.environ.get("HAZYNC_LZ_TIP_STATE_DIR", "")
+
+
+def verify_env(lo, hi):
+    """(env, view dir or None): the coordinator's _lz_verify_env. One run: this process's environment. With a tip run:
+    a fresh directory with state_<lo-1>.json (lo > 1) and state_<hi>.json linked from the run that holds each height
+    (the tip run's from TIP_FROM - 1 on), as the verifier's state and bundle directory."""
+    if not (LIBZYNC and TIP_FROM and TIP_STATE_DIR):
+        return None, None
+    view = tempfile.mkdtemp(prefix="check-proofs-view-")
+    for h in ([lo - 1] if lo > 1 else []) + [hi]:
+        d = TIP_STATE_DIR if h >= TIP_FROM - 1 else os.environ.get("HAZYNC_LZ_STATE_DIR", "")
+        os.symlink(os.path.join(d, f"state_{h}.json"), os.path.join(view, f"state_{h}.json"))
+    return dict(os.environ, HAZYNC_LZ_STATE_DIR=view, HAZYNC_BRIDGE_OUT=view), view
 
 
 def range_ok(text):
@@ -64,7 +83,12 @@ def check_one(path, rid, want_sha, record, host):
         # height (as the coordinator does at submit); without it a multi-block range reads as starting at its end
         # and --check-end: the state it ends on must be the board's own (a block that is not Bitcoin's is refused)
         lo = [str(max(int(rid.split("-")[0]), 1)), "--check-end"] if LIBZYNC else []
-        p = subprocess.run([host, "verify-any", path] + lo, capture_output=True, text=True, timeout=300)
+        env, view = verify_env(max(int(rid.split("-")[0]), 1), int(rid.split("-")[-1]))
+        try:
+            p = subprocess.run([host, "verify-any", path] + lo, capture_output=True, text=True, timeout=300, env=env)
+        finally:
+            if view:
+                shutil.rmtree(view, ignore_errors=True)
     except subprocess.TimeoutExpired:
         return rid, problems + ["verify-any did not finish in 300 s"]
     kv = range_ok(p.stdout)

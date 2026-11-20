@@ -14,6 +14,12 @@
 #   MARGIN   blocks below the frontier to keep (default 1000)
 #   KEEP     leaf bundles kept for good, comma-separated heights (default 1: block 1's bundle is what the worker's
 #            `selftest` and the sponsor bot's pod GPU smoke prove, a few KB)
+#   TIP_LEAVES  the tip run's bundle directory (D1, docs/libzync/REORG.md §19; unset: no tip run). Its bundles sit ABOVE
+#            the frontier until the backfill reaches the handover height X (`tip_run.from` in /api/meta), so the rule
+#            above never frees them: a tip bundle goes once its block is PROVEN (the coordinator's /api/blockstatus) and
+#            at least TIP_DEPTH (6) blocks below the node's tip (NODE_TIP_FILE, /var/lib/hazync/node_tip; missing or
+#            stale: none go). Its sample bundles below X stay. A proven block needs its bundle no more: verify-any reads
+#            the run's state files, and a reorg's rewind moves what is there and re-cuts the new branch's.
 #   --apply  delete (without it: report what would go)
 set -uo pipefail
 LEAVES="${LEAVES:-/srv/bulk/libzync-board/leaves}"
@@ -37,3 +43,30 @@ while IFS= read -r f; do
     [ "$APPLY" = 1 ] && rm -f -- "$LEAVES/$f"
 done < <(find "$LEAVES" -maxdepth 1 -type f -name 'leaf_*.bin' -printf '%f\n')
 echo "[prune-leaves] frontier $F, margin $MARGIN: $([ "$APPLY" = 1 ] && echo deleted || echo would delete) $n leaf bundles ($((bytes / 1048576)) MB) at or below $CUT"
+
+# the tip run's bundles (D1)
+[ -n "${TIP_LEAVES:-}" ] || exit 0
+X=$(printf '%s' "$meta" | python3 -c 'import json,sys; t=json.load(sys.stdin).get("tip_run") or {}; f=t.get("from"); print(f if isinstance(f,int) else "")')
+[ -n "$X" ] || { echo "[prune-leaves] TIP_LEAVES is set but the coordinator reports no tip run (tip_run.from): tip bundles left as they are"; exit 0; }
+NT_FILE="${NODE_TIP_FILE:-/var/lib/hazync/node_tip}"
+NT=$(find "$NT_FILE" -mmin -60 -exec cat {} \; 2>/dev/null | tr -dc 0-9)
+[ -n "$NT" ] || { echo "[prune-leaves] no fresh node tip in $NT_FILE: no tip bundle deleted" >&2; exit 2; }
+TCUT=$((NT - ${TIP_DEPTH:-6}))
+status=$(curl -sf --max-time 60 "$COORD/api/blockstatus") || { echo "[prune-leaves] cannot reach $COORD/api/blockstatus" >&2; exit 2; }
+# the proven heights among the tip run's bundles (blockstatus runs: [lo, hi, status], 3 proven / 4 folded / 5 anchored)
+gone=$(printf '%s' "$status" | python3 -c '
+import json, os, sys
+x, cut, d = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
+runs = json.load(sys.stdin)["runs"]
+have = sorted(int(n[5:-4]) for n in os.listdir(d) if n.startswith("leaf_") and n.endswith(".bin") and n[5:-4].isdigit())
+for h in have:
+    if x <= h <= cut and any(lo <= h <= hi and st >= 3 for lo, hi, st in runs):
+        print(h)' "$X" "$TCUT" "$TIP_LEAVES") || { echo "[prune-leaves] could not read the tip bundles or the block status" >&2; exit 2; }
+n=0; bytes=0
+for h in $gone; do
+    f="$TIP_LEAVES/leaf_$h.bin"
+    [ -e "$f" ] || continue
+    n=$((n + 1)); bytes=$((bytes + $(stat -c %s "$f")))
+    [ "$APPLY" = 1 ] && rm -f -- "$f"
+done
+echo "[prune-leaves] tip run from $X, node tip $NT: $([ "$APPLY" = 1 ] && echo deleted || echo would delete) $n proven tip bundles ($((bytes / 1048576)) MB) at or below $TCUT"
