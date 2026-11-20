@@ -2303,7 +2303,9 @@ jobs:
         with: { name: libzync-hosts, path: hosts }
       - name: Bitcoin Core 28.0 (release binary, sha256 pinned) and its source (test_framework, pinned commit)
         run: |
-          curl -fsSLO https://bitcoincore.org/bin/bitcoin-core-28.0/bitcoin-28.0-x86_64-linux-gnu.tar.gz
+          # bitcoincore.org refused connections now and then (curl exit 7), failing the whole job: retry any error,
+          # six times 20 s apart. The sha256 line below still decides what is accepted.
+          curl -fsSLO --retry 6 --retry-delay 20 --retry-all-errors https://bitcoincore.org/bin/bitcoin-core-28.0/bitcoin-28.0-x86_64-linux-gnu.tar.gz
           echo "7fe294b02b25b51acb8e8e0a0eb5af6bbafa7cd0c5b0e5fcbb61263104a82fbc  bitcoin-28.0-x86_64-linux-gnu.tar.gz" | sha256sum -c
           tar xzf bitcoin-28.0-x86_64-linux-gnu.tar.gz
           git clone -q --depth 1 -b v28.0 https://github.com/bitcoin/bitcoin.git core-src

@@ -37,7 +37,7 @@ bootstraps on a fresh board (#752), the per-IP key cap applies (#738), the spons
 (#746). The WASM verifier refuses a frame length that would wrap (#735; wasm `996f1ed6`), built reproducibly in a
 published, digest-pinned image (#751, #755). Notes: [`docs/RELEASE_NOTES_v0.26.1.md`](docs/RELEASE_NOTES_v0.26.1.md).
 
-## v0.26.0 — 2026-11-14 — re-baseline `8888d59c` → `46666b6f` (the board proves again from genesis)
+## v0.26.0 — 2026-11-16 — re-baseline `8888d59c` → `46666b6f` (the board proves again from genesis)
 A new image whose block leaves commit each block's **undo data** (#729): per input of every non-coinbase transaction,
 SHA-256 of the spent coin's (height, coinbase flag, amount, script), and per block SHA-256 of those, in a new `0x05`
 block leaf ([`docs/libzync/UNDO.md`](docs/libzync/UNDO.md)); measured +0.35% to +2.46% of a block's executed cycles on

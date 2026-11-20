@@ -72,6 +72,8 @@ systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 `zyncapp-headers.bin` (sha256 `0401a2d7…`, `reproduce/LIBZYNC_IDS`), and the MMR base `headers_0_tip.rcpt`
 (`experimental/libzync-bench/headers/`, sha256 `b44e4a74…`, genesis..975,278) with
 `--set-base headers_0_tip.rcpt 975278 <hash of 975,278>`. A `2db34e12` base has no MMR peaks, so it is not carried over.
+Done on hazync-proof on 20.11.2026: the first run proved and verified 975,279..976,707 (1,429 headers) in 809 s, with a
+9.1 GB memory peak, and published it.
 
 **risc0 3.1.0 (done 2026-11-12): `4d04d6bf` → `2db34e12`.**
 

@@ -1,0 +1,238 @@
+Cycle profiles of block 962,000, Hazync v1 (CORE guest 37987b85, release v0.22.1) vs v2 (libzync, image 46666b6f,
+release v0.27.0). Execute mode (no proving), laptop (WSL2), 2026-11-20. Release hosts downloaded from GitHub and
+checked against each release's PGP-signed SHA256SUMS.txt (Good signature, key 777FE81F...90F5B928). Commands and
+hashes: README.md. Raw profiles: *.pb here. Decoder: prof_split.py (tables below are its output, verbatim).
+
+Definitions
+  total     every sample in the pprof, paging included (risc0 charges page-in/page-out to [PageIn]/[PageOut]).
+  paging    samples whose LEAF frame is [PageIn] or [PageOut]. Reported separately.
+  excl.     total - paging. Equals the session's cycle count to within 28 cycles in every profile here
+            (v1 3,357,576,310 vs 3,357,576,338 printed by the host; v2 chunk 352,092,922 vs 352,092,950).
+  category  each sample charged to its innermost non-runtime frame (memcpy, malloc, the SHA syscall go to the
+            caller), then classified by that function's demangled name (prof_split.py CATS).
+
+==== SUMMARY ====
+
+Session cycles (the host's own count), block 962,000
+  v1  one chunk (whole block)      3,357,576,338  journal 4fb3e3c5...4656d all_valid=1 binds=8006  (= BUILDS.md oracle)
+  v2  one chunk (whole block)        352,092,950  journal 3750dd44...25404 all_valid=1
+      trie update (mode 17)           47,599,783  (old trie MODELLED, see README)
+      aggregate (mode 5)              66,434,430  journal d2a9ee3d...0cfad (coin log MODELLED, see README)
+      v2 total                       466,127,163  = 7.20x fewer than v1 (6.47x counting paging: 3,677.9 M vs 568.2 M)
+
+Per category, cycles EXCLUDING paging (% of non-paging)        | paging charged to callers (% of total)
+                                  v1                 v2 (chunk+trie+agg)  |  v1        v2
+  signatures              2,777,753,711 82.7%   101,560,294 21.8%         |  79.4%     23.6%
+  hashing                   394,446,651 11.7%   106,509,894 22.8%         |  11.9%     19.7%
+  script interpreter         31,710,530  0.9%    33,521,385  7.2%         |   2.1%      7.2%
+  tx parse/serialise         52,314,773  1.6%    40,987,247  8.8%         |   2.2%      8.2%
+  state (coins/trie/ECMH)     1,177,538  0.0%   109,170,989 23.4%         |   0.1%     22.6%
+  guest main / I/O           86,395,110  2.6%    45,212,868  9.7%         |   3.3%     11.6%
+  other                      13,777,997  0.4%    29,164,402  6.3%         |   1.0%      7.1%
+  -- non-paging total     3,357,576,310         466,127,079
+  paging                    320,338,022  8.7%   102,035,141 18.0%  of total
+  profile total           3,677,914,332         568,162,220
+
+  v2's own chunk alone (the like-for-like with v1's one chunk): signatures 28.8%, hashing 26.5%, tx parse 11.6%,
+  main/I/O 9.8%, interpreter 9.5%, other 8.1%, state 5.6%; paging 17.6% of its total.
+
+==== THE PAPER'S v1 FIGURES ====
+
+"signature verification in libsecp256k1 was 75.4% of the cycles"
+  REPRODUCES to the digit, but only as a MIXED-denominator figure: cycles with a libsecp256k1 frame (secp256k1_*,
+  its field backend hazync_fq_* / hz_*, the lift-x hint) anywhere on the stack, paging samples EXCLUDED
+  (2,772,765,514), divided by the profile total INCLUDING paging (3,677,914,332) = 75.39%.
+  Consistent alternatives from the same profile:
+    82.6%  of non-paging cycles (2,772,765,514 / 3,357,576,310)   <- recommended: matches the host's cycle count
+    79.0%  of total, paging under libsecp counted too (2,907,270,582 / 3,677,914,332)
+    76.8%  CPubKey::Verify cumulative incl. paging (2,824.3 M / 3,677.9 M) = BLOCK_962000.md's row, reproduced exactly
+  The 28.10 cat_prof.py categories (unchanged, run on this profile) give 69.8%: they miss the field backend's
+  hz_add / hz_neg (9.6% of total, filed under 'other').
+
+"Core's script interpreter 0.3%"
+  REPRODUCES only as EvalScript's own SELF (leaf) cycles: 10,090,841 = 0.30% of non-paging (0.27% of total).
+  The interpreter as a whole (EvalScript, GetScriptOp, VerifyScript, VerifyWitnessProgram, ExecuteWitnessScript,
+  CScript methods, encoding checks; memcpy/malloc they call charged to them) is 31,710,530 = 0.9% of non-paging,
+  2.1% of total with paging charged to callers. The 28.10 cat_prof.py categories give 1.9% on this profile: they
+  match MANGLED names, so 'CScript' caught argument types (CheckECDSASignature(..., CScript const&) 0.21% landed in
+  script) and 'Verify' put VerifyScript / VerifyWitnessProgram (0.27%) under signatures. Both errors are small; the
+  0.3% vs 0.9%/2.1% gap is the definition (EvalScript self vs the whole interpreter), not the keywords.
+
+v2 (46666b6f) on the same block, same categories: signature work fell 27.3x (2,777.8 M -> 101.6 M; the libsecp
+part is 30.1 M, the rest the batch ECDSA finish and hint checks in Rust); the interpreter is the same Core code at
+the same cost (31.7 M -> 33.5 M) and so rose from 0.9% to 7.2% of a 7.2x smaller total. Hashing fell 3.7x and is
+now as large as signatures; the trie/coin-log/ECMH state work (none in v1) is 23.4%. Paging doubled as a share
+(8.7% -> 18.0%).
+
+==== FULL DECODER OUTPUT ====
+== v1_block962000_chunk.pb
+   total (profile, incl. paging)   3,677,914,332
+   paging [PageIn]+[PageOut]         320,338,022    8.7% of total
+   excl. paging                    3,357,576,310
+   category                        cycles excl. paging  % excl. |  paging charged to callers      %
+   script interpreter                       31,710,530     0.9% |                 77,048,639   2.1%
+   signatures                            2,777,753,711    82.7% |              2,921,913,717  79.4%
+   hashing                                 394,446,651    11.7% |                436,978,981  11.9%
+   tx parse/serialise                       52,314,773     1.6% |                 81,920,868   2.2%
+   state (coins/trie/ECMH/SMT)               1,177,538     0.0% |                  2,494,905   0.1%
+   guest main / I/O (crate root)            86,395,110     2.6% |                120,219,987   3.3%
+   other                                    13,777,997     0.4% |                 37,337,235   1.0%
+   inclusive: libsecp256k1 and its field backend on the stack (secp256k1_* / hazync_* / field hz_*):
+     excl. paging   2,772,765,514 =  82.6% of non-paging,  75.4% of total;  incl. paging   2,907,270,582 =  79.0% of total
+   inclusive: libsecp or batch ECDSA on the stack, excl. paging   2,772,765,514 =  82.6% of non-paging,  75.4% of total
+   EvalScript SELF (leaf)   10,090,841 =  0.30% of non-paging,  0.27% of total
+   top self (leaf) functions, paging included:
+        890,958,150  24.2%  hazync_fq_mul_limbs
+        591,455,448  16.1%  hazync_fq_sqr_limbs
+        443,681,968  12.1%  secp256k1_ecmult_strauss_wnaf.constprop.0
+        283,516,395   7.7%  [PageIn]
+        197,150,444   5.4%  hz_add
+        188,532,187   5.1%  memcpy
+         89,720,862   2.4%  hz_neg
+         79,407,818   2.2%  secp256k1_ecdsa_sig_verify
+         78,468,280   2.1%  secp256k1_fe_impl_half
+         78,003,328   2.1%  __bswapsi2
+         73,974,926   2.0%  CSHA256::Write
+         60,966,379   1.7%  secp256k1_gej_add_ge_var
+         60,822,762   1.7%  secp256k1_modinv32_update_de_30.constprop.0.isra.0
+         58,579,571   1.6%  secp256k1_fe_impl_mul_int_unchecked
+         45,434,617   1.2%  <mut risc0_zkvm[183a790d201994aa]::serde::serializer::Serializer<mut risc0_zkvm[183a790d201994aa]::guest::env::write::Fd
+
+== v2_block962000_chunk.pb
+   total (profile, incl. paging)     427,433,280
+   paging [PageIn]+[PageOut]          75,340,358   17.6% of total
+   excl. paging                      352,092,922
+   category                        cycles excl. paging  % excl. |  paging charged to callers      %
+   script interpreter                       33,515,309     9.5% |                 41,083,394   9.6%
+   signatures                              101,556,726    28.8% |                134,132,466  31.4%
+   hashing                                  93,196,953    26.5% |                 96,879,582  22.7%
+   tx parse/serialise                       40,921,216    11.6% |                 46,535,949  10.9%
+   state (coins/trie/ECMH/SMT)              19,650,881     5.6% |                 23,379,530   5.5%
+   guest main / I/O (crate root)            34,611,783     9.8% |                 46,240,717  10.8%
+   other                                    28,640,054     8.1% |                 39,181,642   9.2%
+   inclusive: libsecp256k1 and its field backend on the stack (secp256k1_* / hazync_* / field hz_*):
+     excl. paging      30,095,306 =   8.5% of non-paging,   7.0% of total;  incl. paging      37,209,021 =   8.7% of total
+   inclusive: libsecp or batch ECDSA on the stack, excl. paging      96,821,406 =  27.5% of non-paging,  22.7% of total
+   EvalScript SELF (leaf)    8,357,111 =  2.37% of non-paging,  1.96% of total
+   top self (leaf) functions, paging included:
+         57,174,876  13.4%  memcpy
+         57,051,357  13.3%  [PageIn]
+         42,800,421  10.0%  method[cfa5fe3dbfb8f5ed]::batch_ecdsa
+         21,503,683   5.0%  sys_sha_compress
+         18,289,001   4.3%  [PageOut]
+         17,105,798   4.0%  memcmp
+         16,866,336   3.9%  CSHA256::Write
+         15,920,272   3.7%  method[cfa5fe3dbfb8f5ed]
+         12,297,889   2.9%  memset
+         12,227,203   2.9%  sha2[df71162bc497ab6e]::sha256
+         11,808,282   2.8%  method[cfa5fe3dbfb8f5ed]::agg_lite
+         10,790,609   2.5%  <method[cfa5fe3dbfb8f5ed]::batch_ecdsa::Acc>
+          9,841,558   2.3%  hazync_batch_defer
+          7,940,487   1.9%  memmove
+          7,649,811   1.8%  EvalScript
+
+== v2_block962000_trie.pb
+   total (profile, incl. paging)      58,104,374
+   paging [PageIn]+[PageOut]          10,504,619   18.1% of total
+   excl. paging                       47,599,755
+   category                        cycles excl. paging  % excl. |  paging charged to callers      %
+   script interpreter                              915     0.0% |                      1,598   0.0%
+   signatures                                    1,784     0.0% |                      3,950   0.0%
+   hashing                                   1,104,919     2.3% |                  1,446,279   2.5%
+   tx parse/serialise                              318     0.0% |                      1,027   0.0%
+   state (coins/trie/ECMH/SMT)              39,648,650    83.3% |                 44,234,488  76.1%
+   guest main / I/O (crate root)             6,788,090    14.3% |                 12,276,715  21.1%
+   other                                        55,079     0.1% |                    140,317   0.2%
+   inclusive: libsecp256k1 and its field backend on the stack (secp256k1_* / hazync_* / field hz_*):
+     excl. paging           1,668 =   0.0% of non-paging,   0.0% of total;  incl. paging           3,512 =   0.0% of total
+   inclusive: libsecp or batch ECDSA on the stack, excl. paging           1,668 =   0.0% of non-paging,   0.0% of total
+   EvalScript SELF (leaf)            0 =  0.00% of non-paging,  0.00% of total
+   top self (leaf) functions, paging included:
+         36,948,439  63.6%  method[cfa5fe3dbfb8f5ed]::ttree
+          7,896,037  13.6%  [PageIn]
+          6,081,211  10.5%  method[cfa5fe3dbfb8f5ed]
+          2,608,582   4.5%  [PageOut]
+          1,834,869   3.2%  memcpy
+          1,095,440   1.9%  sha2[df71162bc497ab6e]::sha256
+            653,989   1.1%  memset
+            525,517   0.9%  memcmp
+            241,918   0.4%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+            104,290   0.2%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+             30,524   0.1%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+             28,152   0.0%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+             17,039   0.0%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+             14,306   0.0%  <[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::binary_search_by::<<[method[cfa5fe3dbfb8f5ed]::ttree::Up]>::partition_point<met
+              2,640   0.0%  TryParseHex<unsigned char>
+
+== v2_block962000_aggregate.pb
+   total (profile, incl. paging)      82,624,566
+   paging [PageIn]+[PageOut]          16,190,164   19.6% of total
+   excl. paging                       66,434,402
+   category                        cycles excl. paging  % excl. |  paging charged to callers      %
+   script interpreter                            5,161     0.0% |                      9,246   0.0%
+   signatures                                    1,784     0.0% |                      3,950   0.0%
+   hashing                                  12,208,022    18.4% |                 13,448,278  16.3%
+   tx parse/serialise                           65,713     0.1% |                     93,172   0.1%
+   state (coins/trie/ECMH/SMT)              49,871,458    75.1% |                 60,800,509  73.6%
+   guest main / I/O (crate root)             3,812,995     5.7% |                  7,460,712   9.0%
+   other                                       469,269     0.7% |                    808,699   1.0%
+   inclusive: libsecp256k1 and its field backend on the stack (secp256k1_* / hazync_* / field hz_*):
+     excl. paging           1,668 =   0.0% of non-paging,   0.0% of total;  incl. paging           3,512 =   0.0% of total
+   inclusive: libsecp or batch ECDSA on the stack, excl. paging           1,668 =   0.0% of non-paging,   0.0% of total
+   EvalScript SELF (leaf)            0 =  0.00% of non-paging,  0.00% of total
+   top self (leaf) functions, paging included:
+         19,232,244  23.3%  method[cfa5fe3dbfb8f5ed]::agg_lite
+         13,484,249  16.3%  method[cfa5fe3dbfb8f5ed]::coinlog_forest
+         11,728,274  14.2%  [PageIn]
+          8,582,588  10.4%  memcpy
+          5,681,265   6.9%  method[cfa5fe3dbfb8f5ed]::swiftsync
+          5,134,883   6.2%  sha2[df71162bc497ab6e]::sha256
+          4,461,890   5.4%  [PageOut]
+          4,054,765   4.9%  sys_sha_compress
+          2,797,985   3.4%  <risc0_zkp[4d62293d2052335d]::core::hash::sha::guest::Impl as risc0_zkp[4d62293d2052335d]::core::hash::sha::Sha256>
+          1,925,443   2.3%  memcmp
+          1,617,917   2.0%  method[cfa5fe3dbfb8f5ed]::ttree
+            883,148   1.1%  (anonymous namespace)::(anonymous namespace)::hz_d64(unsigned char*, unsigned char const*)
+            714,440   0.9%  core[473092e309c2b07e]::slice::sort::unstable::quicksort::quicksort::<(u64, u32), <(u64, u32) as core[473092e309c2b07e]:
+            658,637   0.8%  memset
+            492,476   0.6%  method[cfa5fe3dbfb8f5ed]::smt_roots
+
+== v2 block 962,000 = v2_block962000_chunk.pb + v2_block962000_trie.pb + v2_block962000_aggregate.pb
+   total (profile, incl. paging)     568,162,220
+   paging [PageIn]+[PageOut]         102,035,141   18.0% of total
+   excl. paging                      466,127,079
+   category                        cycles excl. paging  % excl. |  paging charged to callers      %
+   script interpreter                       33,521,385     7.2% |                 41,094,238   7.2%
+   signatures                              101,560,294    21.8% |                134,140,366  23.6%
+   hashing                                 106,509,894    22.8% |                111,774,139  19.7%
+   tx parse/serialise                       40,987,247     8.8% |                 46,630,148   8.2%
+   state (coins/trie/ECMH/SMT)             109,170,989    23.4% |                128,414,527  22.6%
+   guest main / I/O (crate root)            45,212,868     9.7% |                 65,978,144  11.6%
+   other                                    29,164,402     6.3% |                 40,130,658   7.1%
+   inclusive: libsecp256k1 and its field backend on the stack (secp256k1_* / hazync_* / field hz_*):
+     excl. paging      30,098,642 =   6.5% of non-paging,   5.3% of total;  incl. paging      37,216,045 =   6.6% of total
+   inclusive: libsecp or batch ECDSA on the stack, excl. paging      96,824,742 =  20.8% of non-paging,  17.0% of total
+   EvalScript SELF (leaf)    8,357,111 =  1.79% of non-paging,  1.47% of total
+   top self (leaf) functions, paging included:
+         76,675,668  13.5%  [PageIn]
+         67,592,333  11.9%  memcpy
+         42,800,421   7.5%  method[cfa5fe3dbfb8f5ed]::batch_ecdsa
+         38,566,356   6.8%  method[cfa5fe3dbfb8f5ed]::ttree
+         31,040,526   5.5%  method[cfa5fe3dbfb8f5ed]::agg_lite
+         25,560,374   4.5%  sys_sha_compress
+         25,359,473   4.5%  [PageOut]
+         22,377,236   3.9%  method[cfa5fe3dbfb8f5ed]
+         19,556,758   3.4%  memcmp
+         18,457,526   3.2%  sha2[df71162bc497ab6e]::sha256
+         16,871,940   3.0%  CSHA256::Write
+         13,610,515   2.4%  memset
+         13,484,249   2.4%  method[cfa5fe3dbfb8f5ed]::coinlog_forest
+         10,790,609   1.9%  <method[cfa5fe3dbfb8f5ed]::batch_ecdsa::Acc>
+          9,841,558   1.7%  hazync_batch_defer
+
+==== REPRODUCIBILITY ====
+
+A second, independent `run.sh` (same day, fresh output directory, same verified binaries) printed the same session
+cycles and journal digests for every execution, made a byte-identical hint bundle (sha256 7e84919d...54514), and
+decoded to output identical to the above for all four profiles (`prof_split.py --leaves 60`, line for line). The .pb
+files themselves differ byte-wise between runs (pprof sample/id order), so compare decoded output.

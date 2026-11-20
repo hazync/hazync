@@ -2,8 +2,8 @@
 
 > **The board runs Hazync v2** (the libzync engine, on RISC Zero 3.1.0) since 12 November 2026, and proves the chain
 > again from genesis under image `46666b6f` (release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0),
-> whose block leaves commit each block's undo data, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md); v0.26.1 carries
-> the same image, and the [latest release](https://github.com/hazync/hazync/releases/latest) is the one to take).
+> whose block leaves commit each block's undo data, [`docs/libzync/UNDO.md`](docs/libzync/UNDO.md); v0.26.1 and v0.27.0
+> carry the same image, and the [latest release](https://github.com/hazync/hazync/releases/latest) is the one to take).
 > `8888d59c` (v0.24.0, v0.25.0) ran it before. What it proves and how: [`docs/libzync/LIBZYNC.md`](docs/libzync/LIBZYNC.md).
 > Hazync v1 (the original CORE guest `37987b85`) is no longer proved; its last release is v0.22.1, which still
 > verifies v1 proofs, and its documents are in [`docs/history/`](docs/history/README.md). Release v0.23.0 is
@@ -18,16 +18,28 @@ You prove one block of Bitcoin's history on your own machine, sign it, and submi
 - An NVIDIA GPU and a driver recent enough for it. **No CUDA toolkit or runtime install is needed** on Linux — the prebuilt prover links only `libcuda.so.1`, which ships with the driver, so a stock cloud GPU image works as it comes (CUDA 13 included). No GPU still works (the CPU binary proves the early blocks, just slower).
 - **No build.** Grab the prebuilt binary below.
 
-⚠ **Blackwell workstation and server cards (RTX PRO 6000, sm_120) compile the prover's kernels on their first
-prove**, about 10 minutes on a fresh machine, and use the cached result afterwards. The release CUDA host carries
-native kernels for sm_80/86/89/90/100 only ([`docs/BUILD_AND_RELEASE.md`](docs/BUILD_AND_RELEASE.md)). A first
-prove that sits silent for minutes on such a card is this, not a hang; on the board's first v2 run the start-up GPU
-smoke test (600 s limit, below) timed out once this way and passed when retried
-(`experimental/libzync-bench/RESULT_board_run_2026-11-12.txt`).
+⚠ **Blackwell cards (RTX PRO 6000, RTX 50-series, sm_120).** On **Linux** the release CUDA host carries native kernels
+for sm_80/86/89/90/100/120 since v0.25.0 ([`prover/build-release.sh`](prover/build-release.sh); read from the v0.27.0
+binary with `scripts/gpu_code_archs.py`), so the first prove starts straight away. Before v0.25.0 a fresh RTX PRO 6000
+spent about 10 minutes compiling the kernels on its first prove
+(`experimental/libzync-bench/RESULT_board_run_2026-11-12.txt`). On **Windows** the CUDA host carries native kernels for
+sm_61/70/80 only (sm_120 does not build under MSVC; `.github/workflows/windows-prove.yml`). A build with the same GPU
+code proved blocks 170 and 400,000 on an RTX PRO 6000 under Windows on 2026-11-09, block 170 in 319 s
+(`experimental/libzync-bench/windows/RESULT_xesktop_rtxpro6000.txt`), so expect a long, silent first prove on a
+Blackwell card under Windows, or use the WSL2 route below, which runs the Linux binary.
 
 ### Windows
 
-Two routes, both proving on an NVIDIA card.
+The installer, or two routes by hand that prove on an NVIDIA card.
+
+**Most people: the installer.** Download `hazync-setup-x86_64-windows.exe` from the
+[latest release](https://github.com/hazync/hazync/releases/latest) (its sha256 is in the PGP-signed `SHA256SUMS.txt`)
+and run it: it installs for your user with no admin prompt, and holds the app, the worker, the GPU prover and a CPU
+prover for machines without an NVIDIA card. Windows SmartScreen may warn on first run (More info, then Run anyway).
+Open Hazync and press Start; from v0.27.0 the app offers updates itself, checked against the release's PGP signature.
+Pascal cards (GTX 10-series) prove too, behind an opt-in in the app. With several NVIDIA cards, the app runs one worker per card, each pinned
+to its card (since v0.26.1). The rest of this section is for running the
+pieces by hand.
 
 **Native: the Windows CUDA host.** Every release carries `hazync-host-x86_64-windows-cuda.zip`: `host.exe` and
 `cudart64_12.dll`, zipped so the DLL keeps the name Windows looks for. It proves: mainnet blocks 170 and 400,000 were
@@ -87,7 +99,7 @@ is RAM-tight it will crawl rather than fall back — set `HAZYNC_SEG_PO2=20` (or
 Download the prebuilt prover from the **latest release** — it embeds the published image, so the coordinator accepts your proofs.
 
 ⛔ **Take the latest release, and restart anything started on an older one.** Since v0.26.0 the
-board accepts only proofs by image `46666b6f` (v0.26.0, v0.26.1); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
+board accepts only proofs by image `46666b6f` (v0.26.0, v0.26.1, v0.27.0); before it, only `8888d59c` (v0.24.0, v0.25.0). A v0.23.0 host proves under `863c9ce3`, which RISC Zero 3.1.0 verifiers refuse, and
 a v0.22.x host proves Hazync v1. `run-workers.sh` checks the image id **only when it starts**, so a worker loop
 started on an older release keeps producing proofs the board refuses until you restart it.
 
@@ -151,7 +163,7 @@ check: see [`SECURITY.md`](SECURITY.md#verifying-releases). Take the CLI from th
 URL: it holds your ed25519 signing key and decides what gets submitted under your name.
 
 Stronger still: run `./$HOSTBIN method-id` and confirm it prints
-`46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0, v0.26.1; `8888d59c…` for v0.24.0 and v0.25.0), the id in
+`46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` (v0.26.0 to v0.27.0; `8888d59c…` for v0.24.0 and v0.25.0), the id in
 [`reproduce/METHOD_ID`](reproduce/METHOD_ID) and [`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS).
 
 > **Building from source instead?** You *must* embed the **published image**, or the coordinator rejects every

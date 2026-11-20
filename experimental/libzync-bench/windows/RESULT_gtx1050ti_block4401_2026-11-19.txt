@@ -1,0 +1,20 @@
+A GTX 1050 Ti (Pascal, 4 GB) proves a mainnet block for the public board, 2026-11-19.
+
+WHAT
+  A Windows laptop (MSI, NVIDIA GeForce GTX 1050 Ti, 4 GB) running the Hazync Windows app (v0.26.1 install, with the
+  worker switched by hand to the release's current one), proving for the public board under image 46666b6f.
+  Segment size: HAZYNC_SEG_PO2=18 set by hand; 21 (the host's default, which Automatic used then) ran out of memory
+  twice. v0.27.0's Automatic picks 18 for a 4 GB card from this run (#770; tools/win-gui/supervisor.py,
+  _SEG_PO2_FOR_VRAM).
+
+MEASURED (the board's own record, hazync-proof coordinator /api/block/4401, read 2026-11-20)
+  block 4401, prover handle "MSI", submitted 2026-11-19T07:14:25Z, fold false; status spined, unbroken true
+  (it is inside the genesis-anchored spine).
+  The proof as served (/api/proof/4401): 228,210 bytes,
+  sha256 eeeeb882d9fcd7ffc7f8bcb604c84b0c1d62a1a965a26c45e754597d89c4e573.
+  Verified again with the v0.27.0 release verifier (hazync-verify-x86_64-linux-gnu, signed SHA256SUMS) from the
+  board pass's state_4400.json: SWIFTSYNC_VERIFY_DEMO (the expected verdict for one block below Core's minimum
+  chain work, from a given anchor), image 46666b6f. Without the anchor it fails, as it must.
+
+NOT MEASURED HERE
+  The proving time on the card and its peak GPU memory: the app's log on that machine has them; not copied here.
