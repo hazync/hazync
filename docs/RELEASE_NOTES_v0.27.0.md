@@ -54,7 +54,8 @@ the proof commits to. A lying service can refuse to answer, never make a block o
 
 ## SwiftSync hints zyncAPP (new)
 
-SwiftSync is Ruben Somsen's protocol; the hints file format is Robert Netzke's. This zyncAPP proves that **a hints file
+SwiftSync was originally proposed by Ruben Somsen; its hints-file format is specified in the SwiftSync BIP drafts
+(2140-dev/swiftsync-bips). This zyncAPP proves that **a hints file
 for height H is exactly right**, so a node can check a downloaded file before it spends a sync on it. (A wrong file is
 already safe in SwiftSync; the proof saves the wasted sync.)
 
@@ -62,7 +63,7 @@ already safe in SwiftSync; the proof saves the wasted sync.)
   SHA-256 of every block's undo hash from 1 to H. The guest rebuilds every coin-log leaf and both forests and requires
   them to equal the core proof's.
 - **Formats:** format 1 follows the BIP's test vectors' bit order, format 2 the `hintsfile` crate 0.2.0's. They
-  disagree; we have asked the maintainers which is right.
+  disagree; which is right is an open question for the SwiftSync BIP maintainers.
 - **Cost, measured** (CPU execute, not a proof): 27.4 M cycles at H = 1,999, 135.0 M at 10,000, 2.39 G at 100,000.
   No mainnet-tip figure.
 - **Tests:** 26 of 26 at each of those three heights, including tampering refused by the guest.
