@@ -350,6 +350,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn leaf_bundles_from_the_handover_height() {
+        // REORG.md §19 D1: the tip run cuts a bundle for every block from X on, plus its sample heights; neither list:
+        // every block (the board pass)
+        let at: std::collections::BTreeSet<u32> = [170, 1000].into_iter().collect();
+        assert!(wants_leaf(5, None, None) && wants_leaf(974_937, None, None));
+        assert!(wants_leaf(170, Some(&at), Some(974_937)) && !wants_leaf(171, Some(&at), Some(974_937)));
+        assert!(!wants_leaf(974_936, Some(&at), Some(974_937)) && wants_leaf(974_937, Some(&at), Some(974_937)));
+        assert!(wants_leaf(980_000, None, Some(974_937)) && !wants_leaf(974_936, None, Some(974_937)));
+        assert!(wants_leaf(1000, Some(&at), None) && !wants_leaf(1001, Some(&at), None));
+    }
+
+    #[test]
     fn genesis_block_work_and_ecmh_identity() {
         // block 1's bits: 0x1d00ffff, work 0x100010001
         let w = add_work(&[0; 32], 0x1d00ffff);
@@ -362,6 +374,19 @@ mod tests {
         let mut e2 = Ecmh::from_state(s, &p);
         e2.sub(&l);
         assert_eq!(e2.to_state(), (0, [0; 16]), "add then subtract is the identity");
+    }
+}
+
+/// `hi` of a run that FOLLOWS the chain (`libzync-prep <lo> follow ...`, REORG.md §3 D1, the tip run): no last block.
+pub(crate) const FOLLOW: u32 = u32::MAX;
+
+/// Which blocks get a leaf bundle (with HAZYNC_PREP_LEAF_BUNDLES set): every block when neither list is given; else the
+/// heights in HAZYNC_PREP_LEAF_AT (a sample) and every block from HAZYNC_PREP_LEAF_FROM on (the tip run's bundles above the
+/// D1 handover height X, REORG.md §19: the board pass serves the blocks below X, the tip run every block from X).
+pub(crate) fn wants_leaf(h: u32, leaf_at: Option<&std::collections::BTreeSet<u32>>, leaf_from: Option<u32>) -> bool {
+    match (leaf_at, leaf_from) {
+        (None, None) => true,
+        (at, from) => at.is_some_and(|s| s.contains(&h)) || from.is_some_and(|f| h >= f),
     }
 }
 
@@ -456,6 +481,13 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // one per block for the whole chain would be larger than the chain)
     let leaf_at: Option<std::collections::BTreeSet<u32>> = std::env::var("HAZYNC_PREP_LEAF_AT").ok().map(|v|
         v.split(',').filter(|x| !x.trim().is_empty()).map(|x| x.trim().parse().unwrap_or_else(|_| panic!("HAZYNC_PREP_LEAF_AT: not a height: {x}"))).collect());
+    // HAZYNC_PREP_LEAF_FROM=<h>: also a bundle for every block from h on (the tip run, REORG.md §19 D1)
+    let leaf_from: Option<u32> = std::env::var("HAZYNC_PREP_LEAF_FROM").ok().filter(|v| !v.trim().is_empty())
+        .map(|v| v.trim().parse().unwrap_or_else(|_| panic!("HAZYNC_PREP_LEAF_FROM: not a height: {v}")));
+    // `follow` (hi = FOLLOW): the run has no last block; fed by `fetch_block_rpc.py range <lo> follow`, it waits at the
+    // node's tip for the next block for as long as it takes (a block can take hours), saying so every 10 minutes
+    let follow = hi == FOLLOW;
+    if follow { assert!(consume_env(), "libzync-prep <lo> follow: needs HAZYNC_PREP_CONSUME=1 (block files fed by the fetcher)"); }
     // HAZYNC_PREP_MIN_FREE_GB: stop (exit 3, after a save) when the coin log's filesystem has less free (default 50)
     let min_free_gb: u64 = std::env::var("HAZYNC_PREP_MIN_FREE_GB").ok().and_then(|v| v.parse().ok()).unwrap_or(50);
     // HAZYNC_PREP_REPORT_EVERY: one PREP_PROGRESS line per that many blocks (default 1,000): the rate and every
@@ -486,7 +518,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     crate::reorg::write_tip(out, lo - 1, &prev.tip_hash, undo_keep, tip_from(undo_from, lo - 1), true);
     let mut last_save = lo - 1;
     let t0 = std::time::Instant::now();
-    let consume = std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok("1");
+    let consume = consume_env();
     let mut consumed_from = lo;
     let wait_s: u64 = std::env::var("HAZYNC_PREP_WAIT_S").ok().and_then(|v| v.parse().ok()).unwrap_or(3600);
     for h in lo..=hi {
@@ -495,12 +527,22 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // read, to fetch it again from the node's chain. Static files: read as before (a missing file is an error).
         let f = format!("{dir}/block_{h}.json");
         let t = std::time::Instant::now();
+        let mut next_say = 600u64;
         let mut j = loop {
             // the fetcher stops at a reorg (REORG.md §4): so does prep, at once, rather than at a timeout
             if let Some(m) = crate::reorg::marker(dir) { crate::reorg::stop_or_rewind(dir, &format!("before block {h}: {} is there", m.display())); }
             if !consume { break crate::read_block_json(dir, h); }
             if let Some(v) = std::fs::read_to_string(&f).ok().and_then(|x| serde_json::from_str::<serde_json::Value>(&x).ok()) { break v; }
-            assert!(t.elapsed().as_secs() < wait_s, "{f}: not there (or not readable) after {wait_s} s (HAZYNC_PREP_WAIT_S); is the producer running?");
+            if follow {
+                // at the tip the next block is not mined yet: no timeout (a stalled fetcher shows as PREP_TIP.json
+                // not moving while the node's tip does: hazync-lz-check-reorg, REORG.md §19)
+                if t.elapsed().as_secs() >= next_say {
+                    println!("  prep: following the tip: waited {next_say} s for block {h}");
+                    next_say += 600;
+                }
+            } else {
+                assert!(t.elapsed().as_secs() < wait_s, "{f}: not there (or not readable) after {wait_s} s (HAZYNC_PREP_WAIT_S); is the producer running?");
+            }
             std::thread::sleep(std::time::Duration::from_millis(200));
         };
         phase(4, t);
@@ -531,7 +573,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // the fetcher, comparing only prep's tip, cannot see it (review of P4, HIGH-1). A fork at h-1, handled as any
         // other: the marker, then a stop for the rewind (which moves those files aside and tells the board).
         crate::reorg::stale_state_fork(out, dir, h, &prev.tip_hash, &j, consume);
-        let want_leaf = leaves.is_some() && leaf_at.as_ref().map_or(true, |s| s.contains(&h));
+        let want_leaf = leaves.is_some() && wants_leaf(h, leaf_at.as_ref(), leaf_from);
         let t = std::time::Instant::now();
         let inner0 = { let p = PHASES.lock().unwrap(); p[0] + p[1] + p[2] };
         let (mut st, bundle) = prep_block(&prev, &j, &mut smt, &mut ecmh, want_leaf);
@@ -661,6 +703,8 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     println!("LZ_PREP_DONE {lo}..={hi} in {:.1} s{}", t0.elapsed().as_secs_f64(),
              if check.is_some() { "; every state's journal byte-identical to the proved run" } else { "" });
 }
+
+fn consume_env() -> bool { std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok("1") }
 
 /// A save point at h, after its state_<h>.json is written: the forest and tracked-flags markers, the BIP30 tree's
 /// snapshot, the coin log's and the trie's markers (each store synced), then the journal goes. Shared by prep's loop

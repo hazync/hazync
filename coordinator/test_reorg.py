@@ -36,7 +36,7 @@ PATCHES = {
                   "            _why = None\n"),
     "--control-keep": ('            c.execute("DELETE FROM vranges WHERE hi > ?", (fork,))\n', "            pass\n"),
     # the review of P4's fixes, each taken out (M1, M2, M3, the H1 backstop)
-    "--control-m1": ('            if not _prep_waiting_on(rec["epoch"]):\n', "            if False:\n"),
+    "--control-m1": ('            if not _prep_waiting_on(rec["epoch"], sdir):\n', "            if False:\n"),
     "--control-m2": ("    if head and old <= fork:\n        return old, old\n    keep", "    if old <= fork:\n        return old, old if head else None\n    keep"),
     "--control-m3": ("        for h in below[:-1]:\n", "        for h in below:\n"),
     "--control-h1": ("            if bad and not latched:\n", "            if False:\n"),

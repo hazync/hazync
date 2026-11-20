@@ -122,6 +122,10 @@ def claim(post_fn=None, ident=None, tries=3, sleep=time.sleep):
     nonce, ts = os.urandom(16).hex(), int(time.time())
     body = {"pubkey": pub, "handle": handle, "nonce": nonce, "ts": ts,
             "sig": sk.sign(f"claim:{nonce}:{ts}".encode()).hex()}
+    # HAZYNC_TIP=1, as the CLI's: this rig (rented multi-GPU pods) can prove a mainnet tip block in reasonable time, so a
+    # board with TIP_CLAIM_FIRST (the libzync board, REORG.md §19) offers it tip blocks first
+    if os.environ.get("HAZYNC_TIP") == "1":
+        body["tip"] = True
     res = None
     for k in range(tries):
         try:

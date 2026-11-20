@@ -116,9 +116,11 @@ jobs:
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
       - name: libzync (coin log, counting trie, facts, wire; the hints, liveness and utreexo zyncAPPs' derivations, features hints, liveness, utreexo)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo,reader
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
+      - name: zync-serve tip mode (ZAPP_FOLLOWER Z2-Z4 - facts from a disk trie at pinned heights, the at parameter, 503 when the store moves)
+        run: cargo test --manifest-path swiftsync-verify/Cargo.toml --profile zync-serve --features tip --bin zync-serve
       - name: swiftsync-verify-ffi (its C ABI)
         run: cargo test --manifest-path swiftsync-verify-ffi/Cargo.toml --release
       - name: The WASM build scripts locate their checkout from any cwd (scripts/test-wasm-build-cwd.sh, and its control)
@@ -896,6 +898,50 @@ jobs:
           python3 test_reorg.py --control-m3
           python3 test_reorg.py --control-h1
           python3 test_reorg.py --control-latch
+      # REORG.md §19 (D1): the board follows two prep runs, the board pass below X and the tip run from X (bundles,
+      # states, the verification view, claims across the gap, reorg records and acks per run, the handover check).
+      - name: The coordinator follows the tip run above the handover height (REORG.md §19, D1)
+        run: cd coordinator && python3 test_reorg_tip.py
+      - name: Tip-run POSITIVE CONTROLS (no view; one ack directory; no gap jump; no handover check; a fork below X applied - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_reorg_tip.py --control-view
+          python3 test_reorg_tip.py --control-acks
+          python3 test_reorg_tip.py --control-gap
+          python3 test_reorg_tip.py --control-handover
+          python3 test_reorg_tip.py --control-belowx
+          python3 test_reorg_tip.py --control-fence
+          python3 test_reorg_tip.py --control-torn
+          python3 test_reorg_tip.py --control-handover-clear
+          python3 test_reorg_tip.py --control-spine-view
+          python3 test_reorg_tip.py --control-orphaned
+          python3 test_reorg_tip.py --control-window
+          python3 test_reorg_tip.py --control-capable
+          python3 test_reorg_tip.py --control-fresh
+          python3 test_reorg_tip.py --control-boardfence
+          python3 test_reorg_tip.py --control-unknown
+      - name: The worker retries a 503 retry and takes 409 reorged as nothing to do (REORG.md §19, round 2)
+        run: cd coordinator && python3 test_worker_reorged.py
+      - name: Worker-reorged POSITIVE CONTROLS (no retry; reorged a failure - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_worker_reorged.py --control-retry
+          python3 test_worker_reorged.py --control-reorged
+      - name: The prep runner never clears stores that a save point it cannot see may belong to (REORG.md §19, review HIGH 1)
+        run: cd coordinator && python3 test_prep_runner.py
+      - name: Prep-runner POSITIVE CONTROL (the refusal taken out - must FAIL)
+        run: cd coordinator && python3 test_prep_runner.py --control
+      - name: The leaf pruner frees the tip run's proven bundles (REORG.md §19)
+        run: cd coordinator && python3 test_prune_leaves_tip.py
+      - name: Tip-pruner POSITIVE CONTROLS (the pruner before D1; without its X guard, the samples lost - each must FAIL)
+        run: |
+          cd coordinator
+          python3 test_prune_leaves_tip.py --control
+          python3 test_prune_leaves_tip.py --control-samples
+      - name: The zAPP follower in tip mode (ZAPP_FOLLOWER Z3-Z5 - the source run by height, pins, two heights, the reorg fall-back)
+        run: cd coordinator && python3 test_zapp_follow_tip.py
+      - name: Tip-follower POSITIVE CONTROL (never switches to the tip run - must FAIL)
+        run: cd coordinator && python3 test_zapp_follow_tip.py --control
       - name: The offsite mirror under reorgs (REORG.md §9) - depth delay, markers, r<E>/
         run: cd coordinator && python3 test_offsite_reorg.py
       - name: Offsite-reorg POSITIVE CONTROL (no depth filter — must FAIL)

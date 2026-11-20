@@ -6,7 +6,8 @@
 #   2. prep from the OLDER save point (20, which the script used to take) is refused by the trie BEFORE the coin log
 #      is touched: every coin-log file, the journal included, is byte-identical afterwards;
 #   3. the script restarts from 40 (the trie's height), and 41..60 are byte-identical to an uninterrupted run.
-#   4. stores but no save point (review 11-12, #8): the script clears them and redoes 1..60 from genesis.
+#   4. stores but no save point (review 11-12, #8): the script refuses (exit 3) unless LZ_PREP_CLEAR_STORES=1, then
+#      clears them and redoes 1..60 from genesis.
 #   --control: the script without the trie-height rule must take 20 and fail.
 set -u
 H=${H:-$HOME/dev/hazync-libzync/prover/target/fasthost/host}; B=${J:-$HOME/libzync-gpu/ssweep}; O=${O:-$HOME/libzync-gpu/crash}
@@ -48,12 +49,18 @@ check "$([ $rc = 0 ] && grep -aq "libzync-prep: 41..60 from state_40.json" $O/re
 same=1; for h in 41 50 59 60; do cmp -s $O/ref/out/state_$h.json $R/out/state_$h.json || same=0; done
 check "$same" "3. states 41, 50, 59, 60 byte-identical to the uninterrupted run"
 
-# 4. stores but no save point at all (a genesis run that died before its first save, review 11-12 #8): the script clears
-#    them and runs from genesis, instead of restart-looping on "a coin-log store is already there"
+# 4. stores but no save point (review 11-12 #8). Since the tip-follow review (REORG §19) the script no longer clears
+#    stores by itself once a run has flushed there (the trie's meta has a height): a multi-week run must never be wiped
+#    by an automatic restart. 4a: it refuses (exit 3) and leaves the stores alone; 4b: with the explicit override
+#    LZ_PREP_CLEAR_STORES=1 it clears them and redoes 1..60 from genesis, as it used to.
 rm -f $R/out/state_*; for h in $(seq 1 60); do cp $B/block_$h.json $R/blocks/; done
+before=$(find $R/cl $R/trie -type f -printf '%p %s %T@\n' 2>/dev/null | sort | sha256sum)
 LZ_ROOT=$R LZ_HI=60 bash "$RUN" > $O/nosave.log 2>&1; rc=$?
-check "$([ $rc = 0 ] && grep -aq "stores left by a run that died" $O/nosave.log && cmp -s $O/ref/out/state_60.json $R/out/state_60.json && echo 1)" \
-      "4. no save point: the stores are cleared and 1..60 is redone from genesis (exit $rc)"
+after=$(find $R/cl $R/trie -type f -printf '%p %s %T@\n' 2>/dev/null | sort | sha256sum)
+check "$([ $rc = 3 ] && [ "$before" = "$after" ] && echo 1)" "4a. no save point: the script refuses (exit $rc) and leaves the stores alone"
+LZ_ROOT=$R LZ_HI=60 LZ_PREP_CLEAR_STORES=1 bash "$RUN" > $O/nosave2.log 2>&1; rc=$?
+check "$([ $rc = 0 ] && grep -aq "stores left by a run that died" $O/nosave2.log && cmp -s $O/ref/out/state_60.json $R/out/state_60.json && echo 1)" \
+      "4b. no save point, LZ_PREP_CLEAR_STORES=1: the stores are cleared and 1..60 is redone from genesis (exit $rc)"
 
 if [ $CONTROL = 1 ]; then
     [ $fails -ge 2 ] && { echo "CONTROL OK: $fails checks fail without the rule, as they must"; exit 0; }
