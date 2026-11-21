@@ -200,14 +200,30 @@ fn rd<'a>(b: &'a [u8], o: &mut usize, n: usize) -> Option<&'a [u8]> {
     Some(r)
 }
 
+/// Core's MAX_SIZE (serialize.h): the largest compact size `ReadCompactSize` accepts.
+const MAX_SIZE: u64 = 0x0200_0000;
+
+/// A compact size as Core's `ReadCompactSize` reads it: canonical (the shortest encoding of the value; Core refuses
+/// any other with "non-canonical ReadCompactSize()") and at most MAX_SIZE ("ReadCompactSize(): size too large").
+/// Refusing the other encodings keeps one byte string per transaction: the stripped form re-encodes the input and
+/// output counts, so a non-canonical count would otherwise give the txid of DIFFERENT bytes.
 fn varint(b: &[u8], o: &mut usize) -> Option<u64> {
     let f = rd(b, o, 1)?[0];
-    Some(match f {
-        0xfd => u16::from_le_bytes(rd(b, o, 2)?.try_into().ok()?) as u64,
-        0xfe => u32::from_le_bytes(rd(b, o, 4)?.try_into().ok()?) as u64,
-        0xff => u64::from_le_bytes(rd(b, o, 8)?.try_into().ok()?),
+    let n = match f {
+        0xfd => { let n = u16::from_le_bytes(rd(b, o, 2)?.try_into().ok()?) as u64; if n < 0xfd { return None; } n }
+        0xfe => { let n = u32::from_le_bytes(rd(b, o, 4)?.try_into().ok()?) as u64; if n < 0x1_0000 { return None; } n }
+        0xff => { let n = u64::from_le_bytes(rd(b, o, 8)?.try_into().ok()?); if n < 0x1_0000_0000 { return None; } n }
         x => x as u64,
-    })
+    };
+    (n <= MAX_SIZE).then_some(n)
+}
+
+/// A compact size that counts BYTES still to come (a script or a witness item): a varint that also fits in the bytes
+/// left, as a usize. `as usize` alone truncated it on a 32-bit target (wasm32): 2^32 + 3 read as 3.
+fn len_varint(b: &[u8], o: &mut usize) -> Option<usize> {
+    let n = varint(b, o)?;
+    let left = b.len().checked_sub(*o)?;
+    usize::try_from(n).ok().filter(|n| *n <= left)
 }
 
 fn put_varint(v: &mut alloc::vec::Vec<u8>, n: u64) {
@@ -240,7 +256,7 @@ pub fn parse_tx(b: &[u8], o: &mut usize) -> Option<TxView> {
         let s0 = *o;
         let txid: H = rd(b, o, 32)?.try_into().ok()?;
         let vout = u32::from_le_bytes(rd(b, o, 4)?.try_into().ok()?);
-        let l = varint(b, o)? as usize;
+        let l = len_varint(b, o)?;
         rd(b, o, l)?;
         rd(b, o, 4)?;
         st.extend_from_slice(&b[s0..*o]);
@@ -255,16 +271,17 @@ pub fn parse_tx(b: &[u8], o: &mut usize) -> Option<TxView> {
     for _ in 0..nout {
         let s0 = *o;
         let value = u64::from_le_bytes(rd(b, o, 8)?.try_into().ok()?);
-        let l = varint(b, o)? as usize;
+        let l = len_varint(b, o)?;
         let spk = rd(b, o, l)?.to_vec();
         st.extend_from_slice(&b[s0..*o]);
         outputs.push((value, spk));
     }
     if seg {
         for _ in 0..nin {
-            let k = varint(b, o)?;
+            // a witness stack's item count: each item takes at least one byte (its length)
+            let k = len_varint(b, o)?;
             for _ in 0..k {
-                let l = varint(b, o)? as usize;
+                let l = len_varint(b, o)?;
                 rd(b, o, l)?;
             }
         }
@@ -489,6 +506,63 @@ mod tests {
         assert_eq!(tx_in_block(&header, txs[1], 2, &[ids[0], ids[0], l1], &cbv, &cbb), None);
         // a non-coinbase in the coinbase slot is refused
         assert_eq!(tx_in_block(&header, txs[1], 1, &[ids[0], l1], txs[1], &cbb), None);
+    }
+
+    /// Review (11-15): compact sizes as Core reads them. Canonical only, at most MAX_SIZE, and a length must fit in the
+    /// bytes left (on a 32-bit target `as usize` truncated 2^32 + 3 to 3). Valid transactions parse as before
+    /// (parse_real_txs).
+    #[test]
+    fn compact_sizes_are_strict() {
+        let one = |b: &[u8]| { let mut o = 0; varint(b, &mut o).map(|n| (n, o)) };
+        assert_eq!(one(&[0xfc]), Some((0xfc, 1)));
+        assert_eq!(one(&[0xfd, 0xfd, 0x00]), Some((0xfd, 3)));
+        assert_eq!(one(&[0xfe, 0x00, 0x00, 0x01, 0x00]), Some((0x1_0000, 5)));
+        assert_eq!(one(&[0xfe, 0x00, 0x00, 0x00, 0x02]), Some((MAX_SIZE, 5)));
+        // non-canonical: a value that fits a shorter form
+        assert_eq!(one(&[0xfd, 0x05, 0x00]), None);
+        assert_eq!(one(&[0xfd, 0xfc, 0x00]), None);
+        assert_eq!(one(&[0xfe, 0xff, 0xff, 0x00, 0x00]), None);
+        assert_eq!(one(&[0xff, 1, 0, 0, 0, 0, 0, 0, 0]), None);
+        // too large (above MAX_SIZE), including every 9-byte form
+        assert_eq!(one(&[0xfe, 0x01, 0x00, 0x00, 0x02]), None);
+        assert_eq!(one(&[0xff, 3, 0, 0, 0, 1, 0, 0, 0]), None, "2^32 + 3");
+        assert_eq!(one(&[0xfd, 0x00]), None, "cut short");
+        // a length longer than the bytes left
+        let mut o = 0;
+        assert_eq!(len_varint(&[0x03, 1, 2, 3], &mut o), Some(3));
+        let mut o = 0;
+        assert_eq!(len_varint(&[0x04, 1, 2, 3], &mut o), None);
+
+        // block 170's payment with its first scriptSig length (0x48) re-encoded non-canonically (fd 48 00): Core refuses
+        // it; before, it parsed with the same outputs and a txid of OTHER bytes
+        let hexs = "0100000001c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704000000004847304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff0200ca9a3b00000000434104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac00286bee0000000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000";
+        let raw: alloc::vec::Vec<u8> = (0..hexs.len()).step_by(2).map(|i| u8::from_str_radix(&hexs[i..i + 2], 16).unwrap()).collect();
+        assert!(parse_tx(&raw, &mut 0).is_some());
+        assert_eq!(raw[41], 0x48);
+        let mut nc = raw[..41].to_vec();
+        nc.extend_from_slice(&[0xfd, 0x48, 0x00]);
+        nc.extend_from_slice(&raw[42..]);
+        assert!(parse_tx(&nc, &mut 0).is_none(), "a non-canonical script length");
+        // the input count (0x01 at byte 4) as fd 01 00: the stripped form re-encoded it, so the txid was the canonical
+        // transaction's while the bytes were not
+        let mut nc = raw[..4].to_vec();
+        nc.extend_from_slice(&[0xfd, 0x01, 0x00]);
+        nc.extend_from_slice(&raw[5..]);
+        assert!(parse_tx(&nc, &mut 0).is_none(), "a non-canonical input count");
+        // an output script length far past the end
+        let at = 4 + 1 + 32 + 4 + 1 + 0x48 + 4 + 1 + 8;
+        assert_eq!(raw[at], 0x43);
+        let mut big = raw[..at].to_vec();
+        big.extend_from_slice(&[0xfe, 0x00, 0x00, 0x00, 0x01]);
+        big.extend_from_slice(&raw[at + 1..]);
+        assert!(parse_tx(&big, &mut 0).is_none(), "a length beyond the bytes left");
+        // a witness item longer than what is left
+        let mut w = raw[..4].to_vec();
+        w.extend_from_slice(&[0, 1]);
+        w.extend_from_slice(&raw[4..raw.len() - 4]);
+        w.extend_from_slice(&[0x01, 0x09, 0xaa]);
+        w.extend_from_slice(&raw[raw.len() - 4..]);
+        assert!(parse_tx(&w, &mut 0).is_none(), "a witness item past the end");
     }
 
     #[test]
