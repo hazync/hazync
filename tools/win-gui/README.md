@@ -65,9 +65,11 @@ memory, and proved block 4401 at 18 (19.11.2026).
 | This GUI drives a prove end to end on Windows | ✅ **measured 2026-10-05 with the v1 host: `PROVED in 2220.7s — receipt VERIFIED against METHOD_ID`**; re-run 19.11.2026 with the libzync host through the app on a GTX 1050 Ti (4 GB): mainnet block 4,401 proved at `HAZYNC_SEG_PO2=18` (21 ran out of memory; `supervisor.py`, `_SEG_PO2_FOR_VRAM`) |
 | v1 (CORE) **CUDA** build proves a block on a GTX 1050 Ti | ⛔ never completed: the card is below the prover's floor (below) |
 
-The CUDA host needs a card of **compute capability 7.0 or newer**. Release CUDA hosts carry native code for sm_80
-to sm_100 (`prover/build-release.sh`); a newer card such as the RTX PRO 6000 (sm_120) compiles the kernels from PTX
-on its first prove on a fresh machine (about 10 minutes, then cached), so a long silent first prove is expected.
+The CUDA host needs a card of **compute capability 7.0 or newer**. The Windows CUDA host carries native code for
+sm_61, sm_70 and sm_80 (read from the v0.27.0 binary with `scripts/gpu_code_archs.py`; sm_120 does not build under
+MSVC, `.github/workflows/windows-prove.yml`). A build with the same GPU code proved on an RTX PRO 6000 (sm_120) under
+WDDM on 2026-11-09 (row above, block 170 in 319 s), so a long, silent first prove on a Blackwell card is expected. The
+Linux CUDA host has native sm_120 code since v0.25.0, so on Blackwell the WSL2 route starts faster.
 
 ### v1 history: why CUDA proving failed on a GTX 1050 Ti
 

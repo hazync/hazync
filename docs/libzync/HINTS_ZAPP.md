@@ -3,7 +3,8 @@
 Status: design APPROVED 2026-11-14; built (§10: what exists, measured, tested) on the U0 undo commitment (UNDO.md), and
 released in v0.27.0 (20.11.2026), image `1894f12e`. Real proofs only at H = 2 and 3 so far: treat it as early.
 
-SwiftSync is Ruben Somsen's protocol; the hints file and block-undo formats are Robert Netzke's
+SwiftSync was originally proposed by Ruben Somsen; the hints file and block-undo formats are specified in the SwiftSync
+BIP drafts
 (`2140-dev/swiftsync-bips`: `swiftsync.md`, `hintsfile.md`, `block-undo.md`, `test_vectors/`; the `hintsfile` crate).
 This zyncAPP adds nothing to SwiftSync. It is an additive product on top of a Hazync chain proof: "this hints file for
 height H is exactly right", so a node can check a downloaded file before it spends a sync on it. A wrong file is
@@ -182,7 +183,7 @@ publish at heights we choose, any H is valid because each file is proved (Q4); R
 cadence, full files or per-epoch deltas, not blocking (Q5); bit 6 is in the images, the coin log is used (Q8, §3);
 mainnet first.
 
-Asked of the maintainers, open: **Q1** the bit order (format 1 follows the BIP's vectors; a change is a new format id)
+To ask the maintainers (not yet asked): **Q1** the bit order (format 1 follows the BIP's vectors; a change is a new format id)
 and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as the input-hash file.
 
 ## 10. Built (2026-11-14)

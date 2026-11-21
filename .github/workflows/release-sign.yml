@@ -83,12 +83,22 @@ jobs:
       - name: Build the aarch64 verifier
         # The libzync verifier CLI (`swiftsync-verify`, its own crate; the CORE `verifier/` is in
         # history/ since #676). Only the CLI binary: zync-path and zync-serve are not release assets.
+        #
+        # ⛔ ON THE HOSTS' GLIBC FLOOR. Built with this runner's own toolchain (ubuntu-latest = 24.04) every aarch64
+        # verifier from v0.23.0 to v0.27.0 needed GLIBC_2.39 and did not start on Ubuntu 22.04 / Debian 12 (measured
+        # 20.11.2026). scripts/build-linux-verifier.sh cross-builds it in the hosts' pinned ubuntu:22.04 image and
+        # refuses a result needing more than glibc 2.34. A tag from before that script (a re-sign by dispatch) is
+        # built the old way, as it was released.
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
         run: |
-          cargo build --release --locked --manifest-path swiftsync-verify/Cargo.toml \
-                --target aarch64-unknown-linux-gnu --bin swiftsync-verify
-          cp swiftsync-verify/target/aarch64-unknown-linux-gnu/release/swiftsync-verify hazync-verify-aarch64
+          if [ -x scripts/build-linux-verifier.sh ]; then
+            ./scripts/build-linux-verifier.sh aarch64 hazync-verify-aarch64
+          else
+            cargo build --release --locked --manifest-path swiftsync-verify/Cargo.toml \
+                  --target aarch64-unknown-linux-gnu --bin swiftsync-verify
+            cp swiftsync-verify/target/aarch64-unknown-linux-gnu/release/swiftsync-verify hazync-verify-aarch64
+          fi
       - name: Assert it embeds the CANONICAL guest id
         # The whole reason this job exists. A verifier pinned to the wrong guest rejects every real
         # proof, and nothing downstream would notice — sha256 and PGP both pass over a stale binary.

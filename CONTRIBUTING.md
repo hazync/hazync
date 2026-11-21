@@ -18,12 +18,15 @@ You prove one block of Bitcoin's history on your own machine, sign it, and submi
 - An NVIDIA GPU and a driver recent enough for it. **No CUDA toolkit or runtime install is needed** on Linux — the prebuilt prover links only `libcuda.so.1`, which ships with the driver, so a stock cloud GPU image works as it comes (CUDA 13 included). No GPU still works (the CPU binary proves the early blocks, just slower).
 - **No build.** Grab the prebuilt binary below.
 
-⚠ **Blackwell workstation and server cards (RTX PRO 6000, sm_120) compile the prover's kernels on their first
-prove**, about 10 minutes on a fresh machine, and use the cached result afterwards. The release CUDA host carries
-native kernels for sm_80/86/89/90/100 only ([`docs/BUILD_AND_RELEASE.md`](docs/BUILD_AND_RELEASE.md)). A first
-prove that sits silent for minutes on such a card is this, not a hang; on the board's first v2 run the start-up GPU
-smoke test (600 s limit, below) timed out once this way and passed when retried
-(`experimental/libzync-bench/RESULT_board_run_2026-11-12.txt`).
+⚠ **Blackwell cards (RTX PRO 6000, RTX 50-series, sm_120).** On **Linux** the release CUDA host carries native kernels
+for sm_80/86/89/90/100/120 since v0.25.0 ([`prover/build-release.sh`](prover/build-release.sh); read from the v0.27.0
+binary with `scripts/gpu_code_archs.py`), so the first prove starts straight away. Before v0.25.0 a fresh RTX PRO 6000
+spent about 10 minutes compiling the kernels on its first prove
+(`experimental/libzync-bench/RESULT_board_run_2026-11-12.txt`). On **Windows** the CUDA host carries native kernels for
+sm_61/70/80 only (sm_120 does not build under MSVC; `.github/workflows/windows-prove.yml`). A build with the same GPU
+code proved blocks 170 and 400,000 on an RTX PRO 6000 under Windows on 2026-11-09, block 170 in 319 s
+(`experimental/libzync-bench/windows/RESULT_xesktop_rtxpro6000.txt`), so expect a long, silent first prove on a
+Blackwell card under Windows, or use the WSL2 route below, which runs the Linux binary.
 
 ### Windows
 
@@ -34,7 +37,8 @@ The installer, or two routes by hand that prove on an NVIDIA card.
 and run it: it installs for your user with no admin prompt, and holds the app, the worker, the GPU prover and a CPU
 prover for machines without an NVIDIA card. Windows SmartScreen may warn on first run (More info, then Run anyway).
 Open Hazync and press Start; from v0.27.0 the app offers updates itself, checked against the release's PGP signature.
-Pascal cards (GTX 10-series) prove too, behind an opt-in in the app. The rest of this section is for running the
+Pascal cards (GTX 10-series) prove too, behind an opt-in in the app. With several NVIDIA cards, the app runs one worker per card, each pinned
+to its card (since v0.26.1). The rest of this section is for running the
 pieces by hand.
 
 **Native: the Windows CUDA host.** Every release carries `hazync-host-x86_64-windows-cuda.zip`: `host.exe` and
@@ -394,8 +398,12 @@ are joined into what does, so they are the check by hand.
 
 ## If something breaks
 
-- The verifier prints ``weak version `GLIBC_2.39' not found`` on Ubuntu 22.04 and then runs normally. That line is a
-  warning about an optional symbol, not a failure: the check's own result is the `SWIFTSYNC_VERIFY_*` line.
+- The verifier (`hazync-verify-x86_64-linux-gnu`, and `hazync-verify-aarch64`) of releases up to v0.27.0 needs glibc
+  2.39: on Ubuntu 22.04 the v0.24.0-v0.26.0 one prints ``weak version `GLIBC_2.39' not found`` and then runs normally
+  (the result is the `SWIFTSYNC_VERIFY_*` line), while the v0.26.1 and v0.27.0 one, and every aarch64 one, stops with
+  ``version `GLIBC_2.39' not found``. Run it on Ubuntu 24.04+ or in a container (`docker run --rm -v "$PWD:/w" -w /w
+  ubuntu:24.04 ./hazync-verify-x86_64-linux-gnu …`), or use the host's own `libzync-verify`. Later releases build it
+  for glibc 2.34 like the hosts ([`docs/BUILD_AND_RELEASE.md`](docs/BUILD_AND_RELEASE.md), "The glibc floor").
 - `./host: cannot execute` or a `GLIBC` error — the prebuilt Linux binaries need glibc 2.34+ (Ubuntu 22.04+). On an older distro, run in a container or build from source (see [`prover/README.md`](prover/README.md)).
 - The Linux CUDA prover needs **only the NVIDIA driver** (`libcuda.so.1`), not a CUDA toolkit or runtime:
 

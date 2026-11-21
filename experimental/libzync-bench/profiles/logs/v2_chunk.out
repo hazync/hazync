@@ -1,0 +1,17 @@
+=== CHUNK PROFILE block 962000: 8006 inputs → 1 chunks ===
+predicted EC verifies: 7015 across 8006 inputs (0.88 per input)
+
+--- cost-packed (new): 1 chunks ---
+  libzync: inputs 0..8006: 2170 pubkey hints, 7031 signature hints
+R0VM[280644777] liftx: hits=2188 misses=0
+R0VM[347370789] batch: deferred=7021 (schnorr=191) distinct_keys=2102 fallback=10 window=11 ok=true transcript=1748937 prep=13349656 msm=51622609 finish_cycles=66721285
+        journal sha256 3750dd4454809113f8714da16fae0fb3b19434d79a6058f2d1ae5a4dd3325404  kind=0xc4a10010 all_valid=1 binds=962000
+  chunk   0  inputs  8006  ec  7015  ecdsa  6824  schnorr   191  repeats  4843  bytes  64975651  predicted 3400674261  cycles      352092950
+  straggler (predicted): max 3400674261 vs mean 3400674261 = 1.000x   [spread 1.0x]
+  straggler (MEASURED): max 352092950 vs mean 352092950 = 1.000x   [spread 1.0x]
+  cost-model error: worst chunk is 1.00x its predicted share of the block
+	Command being timed: "env HAZYNC_BLOCK=$REPO/prover/block_962000.json HAZYNC_CHUNKS=1 HAZYNC_PROFILE_LAYOUT=cost HAZYNC_PROFILE_EXEC=1 HAZYNC_LZ_HINTS=$OUT/v2_block962000_c1.lzb RISC0_PPROF_OUT=$OUT/v2_block962000_chunk.pb $OUT/v0.27.0/hazync-host-x86_64-linux-gnu chunk-profile"
+	User time (seconds): 43.67
+	System time (seconds): 0.40
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:38.73
+	Maximum resident set size (kbytes): 548148
