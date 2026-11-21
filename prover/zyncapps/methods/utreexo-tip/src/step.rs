@@ -402,5 +402,9 @@ mod tests {
         assert_eq!(parse_tx(&with(last, &[0xfe, 0x00, 0x00, 0x00, 0x02]), &mut 0).err(), Some(L), "MAX_SIZE, past the end");
         assert_eq!(parse_tx(&with(last, &[0xfe, 0x01, 0x00, 0x00, 0x02]), &mut 0).err(), Some(L), "above MAX_SIZE");
         assert_eq!(parse_tx(&with(last, &[0xff, 0x43, 0, 0, 0, 1, 0, 0, 0]), &mut 0).err(), Some(L), "2^32 + 0x43: as usize on wasm32 read 0x43");
+    // MAX_SIZE itself, on a count (a length past MAX_SIZE is also past the end, so only a count can show it): an input
+    // count of MAX_SIZE + 1 in its shortest form is Core's "size too large", not this parser's own input cap
+    assert_eq!(parse_tx(&with(4, &[0xfe, 0x01, 0x00, 0x00, 0x02]), &mut 0).err(), Some(C), "an input count above MAX_SIZE");
+    assert_eq!(parse_tx(&with(nout, &[0xfe, 0x01, 0x00, 0x00, 0x02]), &mut 0).err(), Some(C), "an output count above MAX_SIZE");
     }
 }

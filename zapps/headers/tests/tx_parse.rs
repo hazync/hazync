@@ -98,6 +98,32 @@ fn compact_sizes_are_cores() {
     assert_eq!(t[spk], 1);
     let e = ok(&with(spk, &[0xfe, 0x01, 0x00, 0x00, 0x00])).unwrap_err();
     assert!(e.contains(C), "a scriptPubKey length in the 5-byte form: {e}");
+    // a witness stack count in a longer form than its value needs (fe 01 00 00 00 for one item of 2 bytes)
+    let mut w = t[..4].to_vec();
+    w.extend([0x00, 0x01]);
+    w.extend(&t[4..t.len() - 4]);
+    w.extend([0xfe, 0x01, 0x00, 0x00, 0x00, 0x02, 0xaa, 0xbb]);
+    w.extend(&t[t.len() - 4..]);
+    let (h, inc) = block_with(&w, dsha(&t));
+    let e = verify_tx_in_header(&h, &inc).unwrap_err();
+    assert!(e.contains(C), "a non-canonical witness count: {e}");
+    // two inputs, the first stack empty and the second not: a witness record exists, so it is accepted
+    let mut two = t[..4].to_vec();
+    two.push(2);
+    two.extend(&t[5..47]); // the first input (prevout, OP_0 scriptSig, sequence)
+    let mut second = t[5..47].to_vec();
+    second[0] ^= 0x55; // another previous txid
+    two.extend(&second);
+    two.extend(&t[47..t.len() - 4]); // the outputs
+    let mut tw = two[..4].to_vec();
+    tw.extend([0x00, 0x01]);
+    tw.extend(&two[4..]);
+    tw.extend([0x00, 0x01, 0x02, 0xaa, 0xbb]); // stack 1 empty, stack 2 one 2-byte item
+    tw.extend(&t[t.len() - 4..]);
+    two.extend(&t[t.len() - 4..]);
+    assert_eq!(two.len(), 104);
+    let (h, inc) = block_with(&tw, dsha(&two));
+    assert!(verify_tx_in_header(&h, &inc).is_ok(), "one empty and one non-empty stack: {:?}", verify_tx_in_header(&h, &inc));
     // a scriptPubKey length past the end (5 bytes are left: the 1-byte script and the lock time; 7 asked)
     let e = ok(&with(spk, &[0x07])).unwrap_err();
     assert!(e.contains("a length past the end of the transaction"), "{e}");
