@@ -337,7 +337,7 @@ comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt 
    mainnet no tracked coinbase can repeat below 1,983,702, so before the join a wrong list changes leaf bytes, never a
    verdict; still, an anchor should not be pinned until the lists are reproduced independently (e.g.
    `assume_inputs.py`'s rule over the blocks by a second party), or until the join. Mainnet has 22 live tracked
-   outputs at 974,111 (ASSUME_ZAPPS.md §3.2); the REPEATABLE count at 935,000 is not known here.
+   outputs at 974,111 (ASSUME_ZAPPS.md §3.2); the REPEATABLE count at 965,000 is not known here.
 3. **The BIP30 tree argument (§3.3)** is reasoning over `bip30.rs`, `tracked.rs` and BIP34, checked on one regtest
    repeat (block 105) only. It needs a review of its own before an anchor below BIP34 is used anywhere, and a rig
    case: an anchored lineage below BIP34 fed a repeat of a fully spent untracked coinbase (Core and the anchored
@@ -359,24 +359,43 @@ comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt 
 
 ## 9. Mainnet: the anchor height and an estimate path
 
-**Anchor height.** Core's newest mainnet `m_assumeutxo_data` found offline: **height 935,000**, block
-`0000000000000000000147034958af1652b2b91bba607beacc5e72a56f0fb5ee`, `hash_serialized_3`
-`e4b90ef9eae834f56c4b64d2d50143cee10ad87994c614d7d04125e2a6025050`, `m_chain_tx_count` 1,305,397,408 (a local
-checkout of Core master at `2586ed68`, 30.03.2026, version 31.99; earlier entries 840,000, 880,000, 910,000). The
-v28.0 tree the guest is built from pins only 840,000. A newer Core release may pin a later height; not checked.
+**Anchor height: H = 965,000** (decided 21.11.2026). Core's mainnet `m_assumeutxo_data` entry for it is on master
+and in v32.0 and later (added in Core commit `fed50258`, 10.09.2026; v32.1 released 28.10.2026): block
+`00000000000000000001595977e6000ce56129f5c9b4073e31ccc30b90b97da9`, `hash_serialized_3`
+`4a8d794337118c0c615b574f817c7306c687584a537184b8d233df42bf477ec2`, `m_chain_tx_count` 1,429,611,231. Earlier entries:
+840,000, 880,000, 910,000 and 935,000 (block `0000000000000000000147034958af1652b2b91bba607beacc5e72a56f0fb5ee`,
+`hash_serialized_3` `e4b90ef9eae834f56c4b64d2d50143cee10ad87994c614d7d04125e2a6025050`, the anchor this document
+used until 21.11.2026; §12.4's header-times measurement and the first §13.4 run are at 935,000). The v28.0 tree the
+guest is built from pins only 840,000. I expect the next entry with Core v33 (about April 2027); that is my inference
+from Core's release cadence, not announced.
+
+**The `--expect` string for 965,000:**
+`965000:00000000000000000001595977e6000ce56129f5c9b4073e31ccc30b90b97da9:4a8d794337118c0c615b574f817c7306c687584a537184b8d233df42bf477ec2`.
+Both hashes go in as Core prints them, with no byte reversal. `ts-anchor build` parses the block with
+`from_display`, and it compares `hash_serialized_3` as a string against `display(SHA-256d)` (`zapp-assume`'s
+`finish`), which is the order `gettxoutsetinfo` prints (`hashSerialized.GetHex()`). The regtest runs pass `--expect`
+the RPC's `hash_serialized_3` and are accepted. Core's chainparams literals, `AssumeutxoHash{uint256{"…"}}` and
+`uint256{"…"}`, are in the same `GetHex` order (the block hashes' leading zeros show it), and Core checks a loaded
+snapshot by comparing that `uint256` with the same `hashSerialized`. So Core's chainparams strings are the `--expect`
+strings as they stand.
+
+**The real snapshot is not taken yet.** It needs `dumptxoutset` at 965,000 from a Core v32+ node. I have not run it,
+and it waits for the user's OK. Until it exists, N (the live coins) and K (the BIP30 entries) at 965,000 are unknown,
+and every mainnet figure below is per 10^8 coins and per 10^5 entries.
 
 **What is ESTIMATED below** chains measured unit costs; nothing here was run at mainnet scale.
 
 | step | unit cost (MEASURED) | mainnet quantity | estimate |
 |---|---|---|---|
-| native anchor build (`ts-anchor`, one thread, in memory) | 96 s and 3.2 GB per 10^6 coins (§6) | N live coins at 935,000: **not known here** (Core's `gettxoutsetinfo` gives it) | ~96 s × N/10^6 one thread before the disk stores; the ECMH part is parallel (ASSUME_ZAPPS.md §5: 1.9 µs/coin on 16 threads) |
-| ingest receipt (**required**: §8.6 as corrected by §11.1; costed at scale in §12.5 and §13.4) | 8.8 k cycles/coin, 1.46 M cycles per BIP30 entry, 4.7 k cycles per header (§6, the one-shot guest) | N coins, K entries, 935,001 headers | 8.8×10^11 cycles per 10^8 coins + 1.46×10^11 per 10^5 entries + 4.4×10^9; at the header-chain zAPP's proven rate (2.35×10^9 user cycles in 59.4 min on one RTX PRO 6000, LIBZYNC.md §4, ≈ 0.66 M user cycles/s) ≈ 370 card-hours per 10^8 coins + 61 per 10^5 entries (user cycles: see §13.4's caveat on the padded ratio) |
-| anchored lineage 935,001 → tip | per block = main's (§5.4); block 962,000 proved in 537 s on one RTX PRO 6000 (LIBZYNC.md §4) | 40,954 blocks to 975,954 (hazync-coord's tip, 15.11.2026) | ≈ 6,100 card-hours, ≈ $15 k at $2.49/hr, from that one block's time; real blocks vary |
+| native anchor build (`ts-anchor`, one thread, in memory) | 96 s and 3.2 GB per 10^6 coins (§6) | N live coins at 965,000: **not known here** (Core's `gettxoutsetinfo` gives it) | ~96 s × N/10^6 one thread before the disk stores; the ECMH part is parallel (ASSUME_ZAPPS.md §5: 1.9 µs/coin on 16 threads) |
+| ingest receipt (**required**: §8.6 as corrected by §11.1; costed at scale in §12.5 and §13.4) | 8.8 k cycles/coin, 1.46 M cycles per BIP30 entry, 4.7 k cycles per header (§6, the one-shot guest) | N coins, K entries, 965,001 headers | 8.8×10^11 cycles per 10^8 coins + 1.46×10^11 per 10^5 entries + 4.5×10^9; at the header-chain zAPP's proven rate (2.35×10^9 user cycles in 59.4 min on one RTX PRO 6000, LIBZYNC.md §4, ≈ 0.66 M user cycles/s) ≈ 370 card-hours per 10^8 coins + 61 per 10^5 entries (user cycles: see §13.4's caveat on the padded ratio) |
+| anchored lineage 965,001 → tip | per block = main's (§5.4); block 962,000 proved in 537 s on one RTX PRO 6000 (LIBZYNC.md §4) | 10,954 blocks to 975,954 (hazync-coord's tip, 15.11.2026; the tip has moved on since, at ~144 blocks a day) | ≈ 1,630 card-hours (10,954 × 537 s), ≈ $4.1 k at $2.49/hr, from that one block's time; real blocks vary (at H = 935,000 it was 40,954 blocks, ≈ 6,100 card-hours) |
 | for scale: the main lineage from genesis | — | 975 k blocks | $278-295 k on PRO 6000 (WHOLE_CHAIN_COST.md, itself ESTIMATED, ±50%) |
 
-So the anchored lineage is roughly 5% of a from-genesis proof's cost (ESTIMATED), paid a second time for the blocks
-above H (§8.4), and it brings balance-type zAPPs to the tip once those ~41 k blocks are proved, under the §4 label,
-until the main lineage reaches 935,000 and the join discharges the label.
+So the anchored lineage is roughly 1.5% of a from-genesis proof's cost (ESTIMATED: $4.1 k against $278-295 k), paid a
+second time for the blocks above H (§8.4), and it brings balance-type zAPPs to the tip once those ~11 k blocks (more by
+the time it runs) are proved, under the §4 label, until the main lineage reaches 965,000 and the join discharges the
+label.
 
 ## 10. Reproduce
 
@@ -594,7 +613,7 @@ is mandatory.** Reasons:
 - It needs **no core image change**: the anchored lineage is the core's own base step (§3.2), the join receipt and the
   ingest receipt are separate small images, and split answers are verifier and zAPP-module work. A replay pass needs a
   new core mode or image (a release window and a review of new state-transition code) and still costs about 54% of
-  re-proving H..T (§11.4); a full re-prove costs 100% (≈ 6,100 card-hours above 935,000, §9, ESTIMATED).
+  re-proving H..T (§11.4); a full re-prove costs 100% (≈ 1,630 card-hours above 965,000 to the 15.11.2026 tip, §9, ESTIMATED).
 - Validity and the live state carry over completely once the anchor is proved (§11.1); every live-state zAPP
   (statement, balances, assumeutxo, liveness and coin facts for coins live at H or created above it) answers from
   anchored@T alone, and the history zAPPs split cleanly with no position matching (§11.2; complete histories measured
@@ -731,7 +750,8 @@ RSS from `/usr/bin/time`, laptop (WSL2, 16 threads, 8.9 GB).
 - The planner (`ts-anchor chunk-plan`, native, 8 threads): 28-31 s and 0.76-1.31 GB per 1 M plan.
 - **Header times at mainnet height**, measured by re-running one 125 k chunk with its times array padded from 111 to
   935,001 entries (the chunk executes the same coins): +20,310,690 cycles (read + SHA-256 + table; 1,276,668,880 vs 1,256,358,190), i.e. about 20 M
-  cycles per chunk at H = 935,000, independent of the chunk's coins.
+  cycles per chunk at H = 935,000, independent of the chunk's coins. At H = 965,000 the same term, scaled linearly in
+  the header count (as `scan-plan`'s `CHUNK_PER_HEADER` does), is ≈ 20.96 M (PROJECTED, not re-measured).
 
 **10 M coins** (no one-shot comparison: a 10 M one-shot guest would need about 10× the 1 M run's 1 GB and its native
 build about 10× its 3.3 GB, beyond this laptop; the combine is checked against the planner's own native journal, which
@@ -759,17 +779,17 @@ witness words in chunk 15). The per-coin total over the whole 10 M build, 10,647
 
 ### 12.5 Mainnet projection (a PROJECTION from §12.1-12.4, not a measurement)
 
-**N, the live coins at 935,000, is not known offline.** Core gives it as `gettxoutsetinfo`'s `txouts` (and
+**N, the live coins at 965,000, is not known offline.** Core gives it as `gettxoutsetinfo`'s `txouts` (and
 `dumptxoutset`'s `coins_written`, and the coin count in the snapshot's own header); chainparams'
 `m_chain_tx_count` is a transaction count, not N. Everything is per 10^8 coins; K, the BIP30 entries (live coinbase
-txids + tracked + REPEATABLE at 935,000), is not known either and is given per 10^5.
+txids + tracked + REPEATABLE at 965,000), is not known either and is given per 10^5.
 
 | part | measured basis | projection |
 |---|---|---|
 | chunks, per coin | snapshot phase 7.2 k (synthetic P2WPKH; early mainnet's uncompressed P2PK coins cost 8.7 k, §6); trie 3.46 k + witness 0.34 k at a 9.7 M trie, ~+215 and ~+60 per doubling | at 10^8 coins the build's mean trie is ~3.5×10^7 (log2 ≈ 25.1): trie ≈ 3.9 k, witness ≈ 0.45 k, so **≈ 11.5 k cycles per coin, ≈ 1.15×10^12 per 10^8 coins** (≈ 1.3×10^12 if every coin cost the P2PK rate) |
-| chunks, fixed | header times at H = 935,000: 20.3 M per chunk (measured by padding, §12.4) | 160 chunks of 625 k per 10^8 coins: ≈ 3.2×10^9 |
+| chunks, fixed | header times: 20.3 M per chunk at H = 935,000 (measured by padding, §12.4), ≈ 20.96 M at 965,000 (scaled) | 160 chunks of 625 k per 10^8 coins: ≈ 3.35×10^9 |
 | chunk size and memory | 625 k coins: 1.16 GB peak RSS at a 10 M trie, input ≤ 126 MB (13.1 M witness words) | the witness grows ~log: ≈ 1.2-1.4 GB per 625 k chunk at 10^8 (projection); 160 chunks per 10^8, all independent |
-| combine, headers + forest | one-shot guest: ~2.2 k (headers) + ~2.5 k (block forest) per header | 935,001 headers ≈ 4.4×10^9 |
+| combine, headers + forest | one-shot guest: ~2.2 k (headers) + ~2.5 k (block forest) per header | 965,001 headers ≈ 4.5×10^9 |
 | combine, BIP30 tree | 129 k (combine) – 218 k (one-shot) per entry | **1.3-2.2×10^10 per 10^5 entries** |
 | combine, per chunk | 6.5 k cycles to check a chunk journal (16 in 104,738) | negligible; resolving each chunk receipt as an assumption (recursion) NOT measured |
 | native planner | 10 M: 42.7 min, 8 threads, disk trie, laptop | ≈ 7 h per 10^8 coins on this laptop if linear (the disk trie may scale worse; NOT measured) |
@@ -909,18 +929,25 @@ guest's identical mode check is driven both ways in `chunk_controls.sh`.
 ### 13.4 Projection at 1.6e8 coins (PROJECTED, not a measurement)
 
 **Input.** No snapshot of that size is on this laptop and I did not run `dumptxoutset`, so I streamed a synthetic one
-through a FIFO into `scan-plan` (nothing written to disk): `ts-anchor synth --coins 160000000 --height 935000 --base
+through a FIFO into `scan-plan` (nothing written to disk): `ts-anchor synth --coins 160000000 --height 965000 --base
 <any> --coinbase-every 100 --stream --out <fifo>` and `ts-anchor scan-plan --snapshot <fifo> --chunk-coins 625000
---height 935000`. Same recipe as the 10 M set: P2WPKH, 2 coins per txid, every 100th group a coinbase, so 80,000,000
-txid groups and **800,000 BIP30 entries**; 7,687,063,513 bytes; header times to H = 935,000. MEASURED for the tools
-only: synth + scan-plan 25.4 s wall, scan-plan peak RSS 3.1 MB, synth 7.4 MB.
+--height 965000` (re-run 21.11.2026 for the new anchor; the first run was at 935,000). Same recipe as the 10 M set:
+P2WPKH, 2 coins per txid, every 100th group a coinbase, so 80,000,000 txid groups and **800,000 BIP30 entries**;
+7,687,107,851 bytes; header times to H = 965,000. MEASURED for the tools only: synth + scan-plan 25.4 s wall,
+scan-plan peak RSS 3.3 MB, synth 7.3 MB.
 
 | part | projected cycles (`scan-plan`) | projected segments | projected memory |
 |---|---|---|---|
-| 256 chunks of 625,000 coins | **1.888e12** (1,887,988,483,881; 11,800 per coin; first chunk 5.96e9, largest 7.644e9) | ≈ 2.14e6 (≈ 8,650 for the largest) | ≈ 1.41 GB peak RSS for the last chunk |
+| 256 chunks of 625,000 coins | **1.888e12** (1,888,155,313,769; 11,800 per coin; first chunk 5.96e9, largest 7.645e9) | ≈ 2.14e6 (≈ 8,660 for the largest) | ≈ 1.41 GB peak RSS for the last chunk |
 | BIP30: 16 pieces of ≤ 50,000 entries, depth 6 | **1.044e11** | ≈ 1.04e5 | not projected (measured 49 MB at ~12.5 k entries) |
-| combine (935,001 headers + forest) | **4.395e9** + resolving 272 receipts (recursion, NOT measured) | ≈ 4.2e3 | not projected (measured 16 MB at 16 + 4 receipts) |
+| combine (965,001 headers + forest) | **4.536e9** + resolving 272 receipts (recursion, NOT measured) | ≈ 4.3e3 | not projected (measured 16 MB at 16 + 4 receipts) |
 | **total** | **1.997e12** | **≈ 2.25e6** | |
+
+**What the move from 935,000 to 965,000 costs** (COMPUTED from the two `scan-plan` runs): only the header terms
+change. The header-times term per chunk grows by 30,000 × 21.72 ≈ 0.65 M (20.31 M → 20.96 M, +3.2%), which is
++1.67e8 over 256 chunks (1,887,988,483,881 → 1,888,155,313,769, +166,829,888). The combine grows by 30,000 × 4,700 =
+1.41e8 (4.395e9 → 4.536e9). Together that is +3.08e8, +0.015% of the total (1.99680e12 → 1.99711e12); the card-hour
+figures below do not move at the precision given.
 
 How the two derived columns were computed:
 
@@ -932,21 +959,21 @@ How the two derived columns were computed:
   fit on the trie witness puts the last chunk's witness at ≈ 24.0 M words (measured 13.1 M at chunk 15 of the 10 M run).
 
 **In proving time** (PROJECTED, at the header-chain zAPP's measured proving rate on one RTX PRO 6000, ≈ 0.66 M cycles/s,
-LIBZYNC.md §4, as §12.5 uses): 1.997e12 cycles ≈ 3.0e6 card-seconds ≈ 840 card-hours, ≈ $2,090 at $2.49/hr, of which
+LIBZYNC.md §4, as §12.5 uses): 1.997e12 user cycles ≈ 3.0e6 card-seconds ≈ 840 card-hours, ≈ $2,090 at $2.49/hr, of which
 the 256 chunks and 16 pieces are independent receipts (the largest chunk ≈ 3.2 h on one card).
 
 **A bias in that rate.** The 0.66 M cycles/s is in USER cycles: 2,350,725,289 user cycles proved in 59.4 min, MEASURED
 (LIBZYNC.md §4). That run's padded cycles were 2,437 segments × 2^20 = 2,555,379,712, a padded/user ratio of **1.087**
 (COMPUTED), so the card proved ≈ 0.717 M padded cycles/s. The prover's work follows padded cycles, and the chunks pad
 more: 1.188 (MEASURED at 10 M, above), the pieces 1.041. At the padded rate, with each part at its own measured ratio
-(combine at 1.0, assumed): 1.888e12 × 1.1882 + 1.044e11 × 1.0412 + 4.395e9 ≈ 2.356e12 padded cycles / 0.717e6 ≈
+(combine at 1.0, assumed): 1.888e12 × 1.1882 + 1.044e11 × 1.0412 + 4.536e9 ≈ 2.357e12 padded cycles / 0.717e6 ≈
 3.29e6 card-seconds ≈ **913 card-hours, ≈ $2,273** at $2.49/hr (PROJECTED; 919 card-hours if every part padded at
 1.188), and the largest chunk ≈ 3.5 h on one card. This assumes proving time is proportional to padded cycles across
 guests, which I have not measured. §12.5's proving-time paragraph has the same bias: its ≈ 500 card-hours per 10^8
 coins becomes ≈ 550 (≈ $1,370) at the chunks' ratio, and its ≈ 3 h per chunk ≈ 3.4 h (PROJECTED).
 
-**What this projection does not know.** Mainnet's N and K (the live coins and the BIP30 entries at 935,000) are not
-known offline (§12.5); 1.6e8 and 800,000 are this synthetic set's, not mainnet's. Mainnet's script mix is not P2WPKH
+**What this projection does not know.** Mainnet's N and K (the live coins and the BIP30 entries at 965,000) are not
+known until the snapshot is taken (§9); 1.6e8 and 800,000 are this synthetic set's, not mainnet's. Mainnet's script mix is not P2WPKH
 only: at the measured per-type rates an all-P2PK65 set would cost 2,060 more per coin than raw-22 in the snapshot phase
 (9,227.6 − 7,167.6, MEASURED rates), so a real snapshot has to go through `scan-plan` itself. The trie term is
 extrapolated 4 doublings beyond the largest measured trie (§13.2's caution). The recursion cost of resolving 272
