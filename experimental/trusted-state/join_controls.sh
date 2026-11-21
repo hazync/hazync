@@ -53,7 +53,7 @@ ctl() {  # ctl <label> <cut> <dir> <ingest> [env...]
 ctl "tip on another anchor (anchor_id != link of the ingested anchor)" $LINK Jtip final.in.split.rcpt
 ctl "main@105 joined with the ingest at 104"                            $((MATCH|LINK)) J105 final.in.split.rcpt
 ctl "main@H not genesis-anchored (dev-mode claim)"                       $GEN Jgen final.in.split.rcpt
-ctl "the verifier pins another chunk image"                              $TAIL J final.in.split.rcpt TS_CHUNK_IMAGE=$(printf '%064d' 7)
+ctl "the verifier pins another chunk image"                              $TAIL J final.in.split.rcpt "TS_CHUNK_IMAGE=$(printf '%064d' 7)"
 ctl "the verifier expects an inline tree, the ingest is split"           $TAIL J final.in.split.rcpt TS_BIP30_IMAGE=0
 ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK)) Jlow final.in.split.rcpt
 # not a cut check: the anchored tip's claim is under another image than the one the guest is told (env::verify)

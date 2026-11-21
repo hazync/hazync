@@ -23,7 +23,7 @@ CC=(A/chunk_0.c.rcpt A/chunk_1.c.rcpt A/chunk_2.c.rcpt)
 "$TS" bip30-plan --final A/final.in --depth 8 --pieces 5 --out S2
 mkdir -p X
 # crafted piece inputs (python): sections [d,lo,hi], e_in, r_in, entries (36 B), REPEATABLE (32 B)
-python3 - <<'P'
+python3 - <<'PYEOF'
 import hashlib, struct
 def rd(p):
     b = open(p, "rb").read(); i = 0; s = []
@@ -53,13 +53,13 @@ b = list(P[1]); b[3] = b"".join(e1[1:]); wr("X/drop_1.in", b)
 # 4. BOUNDS: piece 2 claiming prefixes up to 17 of a depth-4 tree
 c = list(P[2]); c[0] = struct.pack("<III", *struct.unpack("<III", P[2][0])[:2], 17); wr("X/bounds_2.in", c)
 print("crafted: range_0/1 (moved entry), dup_1/2 (REPEATABLE with live coins), drop_1 (an entry omitted), bounds_2 (p_hi 17 at d 4)")
-P
+PYEOF
 bad=0
 piece() {  # piece <host> <cut> <in> <rcpt>: run one piece, 0 if it executed
   TS_CUT=$2 "$1" bip30 "$3" "$4" > "${4%.rcpt}.log" 2>&1
 }
 for s in S1 S2; do for f in $s/piece_*.in; do piece "$IH" 0 "$f" "${f%.in}.rcpt" || { echo "honest piece $f refused"; exit 1; }; grep -h "^BIP30\|TSB" "${f%.in}.log"; done; done
-for f in $(ls S1/piece_*.in); do piece "$IHC" 0 "$f" "${f%.in}.c.rcpt" || { echo "controls-build piece $f refused"; exit 1; }; done
+for f in S1/piece_*.in; do piece "$IHC" 0 "$f" "${f%.in}.c.rcpt" || { echo "controls-build piece $f refused"; exit 1; }; done
 combine() {  # combine <host> <cut> <expected> <args...>: prints ok/refused, and MATCH/MISMATCH when ok
   local h=$1 cut=$2 exp=$3; shift 3
   local o; o=$(TS_CUT=$cut "$h" combine A/final.in "$exp" "$@" 2>&1)
@@ -78,7 +78,7 @@ want "controls build, no cut, split d=4"         "ok MATCH" "$(combine "$IHC" 0 
 # combine-level: honest pieces, wrong sets
 for c in "dropped piece|0 2|$((TILE|ECHAIN|ECOUNT|RCHAIN))" "reordered pieces|1 0 2|$((TILE|ECHAIN|RCHAIN))" "repeated piece|0 1 1 2|$((TILE|ECHAIN|ECOUNT|RCHAIN))"; do
   IFS='|' read -r label idx cut <<< "$c"
-  r=(); rc=(); for i in $idx; do r+=(S1/piece_$i.rcpt); rc+=(S1/piece_$i.c.rcpt); done
+  r=(); rc=(); for i in $idx; do r+=("S1/piece_$i.rcpt"); rc+=("S1/piece_$i.c.rcpt"); done
   want "$label: real images"            "refused" "$(combine "$IH" 0 $E "${C[@]}" --bip30 "${r[@]}")"
   want "$label: controls, no cut"       "refused" "$(combine "$IHC" 0 $E "${CC[@]}" --bip30 "${rc[@]}")"
   want "$label: controls, cut $cut"     "ok MISMATCH" "$(combine "$IHC" "$cut" $E "${CC[@]}" --bip30 "${rc[@]}")"
@@ -92,7 +92,7 @@ pc() {  # pc <label> <cut at the piece> <cut at the combine> <want under the cut
   for kv in "$@"; do real[${kv%%=*}]=${kv#*=}; done
   local rr=() rcc=()
   for i in 0 1 2; do
-    piece "$IH" 0 "${real[$i]}" X/r$i.rcpt || refused=yes; rr+=(X/r$i.rcpt)
+    piece "$IH" 0 "${real[$i]}" "X/r$i.rcpt" || refused=yes; rr+=("X/r$i.rcpt")
   done
   if [ $refused = yes ]; then echo "PASS $label: real images: the piece is refused ($(grep -a -o 'panicked.*' X/r*.log | tail -1 | cut -c1-90))"
   else want "$label: real images" "refused" "$(combine "$IH" 0 $E "${C[@]}" --bip30 "${rr[@]}")"; fi
@@ -100,7 +100,7 @@ pc() {  # pc <label> <cut at the piece> <cut at the combine> <want under the cut
     if ! piece "$IHC" "$pcut" "${real[$i]}" X/c$i.rcpt; then
       want "$label: controls, cut piece $pcut" "$wcut" "piece-refused ($(grep -a -o 'panicked.*' X/c$i.log | tail -1 | cut -c1-90))"; return
     fi
-    rcc+=(X/c$i.rcpt)
+    rcc+=("X/c$i.rcpt")
   done
   want "$label: controls, cut piece $pcut / combine $ccut" "$wcut" "$(combine "$IHC" "$ccut" $E "${CC[@]}" --bip30 "${rcc[@]}")"
 }
