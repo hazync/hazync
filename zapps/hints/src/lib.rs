@@ -16,7 +16,7 @@ use sha2::{Digest as _, Sha256};
 
 /// The hints image id this verifier trusts by default: the `zyncapp-hints` line of reproduce/LIBZYNC_IDS (the
 /// reproducible build; reproduce/pin-libzync-ids.py sets it, and `hints_image_matches_the_published_id` checks it).
-pub const HINTS_IMAGE_ID: &str = "1894f12eaef5ea50e649b56d0e8fe6afd5b59deb99331e2a5ad49f1a52eb0e8a";
+pub const HINTS_IMAGE_ID: &str = "11c72c44dd47a28f26a7d9b284fa10897ac85b08ecf20a34e87f5d120995ecfb";
 
 /// The guest's statement, field for field and in order (risc0 serde).
 #[derive(Serialize, Deserialize, Clone, Debug)]
