@@ -170,6 +170,41 @@ for u in libzync-prep libzync-fetch libzync-board-prep libzync-board-fetch; do
         && ok "$u declares alert.conf" || bad "$u declares no alert.conf"
 done
 
+# 8. ⛔⛔ SEVERAL ASSIGNMENTS ON ONE Environment= LINE ARE SEVERAL KEYS. systemd and the box side's `xargs -n1`
+#    split `Environment=LZ_ROOT=/x LZ_WINDOW=1500 LZ_JOBS=4` into three; the repo side kept it as one line, so
+#    LZ_WINDOW and LZ_JOBS read as "appears NOWHERE in the repo" every night from 19.11.2026 (after #754).
+#    The function is pulled out of the script and run, as in 5 and 7.
+sfn=$(sed -n '/^split_declared_env()/,/^}/p' scripts/check-unit-drift.sh)
+if [ "$CONTROL" = yes ]; then   # the pre-fix behaviour: one line in, one (quote-stripped) line out
+    sfn='split_declared_env() { sed -e "s/^Environment=//" -e "s/^\"\(.*\)\"$/\1/"; }'
+fi
+if ! printf '%s\n' "$sfn" | grep -q 'split_declared_env()'; then
+    bad "could not extract split_declared_env from scripts/check-unit-drift.sh"
+else
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "$sfn")
+    got=$(printf '%s\n' 'Environment=LZ_ROOT=/var/lib/libzync-prep LZ_WINDOW=1500 LZ_JOBS=4' | split_declared_env | paste -sd'|' -)
+    if [ "$got" = 'LZ_ROOT=/var/lib/libzync-prep|LZ_WINDOW=1500|LZ_JOBS=4' ]; then
+        if [ "$CONTROL" = yes ]; then bad "control did NOT reproduce the one-line bug -- it is testing nothing"
+        else ok "three assignments on one Environment= line give three keys"; fi
+    else
+        if [ "$CONTROL" = yes ]; then ok "control reproduces it: one line stays one key ($got)"
+        else bad "multi-assignment line not split: got '$got'"; fi
+    fi
+    if [ "$CONTROL" != yes ]; then
+        got=$(printf '%s\n' 'Environment="HAZYNC_DISK_PATHS=/srv/bulk /"' | split_declared_env)
+        [ "$got" = 'HAZYNC_DISK_PATHS=/srv/bulk /' ] && ok "a quoted value with a space stays ONE key" || bad "quoted value split or kept quoted: '$got'"
+        got=$(printf '%s\n' 'Environment=A=1 "B=two words" C=3' | split_declared_env | paste -sd'|' -)
+        [ "$got" = 'A=1|B=two words|C=3' ] && ok "mixed quoted and unquoted assignments split like xargs" || bad "mixed line: '$got'"
+        got=$(printf '%s\n' 'Environment=MSG=say"hi' | split_declared_env)
+        [ "$got" = 'MSG=say"hi' ] && ok "an unbalanced inner quote falls back to the one-line form" || bad "inner quote: '$got'"
+        # and the real unit that tripped it, read straight from the repo
+        got=$(grep -E '^Environment=' coordinator/deploy/libzync/libzync-fetch.service | split_declared_env)
+        grep -qx 'LZ_WINDOW=1500' <<< "$got" && grep -qx 'LZ_JOBS=4' <<< "$got" \
+            && ok "libzync-fetch.service declares LZ_WINDOW and LZ_JOBS as keys" || bad "libzync-fetch keys: '$got'"
+    fi
+fi
+
 echo
 if [ "$fails" = 0 ]; then echo "PASS ($([ "$CONTROL" = yes ] && echo control || echo real))"; exit 0; fi
 echo "FAIL: $fails assertion(s)"; exit 1

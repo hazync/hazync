@@ -150,6 +150,19 @@ cant() { echo "COULD NOT CHECK $*"; cannot=1; }
 GUARDED="MemoryHigh MemoryMax MemorySwapMax TasksMax LimitNOFILE Restart RestartSec ProtectSystem ProtectHome PrivateTmp NoNewPrivileges"
 export GUARDED
 
+# One `Environment=` line per input -> one KEY=value per output line, split the way the box side's
+# `xargs -n1` splits the effective value (see "ONE Environment= LINE MAY HOLD SEVERAL ASSIGNMENTS" below).
+split_declared_env() {
+    local line split
+    while IFS= read -r line; do
+        if split=$(printf '%s\n' "${line#Environment=}" | xargs -n1 2>/dev/null) && [ -n "$split" ]; then
+            printf '%s\n' "$split"
+        else
+            printf '%s\n' "$line" | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/'
+        fi
+    done
+}
+
 for u in $UNITS; do
     echo
     echo "=== $u on $HOST ==="
@@ -345,10 +358,17 @@ for u in $UNITS; do
     # against a repo that declared exactly that path. HAZYNC_DISK_PATHS had been in
     # unit-drift-allow.txt since 09-20 for the same reason -- an allow-list entry standing in for a
     # parse bug, which quietly exempted a real key from the comparison. It is removed in this commit.
+    # ⛔⛔ ONE Environment= LINE MAY HOLD SEVERAL ASSIGNMENTS, AND THE BOX SIDE SPLITS THEM.
+    # `Environment=LZ_ROOT=/x LZ_WINDOW=1500 LZ_JOBS=4` is three variables to systemd, and the probe's
+    # `xargs -n1` prints them as three ENV lines. Kept as one line here, LZ_WINDOW and LZ_JOBS matched
+    # nothing and were reported "set on the box and appears NOWHERE in the repo" -- measured 19-21.11.2026,
+    # every night after #754 wrote libzync-fetch.service that way, against a repo declaring both.
+    # So each declared line goes through the SAME xargs -n1 as the box side (which also removes a
+    # surrounding quote pair). A line xargs cannot parse (an unbalanced inner quote) keeps the
+    # one-line treatment below, which is what the box side then reports for it as well.
     declared=$( { repo_unit "$u"
                   declared_dropin_bodies "$u"; } \
-                | grep -E '^Environment=' | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/' \
-                | sort -u )
+                | grep -E '^Environment=' | split_declared_env | sort -u )
     while read -r _ kv; do
         [ -n "${kv:-}" ] || continue
         k="${kv%%=*}"
