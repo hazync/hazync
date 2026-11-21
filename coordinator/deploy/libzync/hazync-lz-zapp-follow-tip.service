@@ -1,0 +1,24 @@
+[Unit]
+Description=Hazync libzync board: keep zync-serve's tip mode on the board's spine, from the prep runs' own tries (ZAPP_FOLLOWER Z3-Z5)
+After=network.target hazync-lz-coordinator.service
+# a run that fails (a spine not on the source's chain, a reorg past the window, zync-serve not staying up) pages
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+# root: it writes trie/PIN in the prep runs' trie directories (root's) and restarts hazync-lz-zync-serve-tip; it writes
+# only PIN there, ZAPP_SERVE_DIR and ZAPP_WORK. No stores of its own: nothing is prepped.
+Environment=ZAPP_SERVE_DIR=/var/lib/hazync-lz/zapp-tip
+Environment=ZAPP_WORK=/srv/bulk/libzync-zapp-tip
+Environment=COORD_SPINE=/var/lib/hazync-lz/spine
+Environment=ZAPP_HOST=/opt/hazync-lz/bin/host
+Environment=BOARD_OUT=/var/lib/libzync-board/out
+Environment=BOARD_TRIE=/var/lib/libzync-board/trie
+# D1 (REORG.md §19): the same X as the coordinator's tip-run.conf; the tip run is the paper prep
+Environment=TIP_FROM=974937
+Environment=TIP_OUT=/var/lib/libzync-fast/out
+Environment=TIP_TRIE=/srv/bulk/libzync-prep/trie
+Environment=ZAPP_PIN_W=288
+ExecStart=/usr/local/sbin/hazync-lz-zapp-follow-tip
+TimeoutStartSec=10min
+Nice=10

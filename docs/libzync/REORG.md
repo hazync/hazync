@@ -2,7 +2,8 @@
 
 > **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15), P3 too (§16), P4 and P6 on
 > 18.11.2026 (§17), P5 (followers) the same day (§18). All six are released in v0.27.0 (20.11.2026), with automatic
-> rewinds off (`HAZYNC_REORG_AUTO` unset; §17 says what turning them on requires). I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
+> rewinds off (`HAZYNC_REORG_AUTO` unset; §17 says what turning them on requires). **D1, the tip run, on 20.11.2026
+> (§19).** I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
 > **MEASURED** numbers come from that survey or the files named next to them. **ESTIMATE** numbers are labelled. The
 > user's decisions on the open questions are in §14; what building P1 and P2 corrected in this page is in §15.
 
@@ -17,7 +18,7 @@ own within a window, and what happens past that window.
 | automatic window **W** | **288 blocks** (Core's `MIN_BLOCKS_TO_KEEP`; the v1 bridge used the same, `bridge.rs` `HAZYNC_BRIDGE_UNDO_KEEP`) |
 | undo journal kept **J** | **2,016 blocks** (2 weeks). It costs about 1 MB per block (ESTIMATE, §6), so keeping more than W is cheap. A fork deeper than W but within J **stops and alerts**, and a person then recovers with **one command**, without restarting prep from genesis |
 | beyond J | stop and alert; the only sound recovery is prep from genesis (§11). **Decided:** no cold copies of the stores |
-| the tip run | **decided:** the paper prep (`libzync-prep`, `LZ_ROOT=/srv/bulk/libzync-prep`) follows the tip (§3) |
+| the tip run | **decided:** the paper prep (`libzync-prep`, `LZ_ROOT=/srv/bulk/libzync-prep`) follows the tip (§3); **built** (§19): the board serves blocks from X = 974,937 from it |
 | source of truth | the **board's prep run**: its `state_<h>.json` files say which chain the board proves. The **block fetcher** is the only stage with RPC, so it **detects** the reorg; **prep** carries it out; the **coordinator** follows prep's reorg records |
 | prep rewind | **per-block undo records** for the coin log, the trie and the BIP30 tree (§6, option B). Every piece already exists in the code, except the trie's undo across sessions |
 | coordinator | orphaned rows and files are **moved aside as records, not deleted**; the spine falls back to a kept head; a hash check when a submission commits closes the in-flight race |
@@ -92,7 +93,8 @@ A run with a static `LZ_HI` at least J below the tip needs no rewind. It still g
 turns a reorg deeper than its distance from the tip into a stop, never a silent wrong chain. **What I need decided:**
 does tip proving read bundles and states from the paper run (the coordinator then needs a second bridge and state
 directory above some height), or does the board pass switch to `follow` once it catches up? This page assumes "the
-tip run" is whichever one it is. **Decided (16.11.2026): the paper prep is the tip run** (§14).
+tip run" is whichever one it is. **Decided (16.11.2026): the paper prep is the tip run** (§14). **Built (20.11.2026,
+§19):** the handover height X = 974,937 (the board pass's `LZ_HI` + 1).
 
 ## 4. Detection
 
@@ -617,10 +619,8 @@ recorded; once the new branch serves that height, the same receipt gets 409 `reo
   ack, which is what §5's order protects.
 - **Ack timeout** exits 4 instead of "alerts and keeps waiting" (above).
 - **The ack directory** is configurable on both sides (prep's `out/` is root's).
-- **The tip run.** The coordinator follows ONE prep run, through `HAZYNC_LZ_STATE_DIR`: today the board pass. §14 D1
-  (the paper prep follows the tip; a second bridge and state directory above some height) is not built.
-  `libzync-prep.service` (the paper prep) is unchanged: with no coordinator following it, a rewind there needs
-  `HAZYNC_REORG_ACK=0` (the default, waiting, fails closed with exit 4 after 10 min).
+- **The tip run.** The coordinator followed ONE prep run, through `HAZYNC_LZ_STATE_DIR`: the board pass. §14 D1 (the
+  paper prep follows the tip; a second bridge and state directory above some height) was built on 20.11.2026: §19.
 
 **Review of 18.11.2026 (Fable, `552b443`), fixed.** (H1) Prep's epoch was the highest `out/orphaned/<E>` + 1, and an
 existing `records/<E>.json` was kept unchecked: with `out/orphaned/` cleared by hand, the next rewind reused epoch 1,
@@ -788,3 +788,177 @@ compared (`meta.reorg_backstop_note`), so the check no longer says "on prep's ch
 installs the check timer only after the new coordinator runs. Tests: `rewind_test.sh` case M (an empty state replayed
 over, a non-empty unreadable one stopped), `test_reorg.py` (the quiet note, the empty state, the commit still refusing,
 `--reorg-ack` with a stray `COORD_DB`).
+
+## 19. Built: D1, the tip run (20.11.2026)
+
+Branch `feat/tip-follow` (on `main` at `cac5a2e`, v0.27.0). Host only on the prep side (`prep.rs`, `main.rs`): no guest
+input changed (`scripts/check-guest-inputs.sh`; built embedding the published guest `f7b87bf1`, `host method-id` =
+`46666b6f…`, §19 results). ZAPP_FOLLOWER.md §14 has the zAPP side (Z2-Z5), built on the same branch.
+
+**The two runs.** The board pass (`libzync-board-prep`, `LZ_HI=974936`, paced by proving) serves blocks 1..X-1; the
+tip run (the paper prep, `libzync-prep`) serves every block from **X = 974,937** and the state X-1 its bundles are cut
+against. X is the board pass's `LZ_HI` + 1, so the board pass's units do not change. The same X is written in four
+places: the coordinator's `tip-run.conf` (`HAZYNC_LZ_TIP_FROM`), the paper prep's `run.conf`
+(`HAZYNC_PREP_LEAF_FROM`), `hazync-lz-check-proofs.service` and `hazync-lz-zapp-follow-tip.service` (`TIP_FROM`).
+
+| piece | built |
+|---|---|
+| prep, `libzync-prep <lo> follow` | no last block: at the node's tip it waits for the next block file as long as it takes (it says so every 10 min), where a static run times out after `HAZYNC_PREP_WAIT_S`; a block that does not extend the state still times out (the fetcher's verdict, §4). Needs `HAZYNC_PREP_CONSUME=1` (the runner sets it). The runner takes `LZ_HI=follow`; the fetcher's `range 1 follow` existed (P2) |
+| prep, `HAZYNC_PREP_LEAF_FROM=<h>` | a leaf bundle for every block from h, beside the `HAZYNC_PREP_LEAF_AT` samples (`prep::wants_leaf`) |
+| coordinator: bundles | block b's bundle from the tip run if b ≥ X, else the board pass's (`_bridge_dir_for`); the tip run's sample bundles below X are never served |
+| coordinator: states | `state_<h>.json` from the tip run if h ≥ X-1, else the board pass's (`_state_dir_for`, so `lz_state_tip`, the commit check §4 and the backstop read the run that holds h) |
+| coordinator: verification | `verify-any` reads one state directory, so each range is verified against a fresh **view**: a directory with `state_<lo-1>.json` and `state_<hi>.json` linked from the run `_state_dir_for` names, as both its state and bundle directory (`_lz_verify_env`). The commit check reads the same files, so the two cannot disagree on which run a height belongs to; a fold across X reads one state from each run. A spine (its height unknown before verification) is verified against the tip run (it holds every state from genesis), then against the board pass if the tip run has no state at its end. `check-proofs.py` builds the same view. **The coordinator's host is unchanged** (`lz_coord.rs`): no host release for the coordinator |
+| coordinator: claims | `pick` and `claim` jump the gap no run serves (the board pass's highest bundle .. X): a scan from 1 would otherwise test ~960,000 heights for a file under the claim lock. `TIP_CLAIM_FIRST=1` hands out the tip run's blocks before the backfill's (**off**: a deployment decision, below) |
+| coordinator: reorgs | each run's records (`<its out>/reorg/records`) acked in its own directory (`HAZYNC_LZ_TIP_REORG_ACK_DIR`; prep's `HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks-tip`), applied as `src` `prep-tip`, its intent (`out/REWIND`) and its moved states looked up in its own directory. The two runs number their epochs independently: one ack directory for both is refused at start-up (exit 3), as are a missing directory and one run's directory given for the other |
+| coordinator: a fork below X - 1 | a tip-run record whose fork is below X - 1 while the board pass holds the block above it is **refused, not acked** (loud): the board pass's states and bundles above the fork would still serve and re-verify the orphaned blocks. Practically impossible (the board pass reaches X - 1 months after it is deep), handled by a person (stop both, rewind the board pass with §11 step 3 under its own `LZ_ROOT`, then the tip run) |
+| coordinator: the handover check | the backstop (every minute) compares the two runs' `state_<h>.json` at the board pass's newest height ≤ X - 1 (its `PREP_TIP.json`); a difference latches `reorg_alert` ("disagree on state_<h>.json"), which `hazync-lz-check-reorg` pages on. Both runs prep the same chain from genesis with the same host, so their states are byte-identical where both exist (MEASURED on hazync-proof 20.11.2026 at 1, 5,000, 8,000 and 8,700) — the joins across X depend on it (`link_digest`) |
+| `/api/meta.tip_run` | `{from, servable_high, board_servable_high, prep_tip: {height, age_s}, claim_first}`; null with one run |
+| the stall check | `hazync-lz-check-reorg` with `CHECK_TIP_RUN_PREP_TIP`: the tip run's `PREP_TIP.json` unchanged for an hour (`CHECK_TIP_RUN_STALE_S`) while the node's tip is above it pages (prep in `follow` has no timeout of its own) |
+| leaf pruner | the tip run's bundles sit above the frontier until the backfill reaches X, so the frontier rule never frees them: `TIP_LEAVES` deletes a tip bundle once its block is proven (`/api/blockstatus`) and at least `TIP_DEPTH` (6) below the node's tip (`/var/lib/hazync/node_tip`, fresh within an hour, else nothing goes and the unit fails) |
+| units | `libzync-prep.service`: `HAZYNC_REORG_ACK=0` removed, `HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks-tip`; `libzync-prep` and `libzync-fetch` `run.conf`: `LZ_HI=follow`, `HAZYNC_PREP_LEAF_FROM=974937`; the coordinator's `tip-run.conf` drop-in (new); `hazync-lz-check-proofs` and `hazync-lz-prune-leaves` get the tip run's variables |
+
+**Decisions taken here, for review.**
+
+1. **X = 974,937**, the board pass's static `LZ_HI` + 1, so the board pass needs no change and no reorg can reach it
+   (it gets there months from now, ~1,800 blocks below today's tip already). The paper prep must write bundles from X
+   on, so `HAZYNC_PREP_LEAF_FROM` must be set before it passes X (it is at ~446,000).
+2. **The coordinator's host is not changed.** Two state directories could be taught to `verify-any` (a host change and a
+   release for the coordinator); the per-call view gives the same result from the coordinator side alone.
+3. **`TIP_CLAIM_FIRST` is ON in the shipped `tip-run.conf`** (the author's decision, 20.11.2026; the code's default
+   stays off). Tip blocks go first only to a worker able to prove one: it says so (`HAZYNC_TIP=1`, the claim's `"tip":
+   true`), or has earned it (one of its single tip blocks verified within `TIP_CLAIM_EARNED_S`, 1 h, of its claim). The
+   board knows nothing else about a card (the claim carries no card, VRAM or timing; the board's own record is when a
+   block was claimed and verified), and a mainnet tip block is far heavier than the backfill's (~200 s on 4 RTX PRO
+   6000s, MEASURED in Phase 5; a 4 GB card that proved block 4,401 at `HAZYNC_SEG_PO2=18` would hold one for hours).
+   Everyone else gets the backfill first, and tip blocks only when nothing below X is open.
+4. **A tip-run fork below X - 1 is refused**, not handled (above).
+5. **No leaf window on the tip run.** Pacing the tip run by proving (the board pass's 5,000) would also hold back its
+   states, which the coordinator verifies against; at the tip it would stop following. Its bundles are bounded by
+   proving at 144 a day and the pruner above; the disk floor (`HAZYNC_PREP_MIN_FREE_GB=200`) stops it with exit 3.
+
+**Automatic rewinds stay OFF** (`HAZYNC_REORG_AUTO` unset in every unit). At the tip a reorg stops the paper prep and its
+fetcher with exit 4 (they fail and alert); the recovery is §11 step 3 under the paper prep's root, and the coordinator
+acks it (it follows the tip run's records):
+
+```bash
+systemctl stop libzync-fetch libzync-prep
+cd /srv/bulk/libzync-prep && HAZYNC_COINLOG_DIR=$PWD/cl HAZYNC_TRIE_DIR=$PWD/trie HAZYNC_PREP_LEAF_BUNDLES=$PWD/leaves \
+  HAZYNC_PREP_UNDO_KEEP=2016 HAZYNC_REORG_ACK_DIR=/var/lib/hazync-lz/reorg-acks-tip \
+  bin/host_lz libzync-prep-rewind $PWD/out $PWD/blocks          # --allow-deep for a `manual` marker (deeper than W)
+systemctl start libzync-prep libzync-fetch
+```
+
+Turning automatic rewinds on is a deployment decision after the reviews (§17): `HAZYNC_REORG_AUTO=1` on
+`libzync-prep` and `libzync-fetch` (the paper prep, now the tip run), not the board pass.
+
+**The paper prep's one restart.** It runs the v0.26.1 host (MEASURED 20.11.2026: `host_lz libzync-prep 1 974936 …
+genesis`, started 16.11, ~446,000 at ~0.32 blocks/s, 41-43 GB RSS); v0.27.0's `host_lz` is installed in its `bin/` but
+it was never restarted, so it writes no undo records, no `PREP_TIP.json` and no Z1 roots. Following the tip needs a host
+from this branch (`follow`, `LEAF_FROM`) and the new `run.conf`, so it restarts ONCE, from its newest save point
+(`HAZYNC_PREP_CONTINUE=1`, the runner does it). Cost (ESTIMATE from the measured rate): the blocks since its last save
+point replayed, at most 250 (`HAZYNC_PREP_SAVE_EVERY`), so up to ~13 min at 0.32 blocks/s, plus the start (the BIP30
+tree from the `.smt`, the 12 GiB trie record cache cold: the first thousands of blocks run slower until it refills; the
+v0.26 reset measured the same pattern). Undo records then fill J = 2,016 blocks in ~1.75 h at that rate (W = 288 in
+~15 min), long before the run nears the tip (~20 days). From the restart on it also logs Z1 roots (`trie/roots.log`,
+`GEN`) and `PREP_TIP.json`. Its stores are on `/srv/bulk` (vdb: `cl` 21 GB, `trie` 94 GB at 448,000, MEASURED), not on
+vda as §2 and ZAPP_FOLLOWER §8 assumed; only `out/` is on vda (`/var/lib/libzync-fast/out`). The pre-v0.26 run's stores
+on vda (`/var/lib/libzync-fast/{cl,trie}`, 54 GB + 279 GB, reached by the `*.pre-v026` symlinks) are not the paper
+prep's current stores.
+
+**Tests.**
+
+- `coordinator/test_reorg_tip.py` (CI, seconds): configuration refused at a real start-up (exit 3); bundles and the gap;
+  claims jump the gap (no height in it tested), `TIP_CLAIM_FIRST`; leaves of 25 and of X (start state X-1 the tip
+  run's), a fold across X (one state from each run), spines; `check-proofs.py` with and without the tip run's
+  variables; the handover check latching; a tip-run record acked in its own directory and the board pass's record of the
+  same number in its own; a fork below X - 1 refused; `/api/meta.tip_run`. Five controls, each failing:
+  `--control-view` (4 checks), `--control-acks` (4), `--control-gap` (1), `--control-handover` (1), `--control-belowx`
+  (1).
+- `coordinator/test_prune_leaves_tip.py` (+ `--control`, the pruner without its tip section: 2 fail).
+- `prover/host` `prep::tests::leaf_bundles_from_the_handover_height`.
+- `experimental/libzync-bench/prep/reorg_e2e_tip.py` (P6 for the tip run). **Results, 20.11.2026** (hazync-coord, a
+  fasthost build of this branch embedding the published guest, `host method-id` `46666b6f…`; zync-serve built with
+  `--features tip --profile zync-serve`): **PASS, 29 checks** (A-E: the board pass stops at 149, the tip run follows with
+  no restart, the frontier crosses X, zync-serve serves the tip run's trie at the spine, a depth-2 and a depth-12 reorg
+  of the tip run rewound with no person and acked in `acks-tip/` only, the follower repinning to the kept head and
+  serving two heights after it). `--control` (the coordinator without the tip run's variables): 3 checks fail (the
+  frontier stops at 149), as they must. The first run found the follower handing its lock to the zync-serve it
+  started (fixed, review table below).
+- Unchanged and passing: `test_reorg.py` (+ its seven controls), `test_reorg_units.py`, `test_libzync_coord_files.py`,
+  `test_check_end.py`, `test_spine_seed.py`, `test_claim_sybil.py`, `test_zync_relay.py`.
+
+**Risks.**
+
+- The four copies of X must agree. A coordinator X above the paper prep's `LEAF_FROM` leaves blocks below it unserved
+  (the board pass stops at 974,936); below it, the coordinator looks for tip-run bundles that were never cut.
+- `LZ_HI=follow` with an OLD runner script reads as "already at the end" (`[ 1 -le follow ]` is an error, its `||`
+  branch exits 0): the unit stops quietly. Install the runner and the host BEFORE the `run.conf`; an old host refuses
+  `follow` with a panic (exit 101), which systemd restarts every 30 s for ever (no alert). The procedure orders it.
+- At the tip, prep in `follow` never exits for a stalled fetcher: a hung fetcher shows only as the tip run's
+  `PREP_TIP.json` not moving. `hazync-lz-check-reorg` (`CHECK_TIP_RUN_PREP_TIP`) pages when the node has been ahead of
+  it at the same height for an hour (tested in `test_reorg_tip.py`); `/api/meta.tip_run.prep_tip.age_s` shows it.
+- `verify-any`'s view adds a directory and two symlinks per verification (under `COORD_STATE`), removed after it; a crash
+  in between leaves `*.view` directories there, swept at the next start.
+- A spine is verified twice with a tip run (its height, then its end against the one state the view holds).
+
+**Review of 20.11.2026 (independent, `feat/tip-follow` at `56cee3b`), fixed.** No soundness break was found.
+
+| # | finding | assessed | fixed |
+|---|---|---|---|
+| 1 HIGH | the runner clears `cl/` and `trie/` and starts from genesis when it finds no complete save point; the paper prep's first start under it would do that to weeks of prep if it could not see its save points | agreed | the runner refuses (exit 3: the unit fails and alerts) to clear stores when `out/` holds any state file or the run is `follow`, unless `LZ_PREP_CLEAR_STORES=1`; `LZ_RUN_DRYRUN=1` prints the save point a start would take and changes nothing; the RUNBOOK runs it before the restart. MEASURED read-only on hazync-proof (the new runner, dry run): `would continue from state_449750.json (449751..follow); trie meta at 449750`. `coordinator/test_prep_runner.py` (+ control: 3 fail). A genesis run that dies before its first save point now stops for a person instead of clearing itself |
+| 2 MEDIUM | with automatic rewinds off, a reorg stops the tip run with `blocks/REORG`, but the board kept serving, verifying and crediting its orphaned bundles and states above the fork | agreed | **the fence**: each run's block directory (`HAZYNC_LZ_BLOCKS_DIR`, `HAZYNC_LZ_TIP_BLOCKS_DIR`); a `REORG` marker fences that run above its fork, `REORG_TOO_DEEP` without a fork (or a marker that does not read) all of it: no bundle served or claimed, `lz_state_tip` none (the commit check refuses), a submission above it 409 `reorged`, not counted. Lifted when the marker goes (the rewind). `/api/meta.tip_run.fences`. Not done: serving tip bundles only k deep (it delays every tip block for a rare event the fence already covers) |
+| 3 MEDIUM | tip bundles unbounded while nobody proves tip blocks | agreed | `HAZYNC_PREP_LEAF_WINDOW=4320` on the paper prep (30 days): prep PAUSES before its next bundle, nothing deleted; the stall check says when the window is why. Sizes MEASURED: 9.6 MB at 481,824 (the largest sample bundle; none exists near the tip yet), `/srv/bulk` 3.3 TB free; runway without a window ~1,800 days at 144 × ~12 MB/day (ESTIMATE), with it ~40-65 GB. `TIP_CLAIM_FIRST` unchanged (off) |
+| 4 MEDIUM | the RUNBOOK never installed the fetcher; the stall check paged before `PREP_TIP.json` existed | agreed (the box's fetcher is already the repo's, MEASURED same md5) | step 2 installs `fetch_block_rpc.py` and checks it has `follow`; step 4 checks both units active and the block files moving, after step 5's checks; the stall check says "not checked" with no `PREP_TIP.json` |
+| 5 MEDIUM-LOW | deleting `tip-run.conf` after tip blocks are verified latches the alert and fails `check-proofs`; the paper prep would wait for acks nobody writes | agreed | the RUNBOOK's full rollback set (`--reorg-to 974936` first, then the drop-in, `HAZYNC_REORG_ACK=0` back, the checks' variables); the drop-in says so. `test_reorg_tip.py` shows both orders |
+| 6 LOW-MEDIUM | the handover alert latched for ever and blocked the other latch | agreed | its own key, `handover_alert`, cleared when the runs agree again; `hazync-lz-check-reorg` pages on it (+ control) |
+| 7 LOW-MEDIUM | a missing, empty or torn boundary state counted against the block | agreed | 503 before verifying, not counted (+ control) |
+| 8 LOW | the spine was verified against the tip run's directories (and its leaf bundles) even below X - 1 | agreed | its height first, then `--check-end` against a view of the one state from the run that holds it (+ control) |
+| 9 LOW | the below-X refusal tested "the board pass holds F+1", not the orphaned F+1 | agreed | compared with the record's orphaned hash (+ control) |
+| 10 LOW | a reader whose root prep re-logged elsewhere answered 503 for ever; history walks up to the cap | agreed / kept | `Reader` follows the same root hash at its new reference (`z2_a_relogged_root_is_followed`); the follower probes every served height and restarts zync-serve on a 503 (fails if it persists). The 100,000-record cap is the user's decision (ZAPP_FOLLOWER §12.4) and is a unit setting (`ZYNC_WALK_CAP`): not changed, its cost stated |
+| 11 LOW | X in four places unchecked; the backstop's window counted from the tip; views not swept; the gap jump on an unreadable board directory; the stall check after a quiet hour | agreed | the follower and `check-proofs` refuse an X that is not the coordinator's `tip_run.from`; the backstop and `REORG_AUTO_MAX_DEPTH` count from each run's own top (+ control); views swept at start-up; the last board high kept; the stall check measures how long the node has been ahead (a state file) |
+
+Also found: `test_reorg.py --control-m1` had stopped applying since this branch's first commit (its patch named the old
+`_prep_waiting_on` call); fixed. Suspicion (a), the pinned core wasm: built in the published image
+(`HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1`), both before and after keeping the line numbers, the
+core `.wasm` is `0c8cf026…`, the pin (MEASURED): the shifted lines had not moved it, and the reader now sits at the end
+of `trie_store.rs` so no later change above it can. (c) vda: 1.4 TB free (MEASURED); the paper prep's `out/` adds ~3.7
+KB a block plus its 2,016 undo records (~2 GB), and the board pass's retention is §8's estimate; the disk floor watches
+each run's coin-log filesystem (vdb for the paper prep, vda for the board pass).
+
+**Review round 2 (20.11.2026, `0668e13`), fixed.** Nothing critical or high; the round-1 fixes held.
+
+| # | finding | assessed | fixed |
+|---|---|---|---|
+| 1 MEDIUM | the 4,320 leaf window counts the samples and could pause prep short of the tip (X is ~4,500 blocks below the tip by the time prep gets there) | agreed | `HAZYNC_PREP_LEAF_WINDOW=12000` (~115-145 GB, ESTIMATE); the stall check reads the window from the tip run's `out/RUN.json` (the runner writes it at each start), no copy of the number |
+| 2 MEDIUM | nothing checked the moment D1 engages; prep's `LEAF_FROM` was the one uncross-checked X | agreed | `hazync-lz-check-reorg` pages when `RUN.json`'s `leaf_from` is not the coordinator's X (`meta.tip_from`, written at start) and when the tip run is past X with no bundle of X and X not proven; a dated RUNBOOK step "after the paper prep passes X" |
+| 3 MEDIUM-LOW | the RUNBOOK's fallback binary would be v0.27.0 | agreed (MEASURED: the running paper prep is the deleted v0.26.1 inode `a051ccf5`, `bin/host_lz` is v0.27.0 `4c79a0f1`) | step 4 copies `/proc/<pid>/exe`, the save point's files and the trie meta aside before the stop, and optionally `cl/` and `trie/` after it |
+| 4 LOW-MEDIUM | the fence failed open without the block directories | agreed | start-up refuses (exit 3) a tip run without both readable block directories; step 3 checks `fences` |
+| 5 LOW | the fence read through a 1 s cache at commit | agreed | `reorg_refusal` reads the markers afresh (+ control) |
+| 6 LOW | a tip-run marker below X - 1 did not fence the board pass | agreed | it fences the board pass above that fork too (+ control) |
+| 7 LOW | the stall check trusted a stale node tip | agreed | exit 2 when `node_tip` is over an hour old |
+| 8 LOW | the worker exited 1 on 503 and on 409 `reorged` | agreed | `_post_receipt` retries a 503 `retry` (`HAZYNC_SUBMIT_RETRIES`, 5) and takes `reorged` as nothing to do (`test_worker_reorged.py` + control) |
+| 9 LOW | the handover alert cleared on a missing or torn state | agreed | cleared only when a comparison agrees (+ control) |
+| 10 LOW | missing tests | agreed | a marker appearing mid-verification, a spine ending above a fence, claims and pick under a fence, a fold across it, a board-pass marker |
+| residual | the runner still cleared a numeric-`LZ_HI` run's stores with no state files | agreed in part: a board pass whose `out/` is lost can still have a flushed trie | a trie whose meta has a height (it is flushed only at save points) also refuses (`test_prep_runner.py`) |
+| NEW | `TIP_CLAIM_FIRST` on hands mainnet-size blocks to small cards | agreed | decision 3 above: tip-first only for workers that say (`HAZYNC_TIP=1`) or have shown they can |
+
+Also found by the new pruner test: `hazync-lz-prune-leaves` exited before its tip-run section whenever the frontier was
+below `MARGIN` (it never freed a proven tip bundle then); fixed. Step-0 facts MEASURED read-only on hazync-proof
+20.11.2026: `realpath /srv/bulk/libzync-prep/out` = `/var/lib/libzync-fast/out`; `state_449750.json` 4,918 bytes; the
+paper prep's MemoryMax/MemoryHigh `infinity` (its `memory.conf` and `system.control`); every installed prep and fetch
+unit and drop-in identical to `origin/main`; the board pass runs its installed `host_lz` (`4c79a0f1`). The paper prep
+also keeps cost-curve sample bundles at 500,000, 600,000 and 700,000 from its restart (`HAZYNC_PREP_LEAF_AT`; 800,000,
+900,000 and 962,000 were already listed); the pruner never touches a sample (they are below X) and the window only
+pauses (`test_prune_leaves_tip.py` checks every shipped sample height survives).
+
+**Review round 3 (20.11.2026, `4042aeb`), fixed.** Nothing serious.
+
+| # | finding | assessed | fixed |
+|---|---|---|---|
+| 1 MEDIUM | nobody proves tip blocks by default: "earned" needs a flagged key first; the sponsor bot never claims (it proves named heights); `tip_board.py` sent no flag | agreed | `hazync-lz-check-reorg` pages "TIP BLOCKS NOT PROVED" once the tip run is past X, tip bundles have waited `CHECK_TIP_PROOF_STALE_S` (24 h) and no tip block was verified in that time; `tip_board.py` sends `tip` with `HAZYNC_TIP=1` (it points at `api.hazync.org`, the libzync board since 12.11.2026, but it was built for the v1 board: that it proves libzync blocks is not verified); the RUNBOOK names the choice of who runs `HAZYNC_TIP=1` as the author's. The sponsor bot claims nothing, so a flag there would do nothing |
+| 2 LOW-MEDIUM | the step-0 readability check skipped the board pass's block directory, without which the coordinator now refuses to start | agreed (MEASURED: `hazync` reads it) | added; a real start-up without it exits 3 (tested) |
+| 3 LOW | "tip claims" grepped a log the server never writes | agreed | read-only `sqlite3 -readonly` queries on `ranges` and `vranges` |
+| 4 LOW | step 0/4 details | agreed | the fallback is `$B/host_lz.running`; the installed units and drop-ins copied to `$B` BEFORE they are replaced; the units compared with the box's deployed commit (`PRE`), not `origin/main`; processes found by the unit's `MainPID` (`hostpid`, checked on the box: 8200 and 810603), not `pgrep -f`; `set -e` and `[ -s $B/host_lz.running ] \|\| exit` before the stop; the optional ~115 GB copy (48 min or more) and the stall page it causes stated; `MemoryMax`/`MemoryHigh` shown after the daemon-reload, before the start; `TIP_CLAIM_FIRST` is on |
+| 5 LOW | the worker's exhausted retries read as a rejection | agreed | `UNSENT`: the receipt is kept and marked in `RCPTDIR/.unsent`, `submit` exits 75, the next `hazync run` sends it again before claiming; `HAZYNC_SUBMIT_RETRIES` clamped to 0..20; a proxy's HTML 502/503/504 on the submit path is retryable |
+| 6 LOW | the X checks were skipped silently without `RUN.json` or `meta.tip_from`, and the stale-node-tip exit masked them | agreed | they run first; no `RUN.json` within 1,000 of X pages ("UNCHECKED"); no `tip_from` is said; the coordinator says when it cannot write `tip_from` |
+| 7 LOW | test gaps | agreed | the worker test's controls split (`--control-retry`, `--control-reorged`) and its flag check now builds the real claim body (`claim_body`, and `tip_board.claim`); an unflagged EARNED key gets a tip block end to end, while a key whose tip proof was unclaimed, or of a block another key claimed, does not; `--control-samples` (the pruner without its X guard loses every sample); the board-directory start-up refusal; 10c now fails if a claim is refused |

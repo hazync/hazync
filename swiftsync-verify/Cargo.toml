@@ -28,6 +28,13 @@ path = "src/zync_path.rs"
 name = "zync-serve"
 path = "src/zync_serve.rs"
 
+[features]
+# zync-serve's tip mode (docs/libzync/ZAPP_FOLLOWER.md §10 Z2-Z4): facts read from a prep run's disk trie at pinned roots,
+# no history. Build it with the zync-serve profile (panic = "unwind": a walk the store moved under is caught and answered
+# 503, never an abort): cargo build --profile zync-serve --features tip --bin zync-serve. The core verifier and its
+# .wasm never enable it.
+tip = ["libzync/reader"]
+
 [dependencies]
 # disable-dev-mode: RISC0_DEV_MODE can never make this verifier accept a fake receipt (review round 3).
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
@@ -44,5 +51,10 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# zync-serve with the tip feature (see [features]): release, but a panic unwinds (Reader::walk catches it)
+[profile.zync-serve]
+inherits = "release"
+panic = "unwind"
 
 [workspace]
