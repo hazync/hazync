@@ -1,20 +1,23 @@
 #!/bin/bash
-# join_controls.sh <ts-anchor> <ts-ingest-host> <ts-ingest-host, controls build> <anchored tip state.json> <work dir>
+# join_controls.sh <ts-anchor> <ts-ingest-host> <ts-ingest-host, controls build> <anchored tip state.json> <work dir> [<anchor A.json>]
 # -- EXPERIMENTAL. The join receipt guest (docs/libzync/TRUSTED_STATE.md §13.3) on regtest H = 104, dev mode:
 #   main@104  = the REAL receipt scripts/zapp-regtest/receipts/a/block_104.rcpt (image eb2cd424, verified first);
 #   ingest    = the chunked ingest of Core's utxo_104.dat (3 chunks + combine), inline BIP30 tree and split (d 4, 3 pieces);
 #   tip       = the anchored lineage's state at 112 (core regtest image, dev-mode run on the anchor; enters as a claim).
 # Every control is driven both ways: refused by the real join image, accepted by the controls build with its check cut.
+# <anchor A.json>: ts-anchor build's anchor at 104 (default: anchor_104.json next to the tip's out_anc directory), for the
+# native `ts-anchor join` lines.
 # TIP_IMAGE: the image the anchored run used (default: a4344798..., the PoC's laptop regtest build).
 # Prints JOIN_CONTROLS_OK or JOIN_CONTROLS_FAILED <n>.
 set -uo pipefail
 TS=$1; IH=$2; IHC=$3; TIP=$(readlink -f "$4"); W=$5
+ANCHOR=$(readlink -f "${6:-$(dirname "$TIP")/../anchor_104.json}")
 Z=$(cd "$(dirname "$0")/../.." && pwd); G=$Z/scripts/zapp-regtest
 TIP_IMAGE=${TIP_IMAGE:-a4344798574f7811046bfe5a6916ad1eaa1fc3b9262cd6959480b87d8e110ecc}
 MAIN_IMAGE=$(awk '{print $2}' "$G/receipts/method_id.txt")
 mkdir -p "$W"; cd "$W" || exit 1
 export RISC0_DEV_MODE=1 TS_TIP_IMAGE=$TIP_IMAGE
-GEN=1; TAIL=2; MATCH=4; LINK=8; SHAPE=16
+GEN=1; TAIL=2; MATCH=4; LINK=8; SHAPE=16; SELF=32; ALL=63
 tsa() { env -u RISC0_DEV_MODE "$TS" "$@"; }
 python3 "$Z/experimental/trusted-state/side_inputs.py" "$G/blocks/main" 104 side > /dev/null
 ingest() {  # ingest <host> <dir>: chunks + combine inline + combine split
@@ -28,11 +31,13 @@ ingest() {  # ingest <host> <dir>: chunks + combine inline + combine split
 ingest "$IH" I || { echo "ingest (real images) failed"; exit 1; }
 ingest "$IHC" IC || { echo "ingest (controls build) failed"; exit 1; }
 inputs() { tsa join-inputs --main "$G/receipts/a/block_$1.rcpt" --main-image "$MAIN_IMAGE" --anchored-tip "$2" --out "$3" "${@:4}" | tail -1; }
-inputs 104 "$TIP" J
+inputs 104 "$TIP" J --tip-image "$TIP_IMAGE"
 inputs 104 "$TIP" Jtip --forge-tip-anchor
 inputs 105 "$TIP" J105
 inputs 104 "$TIP" Jgen --forge-main-anchor
 inputs 104 "$G/receipts/a/state_104.json" Jlow        # "tip" = main@104 itself: not above H, genesis-anchored
+inputs 104 "$TIP" Jsm --forge-main-self-id            # main@H's journal with self_id != main_image, all else as committed
+inputs 104 "$TIP" Jst --forge-tip-self-id             # the anchored tip's journal with self_id != tip_image
 bad=0
 join() {  # join <host> <cut> <dir> <ingest receipt> [env...]: prints JOINED or refused <why>
   local h=$1 cut=$2 d=$3 r=$4; shift 4
@@ -56,7 +61,28 @@ ctl "main@H not genesis-anchored (dev-mode claim)"                       $GEN Jg
 ctl "the verifier pins another chunk image"                              $TAIL J final.in.split.rcpt "TS_CHUNK_IMAGE=$(printf '%064d' 7)"
 ctl "the verifier expects an inline tree, the ingest is split"           $TAIL J final.in.split.rcpt TS_BIP30_IMAGE=0
 ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK)) Jlow final.in.split.rcpt
+# S1: the REAL core image run with self_id = a rogue image commits that self_id; its receipt verifies under the real id
+ctl "main@H recursed against another image (self_id != main_image)"     $SELF Jsm final.in.split.rcpt
+ctl "anchored tip recursed against another image (self_id != tip_image)" $SELF Jst final.in.split.rcpt
 # not a cut check: the anchored tip's claim is under another image than the one the guest is told (env::verify)
 want "tip claimed under another image: real join image" refused "$(join "$IH" 0 J I/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
-want "tip claimed under another image: controls, all cuts" refused "$(join "$IHC" 31 J IC/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
+want "tip claimed under another image: controls, all cuts" refused "$(join "$IHC" $ALL J IC/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
+# the controls build's result lines say so (an id it prints must never be pinned); the real build's do not
+case "$(join "$IHC" 0 J IC/final.in.split.rcpt)" in *"CONTROLS BUILD"*) echo "PASS controls build labels its JOINED line";;
+  *) echo "FAIL controls build: JOINED line not labelled CONTROLS"; bad=$((bad+1));; esac
+case "$(join "$IH" 0 J I/final.in.split.rcpt)" in *"CONTROLS BUILD"*) echo "FAIL real build: JOINED line labelled CONTROLS"; bad=$((bad+1));;
+  *) echo "PASS real build's JOINED line is not labelled CONTROLS";; esac
+# the native paths (ts-anchor): the same self_id check
+native() {  # native <label> <want: ok|refused> <cmd...>
+  local label=$1 w=$2; shift 2; local got=refused
+  tsa "$@" > native.log 2>&1 && got=ok
+  if [ "$got" = "$w" ]; then echo "PASS native $label: $got"; else echo "FAIL native $label: $got, wanted $w ($(tail -1 native.log))"; bad=$((bad+1)); fi
+}
+native "join-inputs, the tip's self_id = --tip-image"  ok      join-inputs --main "$G/receipts/a/block_104.rcpt" --main-image "$MAIN_IMAGE" --anchored-tip "$TIP" --tip-image "$TIP_IMAGE" --out Jn
+native "join-inputs, --tip-image another image"        refused join-inputs --main "$G/receipts/a/block_104.rcpt" --main-image "$MAIN_IMAGE" --anchored-tip "$TIP" --tip-image "$MAIN_IMAGE" --out Jn
+native "join-receipt, honest"                          ok      join-receipt --main "$G/receipts/a/block_104.rcpt" --main-image "$MAIN_IMAGE" --ingest-journal I/final.in.journal --anchored-tip "$TIP" --tip-image "$TIP_IMAGE"
+native "join-receipt, --tip-image another image"       refused join-receipt --main "$G/receipts/a/block_104.rcpt" --main-image "$MAIN_IMAGE" --ingest-journal I/final.in.journal --anchored-tip "$TIP" --tip-image "$MAIN_IMAGE"
+native "join, main@H state with self_id = --image"     ok      join --anchor "$ANCHOR" --main "$G/receipts/a/state_104.json" --image "$MAIN_IMAGE" --tip "$TIP" --tip-image "$TIP_IMAGE"
+native "join, main@H state with self_id != --image"    refused join --anchor "$ANCHOR" --main "$G/receipts/a/state_104.json" --image "$TIP_IMAGE" --tip "$TIP" --tip-image "$TIP_IMAGE"
+native "join, the tip's self_id != --tip-image"        refused join --anchor "$ANCHOR" --main "$G/receipts/a/state_104.json" --image "$MAIN_IMAGE" --tip "$TIP" --tip-image "$MAIN_IMAGE"
 [ $bad = 0 ] && echo JOIN_CONTROLS_OK || { echo "JOIN_CONTROLS_FAILED $bad"; exit 1; }

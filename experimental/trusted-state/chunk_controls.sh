@@ -1,10 +1,11 @@
 #!/bin/bash
-# chunk_controls.sh <ts-anchor> <ts-ingest-host> <work dir> -- EXPERIMENTAL negative controls of the chunked ingest
+# chunk_controls.sh <ts-anchor> <ts-ingest-host> <work dir> [<ts-ingest-host, controls build>] -- EXPERIMENTAL negative controls of the chunked ingest
 # (docs/libzync/TRUSTED_STATE.md §12.3) on the regtest snapshot at 104 (169 coins): plan A cuts it into 3 chunks, plan B
 # into 4, every chunk is executed honestly (dev mode), then the combine is fed wrong sets. Each must be refused, and the
-# honest set accepted. Prints CONTROLS_OK or CONTROLS_FAILED <n>.
+# honest set accepted. With the controls build, the chunk guest's trie-mode check is driven both ways too (refused by
+# the real image, accepted by the controls build with its cut). Prints CONTROLS_OK or CONTROLS_FAILED <n>.
 set -uo pipefail
-TS=$1; IH=$2; W=$3
+TS=$1; IH=$2; W=$3; IHC=${4:-}
 Z=$(cd "$(dirname "$0")/../.." && pwd); G=$Z/scripts/zapp-regtest
 mkdir -p "$W"
 export RISC0_DEV_MODE=1
@@ -52,4 +53,28 @@ run refused "reordered: A1 A0 A2"                          "$A/final.in" "$A/chu
 run refused "repeated: A0 A1 A1 A2"                        "$A/final.in" "$A/chunk_0.rcpt" "$A/chunk_1.rcpt" "$A/chunk_1.rcpt" "$A/chunk_2.rcpt"
 run refused "a chunk with other header times"             "$A/final.in" "$A/chunk_0.rcpt" "$A/chunk_1t.rcpt" "$A/chunk_2.rcpt"
 run refused "final state +1 sat"                           "$A/final_v.in" "$A/chunk_0.rcpt" "$A/chunk_1.rcpt" "$A/chunk_2.rcpt"
+# chunk 0 with its trie witness's mode word set to 0 (no values or counts): an empty trie's root is zero in both modes,
+# so only the mode check tells it apart
+python3 - "$A/chunk_0.in" "$A/chunk_0m.in" <<'P'
+import sys
+b = bytearray(open(sys.argv[1], "rb").read()); i = 0; secs = []
+while i < len(b):
+    n = int.from_bytes(b[i:i + 4], "little"); secs.append((i + 4, n)); i += 4 + n
+off, n = secs[6]                       # section 7: the trie witness, u32 LE words; word 0 = the mode
+assert n >= 36 and int.from_bytes(b[off:off + 4], "little") == 1, "chunk 0's witness is not in counts mode"
+b[off:off + 4] = (0).to_bytes(4, "little")
+open(sys.argv[2], "wb").write(b)
+P
+mode() {  # mode <want: ok|refused> <label> <host> [env...]
+  local want=$1 label=$2 h=$3; shift 3
+  local o; o=$(env "$@" "$h" chunk "$A/chunk_0m.in" "$A/chunk_0m.rcpt" 2>&1); local got=refused
+  echo "$o" | grep -aq "^CHUNK " && got=ok
+  local why; why=$(echo "$o" | grep -a -o "Guest panicked: .*" | tail -1 | sed 's/.*Guest panicked: //')
+  if [ "$got" = "$want" ]; then echo "PASS $label: $got ${why:+($why)}"; else echo "FAIL $label: $got, wanted $want ${why:+($why)}"; bad=$((bad+1)); fi
+}
+mode refused "chunk 0, trie witness not in counts mode: real chunk image" "$IH"
+if [ -n "$IHC" ]; then
+  mode refused "chunk 0, trie witness not in counts mode: controls, no cut" "$IHC" TS_CUT=0
+  mode ok      "chunk 0, trie witness not in counts mode: controls, cut 1"  "$IHC" TS_CUT=1
+fi
 [ $bad = 0 ] && echo CONTROLS_OK || { echo "CONTROLS_FAILED $bad"; exit 1; }

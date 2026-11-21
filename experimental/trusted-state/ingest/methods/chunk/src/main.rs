@@ -35,8 +35,15 @@ use gcommon::*;
 use risc0_crypto::curves::secp256k1::Fq;
 use risc0_crypto::BigInt;
 
+// cut bit of the `controls` build only (bip30/Cargo.toml)
+const CUT_MODE: u32 = 1; // the trie witness is in counts mode
+
 fn main() {
     let c0 = env::cycle_count();
+    #[cfg(feature = "controls")]
+    let cut: u32 = read_u32();
+    #[cfg(not(feature = "controls"))]
+    let cut: u32 = 0;
     let sin = read_section();
     let mut s = tsi::ChunkState::from_bytes(&sin).expect("S_in: not a canonical ChunkState");
     let d_in = s.digest();
@@ -167,6 +174,10 @@ fn main() {
     let wit: Vec<u32> = read_section().chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     let perm: Vec<u32> = read_section().chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     assert!(wit.len() >= 9 && wit[1..9] == s.trie_root[..], "the trie witness is not of S_in's trie root");
+    // the core's condition (prover/methods/guest/src/main.rs, the trie mode): the mode is the witness's first word and
+    // an empty trie's root is zero in both modes, so without this chunk 0 could start a trie that commits no values
+    // or counts, and every later chunk continue it; the combine and the join never see the mode.
+    if cut & CUT_MODE == 0 { assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode"); }
     let c2b = env::cycle_count();
     s.trie_root = ttree::apply_stream_perm(&wit, &[], &ins, Some(&perm)).expect("trie update");
     let c3 = env::cycle_count();
@@ -176,5 +187,5 @@ fn main() {
     out.extend_from_slice(&[n as u32, (n >> 32) as u32]);
     env::commit_slice(&out);
     let c4 = env::cycle_count();
-    env::log(&alloc::format!("TSC read {} coins {} trie_read {} trie {} commit {} n={n} trie_wit_words={}", c1 - c0, c2 - c1, c2b - c2, c3 - c2b, c4 - c3, wit.len()));
+    env::log(&alloc::format!("TSC read {} coins {} trie_read {} trie {} commit {} n={n} trie_wit_words={} cut={cut}", c1 - c0, c2 - c1, c2b - c2, c3 - c2b, c4 - c3, wit.len()));
 }

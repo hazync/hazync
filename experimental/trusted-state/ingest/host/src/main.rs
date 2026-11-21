@@ -25,6 +25,12 @@ fn section_writer(b: &mut risc0_zkvm::ExecutorEnvBuilder, s: &[u8]) {
     if !s.is_empty() { b.write_slice(&pad(s.to_vec())); }
 }
 
+/// Appended to every result line of a controls build (TS_CONTROLS=1), whose images read a cut mask and can skip checks:
+/// an id printed by such a build must never be pinned.
+fn ctl_tag() -> &'static str {
+    if CONTROLS { "  <<< CONTROLS BUILD (TS_CONTROLS=1): cut-capable images, NEVER PIN THESE IDS >>>" } else { "" }
+}
+
 fn prove_dev(env: risc0_zkvm::ExecutorEnv, elf: &[u8]) -> risc0_zkvm::ProveInfo {
     assert!(std::env::var("RISC0_DEV_MODE").as_deref() == Ok("1"), "set RISC0_DEV_MODE=1: the chunked ingest is measured in dev mode");
     risc0_zkvm::default_prover().prove(env, elf).expect("guest")
@@ -38,12 +44,14 @@ fn chunk_cmd(inp: &str, out: &str) {
     let info = {
         let mut b = ExecutorEnv::builder();
         b.stdout(&mut log);
+        write_cut(&mut b);
         for x in &s { section_writer(&mut b, x); }
         prove_dev(b.build().unwrap(), TS_CHUNK_ELF)
     };
     let tsc = String::from_utf8_lossy(&log).lines().find(|l| l.contains("TSC ")).unwrap_or("").to_string();
     std::fs::write(out, bincode::serialize(&info.receipt).unwrap()).unwrap();
-    println!("CHUNK {inp}: user {} total(padded) {} segments {} ({:.1} s)", info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64());
+    println!("CHUNK {inp}: user {} total(padded) {} segments {} ({:.1} s) (chunk image {}){}", info.stats.user_cycles, info.stats.total_cycles,
+             info.stats.segments, t0.elapsed().as_secs_f64(), hex_id(&TS_CHUNK_ID), ctl_tag());
     println!("  {}", tsc.trim());
 }
 
@@ -73,8 +81,8 @@ fn bip30_cmd(inp: &str, out: &str) {
     let text = String::from_utf8_lossy(&log).to_string();
     let info = match r { Ok(i) => i, Err(_) => { println!("BIP30_REFUSED {inp}"); std::process::exit(1); } };
     std::fs::write(out, bincode::serialize(&info.receipt).unwrap()).unwrap();
-    println!("BIP30 {inp} (image {}): user {} total(padded) {} segments {} ({:.1} s)", hex_id(&TS_BIP30_ID), info.stats.user_cycles,
-             info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64());
+    println!("BIP30 {inp} (image {}): user {} total(padded) {} segments {} ({:.1} s){}", hex_id(&TS_BIP30_ID), info.stats.user_cycles,
+             info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64(), ctl_tag());
     println!("  {}", text.lines().find(|l| l.contains("TSB ")).unwrap_or("").trim());
 }
 
@@ -121,8 +129,8 @@ fn combine_cmd(fin: &str, expected: &str, args: &[String]) {
     };
     let tsx = text.lines().find(|l| l.contains("TSX ")).unwrap_or("").to_string();
     if !preceipts.is_empty() { println!("  BIP30 from {} pieces (bip30 image {})", preceipts.len(), hex_id(&TS_BIP30_ID)); }
-    println!("COMBINE image {} of {} chunks (chunk image {}): user {} total(padded) {} segments {} ({:.1} s)", hex_id(&TS_COMBINE_ID), receipts.len(),
-             hex_id(&TS_CHUNK_ID), info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64());
+    println!("COMBINE image {} of {} chunks (chunk image {}): user {} total(padded) {} segments {} ({:.1} s){}", hex_id(&TS_COMBINE_ID), receipts.len(),
+             hex_id(&TS_CHUNK_ID), info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64(), ctl_tag());
     println!("  {}", tsx.trim());
     let j = &info.receipt.journal.bytes;
     std::fs::write(format!("{fin}.journal"), j).unwrap();
@@ -133,7 +141,7 @@ fn combine_cmd(fin: &str, expected: &str, args: &[String]) {
         // the combine's journal is the one-shot ingest's layout, then 9 words (chunk image id, N), then with --bip30
         // 9 more (bip30 image id, pieces)
         let tail = if cut_at.is_some() { 72 } else { 36 };
-        if j.len() == e.len() + tail && j[..e.len()] == e[..] { println!("COMBINE_MATCH: the combined journal = {expected}, byte for byte (+ chunk image, N{})", if tail == 72 { ", bip30 image, P" } else { "" }); }
+        if j.len() == e.len() + tail && j[..e.len()] == e[..] { println!("COMBINE_MATCH: the combined journal = {expected}, byte for byte (+ chunk image, N{}){}", if tail == 72 { ", bip30 image, P" } else { "" }, ctl_tag()); }
         else { println!("COMBINE_MISMATCH against {expected}"); std::process::exit(1); }
     }
 }
@@ -219,7 +227,7 @@ fn main() {
     let mut h3b: Vec<u8> = h3.iter().flat_map(|x| x.to_le_bytes()).collect();
     h3b.reverse();
     let h3hex: String = h3b.iter().map(|x| format!("{x:02x}")).collect();
-    println!("INGEST image {} H={h} coins={coins} smt_entries={n_smt} hash_serialized_3={h3hex}", hex_id(&GUEST_ID));
+    println!("INGEST image {} H={h} coins={coins} smt_entries={n_smt} hash_serialized_3={h3hex}{}", hex_id(&GUEST_ID), ctl_tag());
     let user = session.cycles();
     let total: u64 = session.segments.iter().map(|s| 1u64 << s.po2).sum();
     println!("  cycles: user {user} total(padded) {total} segments {} (executor, {:.1} s wall)", session.segments.len(), secs);
@@ -251,9 +259,16 @@ fn join_cmd(a: &[String]) {
         risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(c)), j)
     };
     // a control's main@H (ts-anchor join-inputs --forge-main-anchor): a dev-mode claim instead of the real receipt
-    let main_r: risc0_zkvm::Receipt = match std::fs::read(format!("{dir}/main.journal.fake")) {
-        Ok(j) => { eprintln!("CONTROL: main@H is a dev-mode claim ({dir}/main.journal.fake)"); fake(main_image, j) }
-        Err(_) => bincode::deserialize(&rd("main.rcpt")).unwrap(),
+    // Said on stdout AND stderr, and again on the JOINED line: a join over a forged main@H must not pass for a real one.
+    let main_fake = std::fs::read(format!("{dir}/main.journal.fake")).ok();
+    let main_r: risc0_zkvm::Receipt = match main_fake.clone() {
+        Some(j) => {
+            let m = format!("CONTROL: main@H is a DEV-MODE CLAIM from {dir}/main.journal.fake, NOT the real receipt {dir}/main.rcpt");
+            println!("{m}");
+            eprintln!("{m}");
+            fake(main_image, j)
+        }
+        None => bincode::deserialize(&rd("main.rcpt")).unwrap(),
     };
     let genesis: Vec<u8> = { let g = String::from_utf8(rd("genesis")).unwrap(); (0..64).step_by(2).map(|i| u8::from_str_radix(&g.trim()[i..i + 2], 16).unwrap()).collect() };
     let genesis: [u8; 32] = genesis.try_into().unwrap();
@@ -291,8 +306,9 @@ fn join_cmd(a: &[String]) {
     let info = match r { Ok(i) => i, Err(_) => { println!("JOIN_REFUSED"); std::process::exit(1); } };
     let j = words(&info.receipt.journal.bytes);
     let hx = |w: &[u32]| -> String { w.iter().flat_map(|x| x.to_le_bytes()).map(|x| format!("{x:02x}")).collect() };
-    println!("JOINED (join image {}): H={} anchor link {} T={}; user {} total(padded) {} segments {} ({:.1} s)", hex_id(&TS_JOIN_ID), j[48],
-             &hx(&j[57..65])[..16], j[65], info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64());
+    println!("JOINED (join image {}): H={} anchor link {} T={}; user {} total(padded) {} segments {} ({:.1} s){}{}", hex_id(&TS_JOIN_ID), j[48],
+             &hx(&j[57..65])[..16], j[65], info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64(),
+             if main_fake.is_some() { "  <<< main@H = DEV-MODE CLAIM (main.journal.fake) >>>" } else { "" }, ctl_tag());
     println!("  {}", text.lines().find(|l| l.contains("TSJ ")).unwrap_or("").trim());
     std::fs::write(format!("{dir}/join.journal"), &info.receipt.journal.bytes).unwrap();
 }

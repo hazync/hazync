@@ -23,6 +23,7 @@ const CUT_TAIL: u32 = 2;    // the ingest journal names the chunk (and BIP30) im
 const CUT_MATCH: u32 = 4;   // the ingest's (H, tip, value, live set) = main@H's
 const CUT_LINK: u32 = 8;    // the anchored tip's anchor_id = link_digest(rebuilt A)
 const CUT_SHAPE: u32 = 16;  // both states a v2 ChainState, the same profile, the tip above H, the tip not genesis-anchored
+const CUT_SELF: u32 = 32;   // main.self_id == main_image and tip.self_id == tip_image
 
 fn sha(b: &[u8]) -> [u8; 32] { Sha256::digest(b).into() }
 fn wbytes(w: &[u32]) -> Vec<u8> { w.iter().flat_map(|x| x.to_le_bytes()).collect() }
@@ -64,6 +65,15 @@ fn main() {
         assert!(tip.profile == main.profile, "the two proofs are of other profiles");
         assert!(tip.height > ing.h, "the anchored tip is not above H");
         assert!(tip.anchor_id != genesis, "the anchored tip is genesis-anchored");
+    }
+    // S1 (prover/methods/guest/src/main.rs, the aggregate's `self_id` comment): the core verifies its previous state
+    // and its chunks under the self_id it is GIVEN and commits it, so a receipt of the real image only means "every
+    // step ran this image" when its journal's self_id is that image. Without this, the real core image run with
+    // self_id = a rogue image X (which commits any state) gives a genuine receipt of a forged main@H or an unchecked
+    // tip. self_id is [u32; 8] from env::read, the same words as the image ids read above.
+    if on(CUT_SELF) {
+        assert!(main.self_id == main_image, "main@H recursed against another image (self_id != main_image)");
+        assert!(tip.self_id == tip_image, "the anchored tip recursed against another image (self_id != tip_image)");
     }
     if on(CUT_GENESIS) { assert!(main.anchor_id == genesis, "main@H is not genesis-anchored"); }
     if on(CUT_TAIL) {

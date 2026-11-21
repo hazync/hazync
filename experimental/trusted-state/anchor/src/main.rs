@@ -1,7 +1,7 @@
 //! ts-anchor: EXPERIMENTAL Trusted State proof of concept (docs/libzync/TRUSTED_STATE.md). Not a release tool.
 //!
 //!   ts-anchor build  --network <regtest|mainnet> --snapshot <utxo.dat> --side <prefix> (--expect <H>:<block>:<hash3> | --no-expect) --out <prefix>
-//!   ts-anchor join   --anchor <A.json> --main <state.json | receipt.rcpt --image <hex>> [--tip <state.json>]
+//!   ts-anchor join   --anchor <A.json> --main <state.json | receipt.rcpt --image <hex>> [--tip <state.json> [--tip-image <hex>]]
 //!   ts-anchor compare <a.json> <b.json>
 //!   ts-anchor facts  --state <tip.json> --trie <tip.trie> --scenarios <scenarios.json> --who <NAME> [--history <spk hex>]... [--undo-from <h>]
 //!   ts-anchor synth  --coins <N> --height <H> --base <block display hash> --out <utxo.dat>
@@ -37,6 +37,15 @@ fn sha256(b: &[u8]) -> [u8; 32] { Sha256::digest(b).into() }
 fn dsha(b: &[u8]) -> [u8; 32] { sha256(&sha256(b)) }
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 fn unhex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() }
+/// An image id's hex (as risc0 prints a Digest) as the [u32; 8] a ChainState's self_id holds: little-endian words.
+fn image_words(img: &str) -> [u32; 8] {
+    let b = unhex(img);
+    if b.len() != 32 { die(format!("image {img}: 64 hex digits")); }
+    std::array::from_fn(|k| u32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap()))
+}
+/// S1 (the core aggregate's `self_id`): a receipt of the core image only means "every step ran this image" when its
+/// journal's self_id IS that image; the core verifies its previous state and chunks under the self_id it is given.
+fn self_id_is(st: &ChainState, img: &str) -> bool { st.self_id == image_words(img) }
 fn display(h: &[u8; 32]) -> String { let mut r = *h; r.reverse(); hex(&r) }
 fn from_display(s: &str) -> [u8; 32] { let mut b: [u8; 32] = unhex(s).try_into().expect("32-byte hash"); b.reverse(); b }
 fn die(m: impl std::fmt::Display) -> ! { eprintln!("ts-anchor: {m}"); std::process::exit(1) }
@@ -370,6 +379,12 @@ fn join(a: &[String]) {
     } else { read_state(&main_p) };
     let nw = if main.profile & 8 != 0 { net("regtest") } else { net("mainnet") };
     let mut ok = true;
+    // required with a receipt (verifying under --image says nothing without it); with a state.json, when --image is given
+    if let Some(img) = arg(a, "--image") {
+        let s = self_id_is(&main, &img);
+        println!("main lineage: self_id {} {}", hex(&wbytes(&main.self_id)), if s { "= --image" } else { "!= --image: recursed against another image" });
+        ok &= s;
+    }
     let ga = hex(&main.anchor_id) == nw.genesis_anchor;
     println!("main lineage: height {} anchor_id {} {}", main.height, hex(&main.anchor_id),
              if ga { "= the network's genesis anchor" } else { "!= the genesis anchor: not a from-genesis proof" });
@@ -386,6 +401,14 @@ fn join(a: &[String]) {
         let l = tip.anchor_id == link_digest(&anchor);
         println!("anchored tip {t}: height {} anchor_id {} {}", tip.height, hex(&tip.anchor_id), if l { "= this anchor's link digest" } else { "!= this anchor's link digest" });
         ok &= l;
+        match arg(a, "--tip-image") {
+            Some(img) => {
+                let s = self_id_is(&tip, &img);
+                println!("anchored tip: self_id {} {}", hex(&wbytes(&tip.self_id)), if s { "= --tip-image" } else { "!= --tip-image: recursed against another image" });
+                ok &= s;
+            }
+            None => println!("anchored tip: self_id {} NOT checked (no --tip-image)", hex(&wbytes(&tip.self_id))),
+        }
     }
     println!("{}", if ok { "JOIN_OK: the anchored state is the main lineage's state at H in every field a later block's verdict reads; the assumption is discharged" }
                    else { "JOIN_FAIL" });
@@ -867,7 +890,7 @@ fn receipt_state(p: &str, img: &str) -> ChainState {
     swiftsync_verify::decode_journal::<ChainState>(&r.journal).unwrap_or_else(|e| die(e))
 }
 
-/// `ts-anchor join-inputs --main <receipt> --main-image <hex> --anchored-tip <state.json> --out <dir>`: the join guest's
+/// `ts-anchor join-inputs --main <receipt> --main-image <hex> --anchored-tip <state.json> [--tip-image <hex>] --out <dir>`: the join guest's
 /// inputs (TRUSTED_STATE.md §13.3) for `ts-ingest-host join`: main@H's receipt, VERIFIED here and re-encoded as a risc0
 /// Receipt; its image; the network's genesis anchor; the anchored tip's journal (risc0 serde of the state). Also checks
 /// that the join guest's copy of ChainState (ingest/join_state.rs) decodes both journals and re-encodes them to the
@@ -881,8 +904,12 @@ fn join_inputs(a: &[String]) {
     let d: [u8; 32] = unhex(&img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
     r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
     let main: ChainState = swiftsync_verify::decode_journal(&r.journal).unwrap_or_else(|e| die(e));
+    if !self_id_is(&main, &img) { die(format!("{p}: its self_id {} is not --main-image {img} (recursed against another image)", hex(&wbytes(&main.self_id)))); }
     let nw = if main.profile & 8 != 0 { net("regtest") } else { net("mainnet") };
     let tip = read_state(&need(a, "--anchored-tip"));
+    if let Some(ti) = arg(a, "--tip-image") {
+        if !self_id_is(&tip, &ti) { die(format!("anchored tip: its self_id {} is not --tip-image {ti}", hex(&wbytes(&tip.self_id)))); }
+    }
     let jt: Vec<u8> = wbytes(&risc0_zkvm::serde::to_vec(&tip).unwrap());
     for (name, j) in [("main@H", r.journal.bytes.clone()), ("anchored tip", jt.clone())] {
         let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
@@ -901,12 +928,22 @@ fn join_inputs(a: &[String]) {
         std::fs::write(format!("{out}/main.journal.fake"), wbytes(&risc0_zkvm::serde::to_vec(&m).unwrap())).unwrap();
         println!("CONTROL: main.journal.fake = main@H with anchor_id {}", hex(&m.anchor_id));
     }
+    // --forge-main-self-id: main@H's journal with its self_id changed, every other field as committed: what the REAL
+    // core image commits when run with self_id = a rogue image (the join must check self_id == main_image)
+    if a.iter().any(|x| x == "--forge-main-self-id") {
+        let mut m = main.clone();
+        m.self_id[0] ^= 1;
+        std::fs::write(format!("{out}/main.journal.fake"), wbytes(&risc0_zkvm::serde::to_vec(&m).unwrap())).unwrap();
+        println!("CONTROL: main.journal.fake = main@H with self_id {}", hex(&wbytes(&m.self_id)));
+    }
     // --forge-tip-anchor: the anchored tip's journal with its anchor_id changed (a lineage on another anchor)
-    if a.iter().any(|x| x == "--forge-tip-anchor") {
+    // --forge-tip-self-id: with its self_id changed (a tip whose blocks a rogue image "checked")
+    for (flag, what) in [("--forge-tip-anchor", "anchor_id"), ("--forge-tip-self-id", "self_id")] {
+        if !a.iter().any(|x| x == flag) { continue; }
         let mut t = tip.clone();
-        t.anchor_id[0] ^= 1;
+        if what == "anchor_id" { t.anchor_id[0] ^= 1; } else { t.self_id[0] ^= 1; }
         std::fs::write(format!("{out}/tip.journal"), wbytes(&risc0_zkvm::serde::to_vec(&t).unwrap())).unwrap();
-        println!("CONTROL: tip.journal = the anchored tip with anchor_id {}", hex(&t.anchor_id));
+        println!("CONTROL: tip.journal = the anchored tip with {what} changed (anchor_id {}, self_id {})", hex(&t.anchor_id), hex(&wbytes(&t.self_id)));
     }
     println!("JOIN_INPUTS main@{} (verified, {img}) + anchored tip {} (anchor_id {}) -> {out}; join_state.rs round trip OK on both",
              main.height, tip.height, &hex(&tip.anchor_id)[..16]);
@@ -914,9 +951,11 @@ fn join_inputs(a: &[String]) {
 
 fn join_receipt(a: &[String]) {
     // 1. the main lineage at H: a receipt of a published core image, genesis-anchored
-    let main = receipt_state(&need(a, "--main"), &need(a, "--main-image"));
+    let main_image = need(a, "--main-image");
+    let main = receipt_state(&need(a, "--main"), &main_image);
     let nw = if main.profile & 8 != 0 { net("regtest") } else { net("mainnet") };
     let mut fails: Vec<String> = Vec::new();
+    if !self_id_is(&main, &main_image) { fails.push(format!("main@H's self_id {} is not --main-image (recursed against another image)", hex(&wbytes(&main.self_id)))); }
     if hex(&main.anchor_id) != nw.genesis_anchor { fails.push("main@H is not genesis-anchored".into()); }
     // 2. the ingest journal (in the guest: env::verify(INGEST_ID, journal)); its layout is the ingest guest's commit
     let jb = std::fs::read(need(a, "--ingest-journal")).unwrap();
@@ -955,6 +994,8 @@ fn join_receipt(a: &[String]) {
     }
     // 5. the anchored lineage's tip (in the guest: env::verify(core image, J_T)) rests on exactly this anchor
     let tipst = read_state(&need(a, "--anchored-tip"));
+    // the image the anchored tip's receipt verifies under (in the guest, tip_image): its self_id must be that image
+    if !self_id_is(&tipst, &need(a, "--tip-image")) { fails.push(format!("anchored tip's self_id {} is not --tip-image", hex(&wbytes(&tipst.self_id)))); }
     if tipst.anchor_id != link { fails.push(format!("anchored tip's anchor_id {} != the rebuilt anchor's link digest {}", hex(&tipst.anchor_id), hex(&link))); }
     if tipst.profile != main.profile { fails.push("profiles differ".into()); }
     let dg = |s: &ChainState| { let w = risc0_zkvm::serde::to_vec(s).unwrap(); sha256(&w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()) };

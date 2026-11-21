@@ -246,6 +246,11 @@ fn main() {
     let nw = read_u32() as usize;
     let wit = read_words(nw);
     let perm = read_words(ins.len());
+    // the core's condition on the mode (prover/methods/guest/src/main.rs: the mode is the witness's first word, an empty
+    // trie's root is zero in both modes), and the witness must open the EMPTY trie: every coin goes into a trie of
+    // nothing else, so a witness of another root cannot carry coins the snapshot does not have
+    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
+    assert!(wit.len() >= 9 && wit[1..9] == [0u32; 8], "trie: the witness is not of the empty trie");
     let c2b = env::cycle_count();
     let troot = ttree::apply_stream_perm(&wit, &[], &ins, Some(&perm)).expect("trie");
     let c3 = env::cycle_count();
