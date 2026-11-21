@@ -1651,11 +1651,13 @@ dependencies = [
 name = "ts-anchor"
 version = "0.0.0"
 dependencies = [
+ "bincode",
  "bitcoin",
  "hazync-coinbase-smt",
  "libzync",
  "num-bigint",
  "risc0-zkvm",
+ "serde",
  "serde_json",
  "sha2",
  "swiftsync-verify",

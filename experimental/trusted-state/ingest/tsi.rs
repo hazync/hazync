@@ -277,3 +277,61 @@ pub fn empty_sys() -> Vec<[u8; 32]> {
     for d in 1..=256 { e[d] = node_sys(&e[d - 1], &e[d - 1]); }
     e
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The split BIP30 receipt (TRUSTED_STATE.md §13.1): the tree's 2^d subtrees at depth d (keys grouped by their first d
+// bits, big-endian) built by independent PIECE receipts, each a contiguous prefix range [p_lo, p_hi); the combine
+// checks the pieces tile 0..2^d and carry, between them, the whole entry chain the chunks emitted, then folds the 2^d
+// subtree roots up d levels.
+
+/// A piece's journal: [d, p_lo, p_hi, e_in(8), e_out(8), e_n, r_in(8), r_out(8), r_n], then 8 words per subtree root.
+pub const PIECE_HDR_WORDS: usize = 37;
+pub const MAX_DEPTH: u32 = 16;
+
+/// Cut bits of the `controls` build ONLY (see bip30/Cargo.toml): each names one check, which the build then skips.
+pub const CUT_BOUNDS: u32 = 1;  // piece: 1 <= d <= MAX_DEPTH, p_lo < p_hi <= 2^d
+pub const CUT_RANGE: u32 = 2;   // piece: every entry's prefix in [p_lo, p_hi)
+pub const CUT_ORDER: u32 = 4;   // piece: each list strictly increasing, no key in both (no REPEATABLE txid with live coins)
+pub const CUT_TILE: u32 = 8;    // combine: one depth; the ranges tile 0..2^d in order
+pub const CUT_ECHAIN: u32 = 16; // combine: the entry chain runs from zero, links, and ends at the chunks' smt_chain
+pub const CUT_ECOUNT: u32 = 32; // combine: the pieces' entry counts add up to the chunks' smt_n
+pub const CUT_RCHAIN: u32 = 64; // combine: the REPEATABLE chain runs from zero and links
+
+/// One step of an entry chain: SHA-256(c ‖ txid ‖ value LE). The chunks' smt_chain is this over (txid, live count) in
+/// file order (`ChunkState::close_group`); a piece's REPEATABLE chain is this over (txid, REPEATABLE).
+pub fn chain_step(c: &[u8; 32], k: &[u8; 32], v: u32) -> [u8; 32] {
+    let mut p = [0u8; 68];
+    p[..32].copy_from_slice(c);
+    p[32..64].copy_from_slice(k);
+    p[64..].copy_from_slice(&v.to_le_bytes());
+    sha(&p)
+}
+
+/// The first `d` bits of a key, big-endian (the tree's path order: bit i is key[i/8] >> (7 - i%8)).
+pub fn prefix_of(k: &[u8; 32], d: u32) -> u32 {
+    if d == 0 { return 0; }
+    (u32::from_be_bytes(k[..4].try_into().unwrap()) >> (32 - d)) as u32
+}
+
+/// The subtree roots at depth `d` of the prefixes p_lo..p_hi, from `e` sorted by key. An entry whose prefix is outside
+/// the range is in no subtree (the piece refuses it unless CUT_RANGE).
+pub fn piece_roots(e: &[([u8; 32], u32)], d: u32, p_lo: u32, p_hi: u32, empty: &[[u8; 32]],
+                   leaf: &dyn Fn(&[u8; 32], u32) -> [u8; 32], node: &dyn Fn(&[u8; 32], &[u8; 32]) -> [u8; 32]) -> Vec<[u8; 32]> {
+    let mut out = Vec::with_capacity((p_hi - p_lo) as usize);
+    for p in p_lo..p_hi {
+        let a = e.partition_point(|x| prefix_of(&x.0, d) < p);
+        let b = e.partition_point(|x| prefix_of(&x.0, d) <= p);
+        out.push(smt_bulk(&e[a..b.max(a)], d as usize, empty, leaf, node));
+    }
+    out
+}
+
+/// Fold subtree roots (prefix order) up to the root: pairs (2p, 2p+1) level by level. An odd tail is carried up
+/// unpaired, which only a set that does not tile 0..2^d can reach (refused unless CUT_TILE).
+pub fn smt_fold(mut r: Vec<[u8; 32]>, node: &dyn Fn(&[u8; 32], &[u8; 32]) -> [u8; 32]) -> [u8; 32] {
+    if r.is_empty() { return [0; 32]; }
+    while r.len() > 1 {
+        r = r.chunks(2).map(|c| if c.len() == 2 { node(&c[0], &c[1]) } else { c[0] }).collect();
+    }
+    r[0]
+}

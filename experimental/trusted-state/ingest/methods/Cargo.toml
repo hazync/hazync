@@ -8,4 +8,4 @@ publish = false
 risc0-build = { version = "=3.0.7", features = ["unstable"] }
 
 [package.metadata.risc0]
-methods = ["guest", "chunk", "combine"]
+methods = ["guest", "chunk", "combine", "bip30", "join"]

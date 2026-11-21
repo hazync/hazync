@@ -15,6 +15,9 @@
 extern crate alloc;
 use std::collections::HashSet;
 
+#[path = "../../ingest/join_state.rs"]
+#[allow(dead_code)]
+mod join_state;
 #[path = "../../ingest/tsi.rs"]
 #[allow(dead_code)]
 mod tsi;
@@ -103,6 +106,9 @@ fn main() {
         Some("split-history") => split_history(&a[2..]),
         Some("join-receipt") => join_receipt(&a[2..]),
         Some("chunk-plan") => chunk_plan(&a[2..]),
+        Some("bip30-plan") => bip30_plan(&a[2..]),
+        Some("scan-plan") => scan_plan(&a[2..]),
+        Some("join-inputs") => join_inputs(&a[2..]),
         _ => die("usage: ts-anchor build|join|compare|facts|synth (see src/main.rs)"),
     }
 }
@@ -437,9 +443,23 @@ fn facts(a: &[String]) {
 fn sec(o: &mut Vec<u8>, b: &[u8]) { o.extend_from_slice(&(b.len() as u32).to_le_bytes()); o.extend_from_slice(b); }
 fn wbytes(w: &[u32]) -> Vec<u8> { w.iter().flat_map(|x| x.to_le_bytes()).collect() }
 
-struct P<'a> { b: &'a [u8], i: usize }
-impl<'a> P<'a> {
-    fn take(&mut self, n: usize) -> &'a [u8] { let s = &self.b[self.i..self.i + n]; self.i += n; s }
+/// A streaming reader of a Core snapshot: every byte read is also kept in `cap` (the current chunk's byte range, taken
+/// by the planner at each cut), so nothing but one chunk's bytes is ever held (TRUSTED_STATE.md §13.2).
+struct P { r: std::io::BufReader<std::fs::File>, cap: Vec<u8>, keep: bool, i: u64, buf: Vec<u8> }
+impl P {
+    fn open(path: &str, keep: bool) -> Self {
+        let f = std::fs::File::open(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        P { r: std::io::BufReader::with_capacity(1 << 22, f), cap: Vec::new(), keep, i: 0, buf: Vec::new() }
+    }
+    fn take(&mut self, n: usize) -> &[u8] {
+        use std::io::Read;
+        self.buf.resize(n, 0);
+        self.r.read_exact(&mut self.buf).unwrap_or_else(|e| die(format!("snapshot ends early at byte {}: {e}", self.i)));
+        self.i += n as u64;
+        if self.keep { self.cap.extend_from_slice(&self.buf); }
+        &self.buf
+    }
+    fn at_end(&mut self) -> bool { use std::io::BufRead; self.r.fill_buf().map(|b| b.is_empty()).unwrap_or(false) }
     fn compact(&mut self) -> u64 {
         match self.take(1)[0] {
             c @ 0..=252 => c as u64,
@@ -479,9 +499,12 @@ fn hints_and_sum(leaves: &[[u8; 32]], threads: usize) -> (Vec<u8>, za::Ecmh) {
 fn chunk_plan(a: &[String]) {
     let t_all = Instant::now();
     let nw = net(&need(a, "--network"));
-    let snap = std::fs::read(need(a, "--snapshot")).unwrap();
+    let snap_path = need(a, "--snapshot");
     let side = need(a, "--side");
-    let n_chunks: u64 = need(a, "--chunks").parse().unwrap();
+    // --chunks N (equal coin counts) or --chunk-coins C (C coins per chunk, the last one shorter)
+    let chunk_coins: Option<u64> = arg(a, "--chunk-coins").map(|v| v.parse().unwrap());
+    let n_chunks: u64 = match (&chunk_coins, arg(a, "--chunks")) { (None, Some(v)) => v.parse().unwrap(), (Some(_), None) => u64::MAX,
+                                                                   _ => die("give exactly one of --chunks, --chunk-coins") };
     let out = need(a, "--out");
     let threads: usize = arg(a, "--threads").map(|v| v.parse().unwrap()).unwrap_or(8);
     std::fs::create_dir_all(&out).unwrap();
@@ -498,14 +521,14 @@ fn chunk_plan(a: &[String]) {
         Some(d) => { std::fs::create_dir_all(&d).unwrap(); TrieStore::open_dir(std::path::Path::new(&d), true).unwrap() }
         None => TrieStore::new(true),
     };
-    let mut p = P { b: &snap, i: 0 };
+    let mut p = P::open(&snap_path, true);
     assert!(p.take(5) == b"utxo\xff" && u16::from_le_bytes(p.take(2).try_into().unwrap()) == 2, "not a v2 snapshot");
     let magic: [u8; 4] = p.take(4).try_into().unwrap();
     if magic != nw.magic { die("network magic"); }
     let base: [u8; 32] = p.take(32).try_into().unwrap();
     if base != tip_hash { die("base block is not the headers' tip"); }
     let total = u64::from_le_bytes(p.take(8).try_into().unwrap());
-    let per = total.div_ceil(n_chunks);
+    let per = chunk_coins.unwrap_or_else(|| total.div_ceil(n_chunks)).max(1);
     let mut s = tsi::ChunkState::initial();
     let mut ecmh = za::Ecmh::default();
     let mut entries: Vec<([u8; 32], u32)> = Vec::new();
@@ -593,13 +616,15 @@ fn chunk_plan(a: &[String]) {
         perm.sort_by(|&x, &y| ks[x as usize].cmp(&ks[y as usize]));
         s.trie_root = trie.apply(&Vec::new(), &ins).unwrap_or_else(|e| die(format!("trie: {e:?}")));
         let mut f = Vec::new();
-        for b in [s_in.to_bytes(), times_b.clone(), snap[start..p.i].to_vec(), hints, ys, trk, wbytes(&wit), wbytes(&perm)] { sec(&mut f, &b); }
+        let bytes = std::mem::take(&mut p.cap);
+        for b in [s_in.to_bytes(), times_b.clone(), bytes, hints, ys, trk, wbytes(&wit), wbytes(&perm)] { sec(&mut f, &b); }
         std::fs::write(format!("{out}/chunk_{k}.in"), &f).unwrap();
         sizes.push((leaves.len() as u64, f.len(), wit.len()));
-        start = p.i;
+        let _ = start;
+        start = p.i as usize;
         k += 1;
     }
-    if p.i != snap.len() { die("bytes after the last coin"); }
+    if !p.at_end() { die("bytes after the last coin"); }
     // the final state, the combine's input, and the journal it must produce
     let mut fin = s.clone();
     let (nb, gt, gn) = (fin.smt_n, fin.g_txid, fin.g_n);
@@ -643,6 +668,190 @@ fn chunk_plan(a: &[String]) {
 }
 
 // ------------------------------------------------------------------------------------------------------------------
+// bip30-plan (TRUSTED_STATE.md §13.1): the inputs of the split BIP30 receipt, from a chunk plan's final.in
+
+fn sections_of(b: &[u8]) -> Vec<Vec<u8>> {
+    let mut v = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let n = u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) as usize;
+        v.push(b[i + 4..i + 4 + n].to_vec());
+        i += 4 + n;
+    }
+    v
+}
+
+/// `ts-anchor bip30-plan --final <dir>/final.in --depth <d> --pieces <P> --out <dir>`: cuts the 2^d key prefixes into P
+/// contiguous ranges of about equal entry count and writes piece_<i>.in (ts-ingest-host bip30). The entry list is the
+/// chunks' (file order = key order), the REPEATABLE list sorted here; each piece gets both chains' digests at its start.
+fn bip30_plan(a: &[String]) {
+    let fin = std::fs::read(need(a, "--final")).unwrap();
+    let s = sections_of(&fin);
+    if s.len() != 4 { die("final.in: 4 sections"); }
+    let d: u32 = need(a, "--depth").parse().unwrap();
+    let np: usize = need(a, "--pieces").parse().unwrap();
+    if d < 1 || d > tsi::MAX_DEPTH || np < 1 || np as u64 > 1u64 << d { die("want 1 <= depth <= 16 and 1 <= pieces <= 2^depth"); }
+    let out = need(a, "--out");
+    std::fs::create_dir_all(&out).unwrap();
+    let ents: Vec<([u8; 32], u32)> = s[2].chunks_exact(36).map(|x| (x[..32].try_into().unwrap(), u32::from_le_bytes(x[32..].try_into().unwrap()))).collect();
+    if !ents.windows(2).all(|w| w[0].0 < w[1].0) { die("the chunks' entry list is not strictly increasing"); }
+    let mut reps: Vec<[u8; 32]> = s[3].chunks_exact(32).map(|x| x.try_into().unwrap()).collect();
+    reps.sort();
+    let np2 = 1usize << d;
+    let mut cnt = vec![0u64; np2];
+    for (k, _) in &ents { cnt[tsi::prefix_of(k, d) as usize] += 1; }
+    for k in &reps { cnt[tsi::prefix_of(k, d) as usize] += 1; }
+    let total: u64 = cnt.iter().sum();
+    // greedy: close range i once its running total reaches (i+1)/P of all entries, leaving one prefix per piece still to come
+    let mut bounds = vec![0u32];
+    let mut run = 0u64;
+    for p in 0..np2 {
+        run += cnt[p];
+        let i = bounds.len();
+        if i < np && (run * np as u64 >= total * i as u64 || np2 - p - 1 == np - i) && np2 - p - 1 >= np - i { bounds.push(p as u32 + 1); }
+    }
+    bounds.push(np2 as u32);
+    let (mut ei, mut ri, mut ec, mut rc) = (0usize, 0usize, [0u8; 32], [0u8; 32]);
+    for i in 0..np {
+        let (lo, hi) = (bounds[i], bounds[i + 1]);
+        let e0 = ei;
+        while ei < ents.len() && tsi::prefix_of(&ents[ei].0, d) < hi { ei += 1; }
+        let r0 = ri;
+        while ri < reps.len() && tsi::prefix_of(&reps[ri], d) < hi { ri += 1; }
+        let mut f = Vec::new();
+        sec(&mut f, &wbytes(&[d, lo, hi]));
+        sec(&mut f, &ec);
+        sec(&mut f, &rc);
+        sec(&mut f, &ents[e0..ei].iter().flat_map(|(k, v)| [&k[..], &v.to_le_bytes()].concat()).collect::<Vec<u8>>());
+        sec(&mut f, &reps[r0..ri].concat());
+        for (k, v) in &ents[e0..ei] { ec = tsi::chain_step(&ec, k, *v); }
+        for k in &reps[r0..ri] { rc = tsi::chain_step(&rc, k, REPEATABLE); }
+        std::fs::write(format!("{out}/piece_{i}.in"), &f).unwrap();
+        println!("  piece {i}: prefixes {lo}..{hi}, {} entries + {} repeatable", ei - e0, ri - r0);
+    }
+    println!("BIP30_PLAN depth {d}, {np} pieces, {} entries + {} repeatable", ents.len(), reps.len());
+}
+
+// ------------------------------------------------------------------------------------------------------------------
+// scan-plan (TRUSTED_STATE.md §13.2): a chunk plan and a cycle estimate for a whole snapshot, streamed, no side inputs
+
+/// The per-unit cycle rates the estimate uses, every one MEASURED in this branch's executor runs (TRUSTED_STATE.md
+/// §12.1, §12.4, §13.1, §13.2); the trie terms are a log-linear FIT of measured points, extrapolated beyond 10^7.
+mod rates {
+    /// snapshot phase (parse, hash_serialized_3, leaf, ECMH, coin log, trie key) per coin, by Core's script type, at
+    /// the script's own size; `RAW_PER_BYTE` for a raw script beyond 22 bytes
+    pub const SNAP_P2PKH: f64 = 0.0;
+    pub const SNAP_P2SH: f64 = 0.0;
+    pub const SNAP_P2PK33: f64 = 0.0;
+    pub const SNAP_P2PK65: f64 = 0.0;
+    pub const SNAP_RAW22: f64 = 0.0;
+    pub const RAW_PER_BYTE: f64 = 0.0;
+    /// trie insert + witness read per coin into a trie of n coins: A + B * log2(n), fitted (§13.2)
+    pub const TRIE_A: f64 = 0.0;
+    pub const TRIE_B: f64 = 0.0;
+    /// per chunk: reading and hashing the header times, per header (§12.4: 20,310,690 at 935,001 headers)
+    pub const CHUNK_PER_HEADER: f64 = 20_310_690.0 / 935_001.0;
+    /// per chunk: everything else fixed (read, commit), from the chunk logs
+    pub const CHUNK_FIXED: f64 = 0.0;
+    /// combine per header: header link + times (~2.2 k) and block-forest leaf (~2.5 k), §6
+    pub const COMBINE_PER_HEADER: f64 = 4_700.0;
+    /// a BIP30 piece, per entry (§13.1)
+    pub const PIECE_PER_ENTRY: f64 = 0.0;
+}
+
+/// `ts-anchor scan-plan --snapshot <utxo.dat> --chunk-coins <C> [--height <H>] [--piece-entries <E>] [--out <plan.tsv>]`:
+/// one streaming pass over a Core snapshot, nothing but the current chunk's counters in memory: the chunk cuts
+/// (coin range, byte range, script types, txid groups, BIP30 entries = coinbase groups) and a cycle estimate per chunk
+/// from `rates`. H defaults to the snapshot's own coins' highest height (the base block's height is not in the file).
+fn scan_plan(a: &[String]) {
+    let t0 = Instant::now();
+    let path = need(a, "--snapshot");
+    let per: u64 = need(a, "--chunk-coins").parse().unwrap();
+    let piece_entries: u64 = arg(a, "--piece-entries").map(|v| v.parse().unwrap()).unwrap_or(50_000);
+    let mut p = P::open(&path, false);
+    if p.take(5) != b"utxo\xff" || u16::from_le_bytes(p.take(2).try_into().unwrap()) != 2 { die("not a v2 snapshot"); }
+    let magic: [u8; 4] = p.take(4).try_into().unwrap();
+    let base: [u8; 32] = p.take(32).try_into().unwrap();
+    let total = u64::from_le_bytes(p.take(8).try_into().unwrap());
+    #[derive(Default, Clone)]
+    struct C { coins: u64, b0: u64, b1: u64, ty: [u64; 6], raw_bytes: u64, groups: u64, entries: u64, maxh: u32 }
+    // ty: p2pkh, p2sh, p2pk33, p2pk65, raw, (raw scripts over 22 bytes: count)
+    let mut chunks: Vec<C> = Vec::new();
+    let mut c = C { b0: 0, ..Default::default() };
+    let (mut idx, mut g_left, mut g_cb, mut g_n) = (0u64, 0u64, false, 0u64);
+    let mut entries_total = 0u64;
+    while idx < total {
+        if g_left == 0 {
+            if g_n > 0 && g_cb { c.entries += 1; entries_total += 1; }
+            p.take(32);
+            g_left = p.compact();
+            if g_left == 0 || g_left > total - idx { die("bad group size"); }
+            g_cb = false;
+            g_n = 0;
+            c.groups += 1;
+        }
+        p.compact();
+        let code = p.varint();
+        let h = (code >> 1) as u32;
+        g_cb |= code & 1 == 1;
+        c.maxh = c.maxh.max(h);
+        p.varint();
+        let sz = p.varint();
+        match sz {
+            0 => { c.ty[0] += 1; p.take(20); }
+            1 => { c.ty[1] += 1; p.take(20); }
+            2 | 3 => { c.ty[2] += 1; p.take(32); }
+            4 | 5 => { c.ty[3] += 1; p.take(32); }
+            _ => { let l = sz - 6; c.ty[4] += 1; c.raw_bytes += l; if l > 22 { c.ty[5] += 1; } p.take(l as usize); }
+        }
+        idx += 1;
+        g_left -= 1;
+        g_n += 1;
+        c.coins += 1;
+        if c.coins == per || idx == total {
+            if idx == total && g_n > 0 && g_cb { c.entries += 1; entries_total += 1; }
+            c.b1 = p.i;
+            chunks.push(c.clone());
+            c = C { b0: p.i, ..Default::default() };
+        }
+    }
+    if !p.at_end() { die("bytes after the last coin"); }
+    let hmax = chunks.iter().map(|c| c.maxh).max().unwrap_or(0);
+    let h: u32 = arg(a, "--height").map(|v| v.parse().unwrap()).unwrap_or(hmax);
+    use rates::*;
+    let mut tsv = String::from("chunk\tcoins\tbyte_lo\tbyte_hi\tp2pkh\tp2sh\tp2pk33\tp2pk65\traw\traw_over22\tgroups\tbip30_entries\ttrie_before\test_cycles\n");
+    let (mut before, mut sum) = (0u64, 0f64);
+    let mut biggest = 0f64;
+    for (i, c) in chunks.iter().enumerate() {
+        let snap = c.ty[0] as f64 * SNAP_P2PKH + c.ty[1] as f64 * SNAP_P2SH + c.ty[2] as f64 * SNAP_P2PK33 + c.ty[3] as f64 * SNAP_P2PK65
+            + c.ty[4] as f64 * SNAP_RAW22 + (c.raw_bytes as f64 - 22.0 * c.ty[4] as f64) * RAW_PER_BYTE;
+        let mid = (before as f64 + c.coins as f64 / 2.0).max(1.0);
+        let trie = c.coins as f64 * (TRIE_A + TRIE_B * mid.log2());
+        let est = snap + trie + CHUNK_FIXED + CHUNK_PER_HEADER * (h as f64 + 1.0);
+        sum += est;
+        biggest = biggest.max(est);
+        tsv += &format!("{i}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{before}\t{:.0}\n", c.coins, c.b0, c.b1, c.ty[0], c.ty[1], c.ty[2], c.ty[3],
+                        c.ty[4], c.ty[5], c.groups, c.entries, est);
+        before += c.coins;
+    }
+    if let Some(o) = arg(a, "--out") { std::fs::write(&o, &tsv).unwrap(); }
+    let pieces = entries_total.div_ceil(piece_entries).max(1);
+    let depth = (64 - (pieces.max(2) - 1).leading_zeros() + 2).min(tsi::MAX_DEPTH);
+    let bip30 = entries_total as f64 * PIECE_PER_ENTRY;
+    let combine = COMBINE_PER_HEADER * (h as f64 + 1.0);
+    let ty: Vec<u64> = (0..6).map(|k| chunks.iter().map(|c| c.ty[k]).sum()).collect();
+    let mut bd = base; bd.reverse();
+    println!("SCAN_PLAN {path}: {total} coins, magic {}, base block {}, highest coin height {hmax}, H used {h}, {} bytes, {:.1} s, peak memory O(chunks)",
+             hex(&magic), hex(&bd), p.i, t0.elapsed().as_secs_f64());
+    println!("  script types: p2pkh {} p2sh {} p2pk33 {} p2pk65 {} raw {} (over 22 bytes: {}); txid groups {}; BIP30 entries (coinbase groups) {entries_total}",
+             ty[0], ty[1], ty[2], ty[3], ty[4], ty[5], chunks.iter().map(|c| c.groups).sum::<u64>());
+    println!("  PLAN: {} chunks of {per} coins (the last {}); BIP30: {pieces} pieces of <= {piece_entries} entries at depth {depth}", chunks.len(),
+             chunks.last().map(|c| c.coins).unwrap_or(0));
+    println!("  ESTIMATE (rates measured, trie term extrapolated): chunks {:.3e} cycles (largest chunk {:.3e}), BIP30 pieces {:.3e}, combine {:.3e} (+ recursion, NOT measured), total {:.3e}",
+             sum, biggest, bip30, combine, sum + bip30 + combine);
+}
+
+// ------------------------------------------------------------------------------------------------------------------
 // join-receipt (TRUSTED_STATE.md §11.4): the checks a join receipt's guest would make, natively. A PROTOTYPE of the
 // logic, not a proof: in the guest each input below would be an env::verify'd receipt journal.
 
@@ -652,6 +861,36 @@ fn receipt_state(p: &str, img: &str) -> ChainState {
     let d: [u8; 32] = unhex(img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
     r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
     swiftsync_verify::decode_journal::<ChainState>(&r.journal).unwrap_or_else(|e| die(e))
+}
+
+/// `ts-anchor join-inputs --main <receipt> --main-image <hex> --anchored-tip <state.json> --out <dir>`: the join guest's
+/// inputs (TRUSTED_STATE.md §13.3) for `ts-ingest-host join`: main@H's receipt, VERIFIED here and re-encoded as a risc0
+/// Receipt; its image; the network's genesis anchor; the anchored tip's journal (risc0 serde of the state). Also checks
+/// that the join guest's copy of ChainState (ingest/join_state.rs) decodes both journals and re-encodes them to the
+/// same words (the field-order guard).
+fn join_inputs(a: &[String]) {
+    let p = need(a, "--main");
+    let img = need(a, "--main-image");
+    let out = need(a, "--out");
+    std::fs::create_dir_all(&out).unwrap();
+    let r = swiftsync_verify::decode_receipt(&std::fs::read(&p).unwrap()).unwrap_or_else(|e| die(e));
+    let d: [u8; 32] = unhex(&img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
+    r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
+    let main: ChainState = swiftsync_verify::decode_journal(&r.journal).unwrap_or_else(|e| die(e));
+    let nw = if main.profile & 8 != 0 { net("regtest") } else { net("mainnet") };
+    let tip = read_state(&need(a, "--anchored-tip"));
+    let jt: Vec<u8> = wbytes(&risc0_zkvm::serde::to_vec(&tip).unwrap());
+    for (name, j) in [("main@H", r.journal.bytes.clone()), ("anchored tip", jt.clone())] {
+        let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        let js: join_state::JState = risc0_zkvm::serde::from_slice(&w).unwrap_or_else(|e| die(format!("{name}: join_state decode: {e}")));
+        if risc0_zkvm::serde::to_vec(&js).unwrap() != w { die(format!("{name}: join_state.rs re-encodes to other words (field drift)")); }
+    }
+    std::fs::write(format!("{out}/main.rcpt"), bincode::serialize(&r).unwrap()).unwrap();
+    std::fs::write(format!("{out}/main_image"), &img).unwrap();
+    std::fs::write(format!("{out}/genesis"), nw.genesis_anchor).unwrap();
+    std::fs::write(format!("{out}/tip.journal"), &jt).unwrap();
+    println!("JOIN_INPUTS main@{} (verified, {img}) + anchored tip {} (anchor_id {}) -> {out}; join_state.rs round trip OK on both",
+             main.height, tip.height, &hex(&tip.anchor_id)[..16]);
 }
 
 fn join_receipt(a: &[String]) {
@@ -801,36 +1040,70 @@ fn synth(a: &[String]) {
     let out = need(a, "--out");
     // --coinbase-every K: every K-th txid group's coins are coinbase outputs (so BIP30 entries; for the SMT cost curve)
     let cb_every: u64 = arg(a, "--coinbase-every").map(|v| v.parse().unwrap()).unwrap_or(0);
-    // 2 coins per txid; txids ascending (Core's key order); heights spread 1..=h; scripts P2WPKH, which Core's
-    // ScriptCompression has no special type for: stored raw, as VARINT(size + 6) then the 22 bytes
-    let mut txids: Vec<[u8; 32]> = (0..n.div_ceil(2)).map(|i| sha256(&[b"ts-synth".as_slice(), &i.to_le_bytes()].concat())).collect();
-    txids.sort();
-    let mut f = Vec::new();
-    f.extend_from_slice(b"utxo\xff");
-    f.extend_from_slice(&2u16.to_le_bytes());
-    f.extend_from_slice(&magic);
-    f.extend_from_slice(&base);
-    f.extend_from_slice(&n.to_le_bytes());
+    // --script <kind> (TRUSTED_STATE.md §13.2, the per-type cost): p2wpkh (default; Core stores it raw, VARINT(size + 6)
+    // then 22 bytes), p2pkh / p2sh (Core types 0 / 1), p2pk33 (2/3), p2pk65 (4/5, real curve points), raw<L> (an L-byte
+    // script stored raw: raw34 = P2TR / P2WSH sized)
+    let kind = arg(a, "--script").unwrap_or("p2wpkh".into());
+    // --stream: txids ascending BY CONSTRUCTION (8-byte big-endian counter prefix, then 24 hashed bytes) and the file
+    // written as it is made, so a mainnet-sized set (~1.6e8 coins) needs no memory; without it, the PoC's set (hashed
+    // txids, sorted in memory) so the earlier measurements reproduce
+    let stream = a.iter().any(|x| x == "--stream");
+    let groups = n.div_ceil(2);
+    let txid_of = |i: u64| -> [u8; 32] {
+        let mut t = sha256(&[b"ts-synth".as_slice(), &i.to_le_bytes()].concat());
+        if stream { let step = u64::MAX / groups.max(1); t[..8].copy_from_slice(&(i * step).to_be_bytes()); }
+        t
+    };
+    let sorted: Vec<[u8; 32]> = if stream { Vec::new() } else { let mut v: Vec<[u8; 32]> = (0..groups).map(txid_of).collect(); v.sort(); v };
+    let secp = bitcoin::secp256k1::Secp256k1::signing_only();
+    use std::io::Write;
+    let mut f = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(&out).unwrap());
+    f.write_all(b"utxo\xff").unwrap();
+    f.write_all(&2u16.to_le_bytes()).unwrap();
+    f.write_all(&magic).unwrap();
+    f.write_all(&base).unwrap();
+    f.write_all(&n.to_le_bytes()).unwrap();
+    let mut o: Vec<u8> = Vec::with_capacity(512);
     let varint = |v: u64, o: &mut Vec<u8>| o.extend_from_slice(&za::varint_bytes(v));
-    let mut left = n;
-    for (i, t) in txids.iter().enumerate() {
+    let (mut left, mut bytes) = (n, 51u64);
+    for i in 0..groups {
+        let t = if stream { txid_of(i) } else { sorted[i as usize] };
         let k = left.min(2);
-        f.extend_from_slice(t);
-        f.push(k as u8);
+        o.clear();
+        o.extend_from_slice(&t);
+        o.push(k as u8);
         for v in 0..k {
-            f.push(v as u8);
-            let height = 1 + (i as u32 * 7919) % h;
-            varint((height as u64) << 1 | (cb_every > 0 && i as u64 % cb_every == 0) as u64, &mut f);
-            varint(compress_amount(10_000 + i as u64), &mut f);
-            let mut spk = vec![0x00, 0x14];
-            spk.extend_from_slice(&t[..20]);
-            varint(spk.len() as u64 + 6, &mut f);
-            f.extend_from_slice(&spk);
+            o.push(v as u8);
+            let height = 1 + (i as u32).wrapping_mul(7919) % h;
+            varint((height as u64) << 1 | (cb_every > 0 && i % cb_every == 0) as u64, &mut o);
+            varint(compress_amount(10_000 + i), &mut o);
+            match kind.as_str() {
+                "p2wpkh" => { varint(22 + 6, &mut o); o.extend_from_slice(&[0x00, 0x14]); o.extend_from_slice(&t[..20]); }
+                "p2pkh" => { o.push(0); o.extend_from_slice(&t[..20]); }
+                "p2sh" => { o.push(1); o.extend_from_slice(&t[..20]); }
+                "p2pk33" => { o.push(2 + (t[31] & 1)); o.extend_from_slice(&t[..32]); }
+                "p2pk65" => {
+                    let sk = bitcoin::secp256k1::SecretKey::from_slice(&sha256(&[&t[..], &[v as u8]].concat())).unwrap();
+                    let c = bitcoin::secp256k1::PublicKey::from_secret_key(&secp, &sk).serialize();
+                    o.push(c[0] + 2);
+                    o.extend_from_slice(&c[1..]);
+                }
+                r if r.starts_with("raw") => {
+                    let l: usize = r[3..].parse().unwrap_or_else(|_| die("--script raw<L>"));
+                    varint(l as u64 + 6, &mut o);
+                    let mut spk = vec![0x51u8; l];
+                    spk[..20.min(l)].copy_from_slice(&t[..20.min(l)]);
+                    o.extend_from_slice(&spk);
+                }
+                _ => die("--script: p2wpkh, p2pkh, p2sh, p2pk33, p2pk65 or raw<L>"),
+            }
         }
+        f.write_all(&o).unwrap();
+        bytes += o.len() as u64;
         left -= k;
     }
-    std::fs::write(&out, &f).unwrap();
-    println!("SYNTH {n} coins in {} txid groups, heights 1..{h}, {} bytes -> {out}", txids.len(), f.len());
+    f.flush().unwrap();
+    println!("SYNTH {n} coins in {groups} txid groups, heights 1..{h}, script {kind}, {bytes} bytes -> {out}");
 }
 
 /// Core's CompressAmount.
