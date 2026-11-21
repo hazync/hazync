@@ -747,17 +747,20 @@ mod rates {
     pub const SNAP_P2PK65: f64 = 9_227.6;
     pub const SNAP_RAW22: f64 = 7_167.6;
     pub const RAW_PER_BYTE: f64 = 21.1; // (raw100 8,814.5 - raw22 7,167.6) / 78
-    /// trie insert + witness read per coin into a trie of n coins: A + B * log2(n), fitted (§13.2)
-    pub const TRIE_A: f64 = 0.0;
-    pub const TRIE_B: f64 = 0.0;
+    /// trie insert + witness read per coin into a trie of n coins: A + B * log2(n), n = the chunk's mid-point trie
+    /// size; least-squares fit of (trie + trie_read) / coins over the 16 chunks of the 10 M run (16 x 625 k, executor,
+    /// laptop, 21.11.2026; 2,282.6 per coin at n = 312,500 .. 3,793.2 at n = 9,687,500; residuals within +-51), §13.2
+    pub const TRIE_A: f64 = -3_135.1;
+    pub const TRIE_B: f64 = 299.59;
     /// per chunk: reading and hashing the header times, per header (§12.4: 20,310,690 at 935,001 headers)
     pub const CHUNK_PER_HEADER: f64 = 20_310_690.0 / 935_001.0;
     /// per chunk: the rest of the input read (S_in, ~111 regtest header times included) and the commit: ~1.05 M
     pub const CHUNK_FIXED: f64 = 1_055_000.0;
     /// combine per header: header link + times (~2.2 k) and block-forest leaf (~2.5 k), §6
     pub const COMBINE_PER_HEADER: f64 = 4_700.0;
-    /// a BIP30 piece, per entry (§13.1)
-    pub const PIECE_PER_ENTRY: f64 = 0.0;
+    /// a BIP30 piece, per entry: 4 pieces of the 10 M run, 6,525,914,643 user cycles for 50,000 entries (each piece
+    /// 130,518.0 - 130,518.8 per entry, the per-piece fixed part is lost in the rounding), 21.11.2026, §13.1
+    pub const PIECE_PER_ENTRY: f64 = 130_518.3;
 }
 
 /// `ts-anchor scan-plan --snapshot <utxo.dat> --chunk-coins <C> [--height <H>] [--piece-entries <E>] [--out <plan.tsv>]`:

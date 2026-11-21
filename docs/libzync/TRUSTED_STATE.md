@@ -764,3 +764,135 @@ independent subtree receipts, NOT built). Everything in this paragraph is a proj
 - The free inputs are unchanged from the one-shot ingest (§11.1): the tracked and REPEATABLE lists.
 - No core guest file changed (§7 still holds: `git diff origin/main...HEAD -- prover/methods libzync coinbase-smt
   accumulator` is empty).
+
+## 13. Split BIP30 receipt, streaming planner, and the cost model (fourth PoC step, 21.11.2026)
+
+Two of §12.6's "not built" items are now built (commits `92ee193`, `540cdbe`): the BIP30 tree split by key prefix into
+independent piece receipts (§13.1), and a streaming planner, `ts-anchor scan-plan`, that reads a snapshot once and
+estimates the cycles of the whole ingest (§13.2). The join receipt guest is §13.3. Everything is still executor only,
+dev mode, on the laptop (WSL2, 16 threads); nothing was proved, and no core guest file changed
+(`reproduce/LIBZYNC_IDS` is untouched; the core image stays `46666b6f`).
+
+This section keeps two kinds of number apart. **MEASURED** means a guest's own cycle count, `/usr/bin/time`, or a
+tool's output on this laptop, on the input named. **PROJECTED** means arithmetic on measured rates, applied to an input
+I did not execute. Every number carries one of the two labels.
+
+### 13.1 The split BIP30 receipt, measured at 10 M coins
+
+**Design.** `ts-anchor bip30-plan` cuts the 2^d key prefixes of the BIP30 tree into P contiguous ranges of about equal
+entry count and writes one input per piece; `ts-ingest-host bip30` executes the piece image, which builds the subtree
+roots of its range and commits them with the entry and REPEATABLE chain digests at its start and end. The combine
+(`--bip30`) verifies the pieces under the piece image id, requires the ranges to tile 0..2^d in order and the chains to
+link to the entry list it closes itself, and folds the subtree roots into the root. `bip30_controls.sh` drives the
+controls on regtest 104 (each refusal shown to come from the one check cut in the controls build).
+
+**Run** (MEASURED, 21.11.2026). The 10 M synthetic set of §12.4 (P2WPKH, 2 coins per txid, every 100th txid group a
+coinbase, 50,000 BIP30 entries, regtest headers to 110), `run_chunked.sh` with 16 chunks, the planner's trie on disk,
+`BIP30_DEPTH=6 BIP30_PIECES=4`:
+
+| step | user cycles | padded cycles | segments | peak RSS | wall |
+|---|---|---|---|---|---|
+| planner (`chunk-plan`, 8 threads, disk trie) | (native) | | | 7.89 GB (mostly the mapped trie, §12.4) | 2,743 s |
+| 16 chunks of 625,000 coins | **106,473,473,436** (5,943,460,007 – 6,895,586,967 each) | 126,515,412,992 | 120,660 | 856 MB – 1.16 GB | 152 – 178 s each |
+| BIP30 piece 0 (13,268 entries) | 1,731,713,187 | 1,803,026,432 | 1,720 | 49.7 MB | 30.7 s |
+| BIP30 piece 1 (12,498) | 1,631,217,400 | 1,698,693,120 | 1,620 | 49.3 MB | 28.3 s |
+| BIP30 piece 2 (12,504) | 1,631,999,115 | 1,698,693,120 | 1,620 | 49.3 MB | 28.2 s |
+| BIP30 piece 3 (11,730) | 1,530,984,941 | 1,594,097,664 | 1,521 | 49.2 MB | 28.3 s |
+| combine (`--bip30`, 16 chunks + 4 pieces) | **804,695** | 1,048,576 | 1 | 16 MB | 0.05 s |
+
+The combine's journal equals the planner's expected journal byte for byte (`COMBINE_MATCH`), so the split tree has
+the same root as the inline one. The 16 chunks reproduce §12.4's 16 × 625 k run to the cycle (the chunk image did not
+change). Inside the combine (MEASURED, the guest's own counts): verify 102,797, read 42,465, chain + headers 260,941,
+close + `hash_serialized_3` + entries 13,194, tree from the subtree roots 61,712, forest 309,264, commit 6,259.
+
+What the split buys (COMPUTED from the table): the four pieces cost 6,525,914,643 user cycles in all, against the
+inline tree's 6,438,800,910 in §12.4's combine, +1.4%; the largest single receipt in the BIP30 part falls from the
+6.51 G inline combine to 1.73 G (piece 0), and the pieces are independent. Per entry the pieces cost **130,518.0 –
+130,518.8**, i.e. the per-piece fixed part (read, chains and checks) is too small to show at this size.
+
+### 13.2 The cost model of `scan-plan`, and its constants from this run
+
+`ts-anchor scan-plan --snapshot <utxo.dat> --chunk-coins <C> [--height <H>]` streams a snapshot once (nothing but the
+current chunk's counters in memory), cuts it into chunks of C coins, counts Core's script types, txid groups and BIP30
+entries (coinbase groups) per chunk, and estimates each chunk's cycles with the rates in `mod rates`
+(`experimental/trusted-state/anchor/src/main.rs`):
+
+    chunk  = snapshot phase by script type + coins × (TRIE_A + TRIE_B × log2(mid)) + CHUNK_FIXED + CHUNK_PER_HEADER × (H + 1)
+    BIP30  = entries × PIECE_PER_ENTRY
+    combine = COMBINE_PER_HEADER × (H + 1)          (+ resolving the receipts, NOT measured)
+
+`mid` is the trie size at the chunk's mid-point (coins before it + half its own). The snapshot-phase rates per script
+type (one 100,000-coin chunk per type, `synth --script`, 21.11.2026, MEASURED, as recorded in `rates`): P2PKH 7,326.1,
+P2SH 7,239.7, P2PK33 7,386.9, P2PK65 9,227.6, raw 22-byte (P2WPKH) 7,167.6, +21.1 per raw byte beyond 22.
+
+**The three constants left open, filled from the 10 M run only** (COMPUTED from MEASURED guest counts):
+
+- **TRIE_A, TRIE_B.** The per-coin trie term of chunk i is (`trie_read` + `trie`) / 625,000 from its `R0VM … TSC` line;
+  x_i = log2(625,000 · i + 312,500). Measured: chunk 0 (9,605,504 + 1,417,037,629) / 625,000 = **2,282.6** at
+  x = 18.2535; chunk 8 (174,787,150 + 2,051,088,924) / 625,000 = **3,561.4** at x = 22.3410; chunk 15 (211,552,179 +
+  2,159,180,122) / 625,000 = **3,793.2** at x = 23.2077. Least squares over all 16 points: mean x = 21.841817, mean
+  y = 3,408.4912, Sxx = 27.566870, Sxy = 8,258.7427, so **TRIE_B = Sxy / Sxx = 299.59** cycles per doubling and
+  **TRIE_A = 3,408.4912 − 299.59 × 21.841817 = −3,135.1**. Residuals −50.8 (chunk 0) .. +27.7 .. −24.5 (chunk 15); the
+  fit reproduces the 16 chunks' trie total, 34,084,912,032, exactly. The negative A only means the line is used
+  above n ≈ 2^18; it is not a cost.
+- **PIECE_PER_ENTRY** = (1,731,713,187 + 1,631,217,400 + 1,631,999,115 + 1,530,984,941) / 50,000 = 6,525,914,643 /
+  50,000 = **130,518.3** user cycles per entry.
+
+**Check against the same run** (COMPUTED: the model on `s10m.dat`, `--chunk-coins 625000 --height 110`, against the
+MEASURED chunks). Model chunks 105,777,817,720 vs measured 106,473,473,436: **−0.65%** (−695,655,716), per chunk −0.07%
+(chunk 0) to −0.92% (chunk 3). This is not an independent test, since the trie constants come from these chunks; the
+residue is the other terms: the snapshot phase measured 7,216 – 7,232 per coin here against the 100 k-chunk rate
+7,167.6, and the chunk read phase measured 6.51 – 6.56 M against the model's ≈1.06 M fixed part. The model's BIP30 term,
+6.526e9, equals the measured pieces by construction. `scan-plan` itself (MEASURED) took 0.8 s and 7.1 MB peak RSS on the
+458 MB file.
+
+**A caution on the trie extrapolation.** The residuals bend (positive in the middle, negative at both ends): the local
+slope over chunks 8..15 is (3,793.2 − 3,561.4) / (23.2077 − 22.3410) = **267.4** per doubling (COMPUTED), below the
+fit's 299.6. Extrapolated 4.04 doublings further (to a 1.6e8 trie), the fit is therefore likely high, by up to
+(299.6 − 267.4) × 4.04 ≈ 130 cycles per coin at the last chunk (COMPUTED); I keep the fit, which errs on the side of
+cost.
+
+### 13.3 The join receipt guest
+
+The join image (`ingest/methods/join`, inputs from `ts-anchor join-inputs`) checks a real main@H receipt, the chunked
+ingest's combine receipt and the anchored lineage's tip against each other, as §11.3 specifies; `join_controls.sh`
+drives it on regtest H = 104 (the REAL `block_104.rcpt`, image `eb2cd424`, verified first; the anchored tip at 112),
+with every control refused by the real image and accepted by the controls build with its one check cut. I do not
+repeat its numbers here; this section is about the measurement above.
+
+### 13.4 Projection at 1.6e8 coins (PROJECTED, not a measurement)
+
+**Input.** No snapshot of that size is on this laptop and I did not run `dumptxoutset`, so I streamed a synthetic one
+through a FIFO into `scan-plan` (nothing written to disk): `ts-anchor synth --coins 160000000 --height 935000 --base
+<any> --coinbase-every 100 --stream --out <fifo>` and `ts-anchor scan-plan --snapshot <fifo> --chunk-coins 625000
+--height 935000`. Same recipe as the 10 M set: P2WPKH, 2 coins per txid, every 100th group a coinbase, so 80,000,000
+txid groups and **800,000 BIP30 entries**; 7,687,063,513 bytes; header times to H = 935,000. MEASURED for the tools
+only: synth + scan-plan 25.4 s wall, scan-plan peak RSS 3.1 MB, synth 7.4 MB.
+
+| part | projected cycles (`scan-plan`) | projected segments | projected memory |
+|---|---|---|---|
+| 256 chunks of 625,000 coins | **1.888e12** (1,887,988,483,881; 11,800 per coin; first chunk 5.96e9, largest 7.644e9) | ≈ 2.14e6 (≈ 8,650 for the largest) | ≈ 1.41 GB peak RSS for the last chunk |
+| BIP30: 16 pieces of ≤ 50,000 entries, depth 6 | **1.044e11** | ≈ 1.04e5 | not projected (measured 49 MB at ~12.5 k entries) |
+| combine (935,001 headers + forest) | **4.395e9** + resolving 272 receipts (recursion, NOT measured) | ≈ 4.2e3 | not projected (measured 16 MB at 16 + 4 receipts) |
+| **total** | **1.997e12** | **≈ 2.25e6** | |
+
+How the two derived columns were computed:
+
+- **Segments** = projected user cycles × the MEASURED padded/user ratio of the 10 M run (chunks 126,515,412,992 /
+  106,473,473,436 = 1.1882; pieces 6,794,510,336 / 6,525,914,643 = 1.0412) / 2^20 (default segment size). The combine's
+  1.0 ratio is assumed, not measured at this size.
+- **Chunk RSS**: a least-squares line of the MEASURED peak RSS of chunks 1..15 against log2(mid) (chunk 0 has no trie
+  witness): 61.6 MB per doubling, evaluated at the last chunk's mid (log2 159,687,500 = 27.25): ≈ 1,407,000 kB. The same
+  fit on the trie witness puts the last chunk's witness at ≈ 24.0 M words (measured 13.1 M at chunk 15 of the 10 M run).
+
+**In proving time** (PROJECTED, at the header-chain zAPP's measured proving rate on one RTX PRO 6000, ≈ 0.66 M cycles/s,
+LIBZYNC.md §4, as §12.5 uses): 1.997e12 cycles ≈ 3.0e6 card-seconds ≈ 840 card-hours, ≈ $2,090 at $2.49/hr, of which
+the 256 chunks and 16 pieces are independent receipts (the largest chunk ≈ 3.2 h on one card).
+
+**What this projection does not know.** Mainnet's N and K (the live coins and the BIP30 entries at 935,000) are not
+known offline (§12.5); 1.6e8 and 800,000 are this synthetic set's, not mainnet's. Mainnet's script mix is not P2WPKH
+only: at the measured per-type rates an all-P2PK65 set would cost 2,060 more per coin than raw-22 in the snapshot phase
+(9,227.6 − 7,167.6, MEASURED rates), so a real snapshot has to go through `scan-plan` itself. The trie term is
+extrapolated 4 doublings beyond the largest measured trie (§13.2's caution). The recursion cost of resolving 272
+receipts in the combine is not measured. Against §12.5's earlier projection of ≈ 11.5 k cycles per coin, this model
+gives 11.8 k per coin at 1.6e8.
