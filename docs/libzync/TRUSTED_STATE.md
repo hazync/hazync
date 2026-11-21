@@ -1,6 +1,6 @@
 # Trusted State: zAPPs before the backfill reaches the tip (proof of concept, planned for v0.28)
 
-Status: **EXPERIMENTAL proof of concept**, branch `feat/trusted-state-poc` (19.11.2026), laptop CPU only, not reviewed.
+Status: **EXPERIMENTAL proof of concept**, branch `feat/trusted-state` (started 19.11.2026), laptop CPU only, under review.
 Code: [`experimental/trusted-state/`](../../experimental/trusted-state/) and the host's `trusted-state` cargo feature
 (`prover/host/src/trusted_state.rs`, off in every release and CI host). **No guest change; the core image ids do not
 move** (§7). Every number below is MEASURED unless it says ESTIMATED, and says what it was measured on.
@@ -366,7 +366,7 @@ v28.0 tree the guest is built from pins only 840,000. A newer Core release may p
 | step | unit cost (MEASURED) | mainnet quantity | estimate |
 |---|---|---|---|
 | native anchor build (`ts-anchor`, one thread, in memory) | 96 s and 3.2 GB per 10^6 coins (§6) | N live coins at 935,000: **not known here** (Core's `gettxoutsetinfo` gives it) | ~96 s × N/10^6 one thread before the disk stores; the ECMH part is parallel (ASSUME_ZAPPS.md §5: 1.9 µs/coin on 16 threads) |
-| ingest receipt (optional, §8.6) | 8.8 k cycles/coin, 1.46 M cycles per BIP30 entry, 4.7 k cycles per header (§6) | N coins, K entries, 935,001 headers | 8.8×10^11 cycles per 10^8 coins + 1.46×10^11 per 10^5 entries + 4.4×10^9; at the header-chain zAPP's proven rate (2.35×10^9 cycles in 59.4 min on one RTX PRO 6000, LIBZYNC.md §4, ≈ 0.66 M cycles/s) ≈ 370 card-hours per 10^8 coins + 61 per 10^5 entries |
+| ingest receipt (**required**: §8.6 as corrected by §11.1; costed at scale in §12.5 and §13.4) | 8.8 k cycles/coin, 1.46 M cycles per BIP30 entry, 4.7 k cycles per header (§6, the one-shot guest) | N coins, K entries, 935,001 headers | 8.8×10^11 cycles per 10^8 coins + 1.46×10^11 per 10^5 entries + 4.4×10^9; at the header-chain zAPP's proven rate (2.35×10^9 user cycles in 59.4 min on one RTX PRO 6000, LIBZYNC.md §4, ≈ 0.66 M user cycles/s) ≈ 370 card-hours per 10^8 coins + 61 per 10^5 entries (user cycles: see §13.4's caveat on the padded ratio) |
 | anchored lineage 935,001 → tip | per block = main's (§5.4); block 962,000 proved in 537 s on one RTX PRO 6000 (LIBZYNC.md §4) | 40,954 blocks to 975,954 (hazync-coord's tip, 15.11.2026) | ≈ 6,100 card-hours, ≈ $15 k at $2.49/hr, from that one block's time; real blocks vary |
 | for scale: the main lineage from genesis | — | 975 k blocks | $278-295 k on PRO 6000 (WHOLE_CHAIN_COST.md, itself ESTIMATED, ±50%) |
 
@@ -395,7 +395,7 @@ HAZYNC_TS_SMT_SEED=<forged>.smt RISC0_DEV_MODE=1 host libzync-prove-range 105 10
 ts-anchor split-history --main-h scripts/zapp-regtest/receipts/a/state_104 --anchored-t <work>/out_anc/state_112 \
                         --main-t scripts/zapp-regtest/receipts/a/state_112 --scenarios scripts/zapp-regtest/chain/scenarios.json
 ts-anchor join-receipt --main scripts/zapp-regtest/receipts/a/block_104.rcpt --main-image eb2cd424… \
-                       --ingest-journal <a>.ingest.journal --anchored-tip <work>/out_anc/state_112.json
+                       --ingest-journal <a>.ingest.journal --anchored-tip <work>/out_anc/state_112.json --tip-image a4344798…
 # §11.4: a mainnet host built with HAZYNC_LIBZYNC=assumevalid, block 962,000, both images:
 HAZYNC_CHUNKS=16 HAZYNC_BLOCK=prover/block_962000.json host libzync-hints b.lzb
 HAZYNC_CHUNKS=16 HAZYNC_BLOCK=prover/block_962000.json HAZYNC_LZ_HINTS=b.lzb \
@@ -486,12 +486,27 @@ lineage's tip T (the core image). It then:
    `utxo_leaves`, `utxo_value`, `live_set`/`live_hash`, `trie_root`, `smt_root`, `block_roots`, `block_leaves`) and
    every history-free header field **from main@H's journal** (`cum_work`, `prev_nbits`, `prev_time`, `epoch_start`,
    `recent_times`, `max_time`, `profile`); `self_id`, `anchor_id`, `lineage` zero;
-2. requires the ingest's (H, tip, value, live set) = main@H's, main@H genesis-anchored, the same profile;
+2. requires the ingest's (H, tip, value, live set) = main@H's, main@H genesis-anchored, the same profile, and each
+   core journal's `self_id` = the image its receipt was verified under (main@H's = `main_image`, J_T's =
+   `tip_image`). The core aggregate verifies its previous state and its chunks under the `self_id` it is GIVEN and
+   commits it; its soundness rests on the verifier checking the final `self_id` == the image id (S1,
+   `prover/methods/guest/src/main.rs`; the host's `lz.rs` checks it on every resume). Without it, the real core image
+   run with `self_id` = a rogue image X, which commits whatever state it likes, gives a genuine core receipt of a
+   forged genesis-anchored main@H, or of a tip whose blocks were never checked, and the join would accept either;
 3. requires J_T.`anchor_id` == `link_digest(A)`. Because A's header fields were taken from main@H, this one equality
    also proves the anchor's time context and work were main@H's: rule 2 of §4 for those fields comes for free;
 4. commits the joined statement: both image ids, the genesis anchor, H and its block, T and its tip, chainwork and
    `max_time` of T, and the digests of J_H and J_T, so a split answer (§11.2) checks its main@H facts against J_H's
    roots and its anchored facts against J_T's.
+
+**What the verifier pins.** The join receipt proves its statement only relative to the image ids it is given, and it
+commits them: `main_image`, `tip_image`, `ingest_image` (the combine), `chunk_image`, `bip30_image` (zero for an
+inline BIP30 tree) and `genesis` (the network's genesis anchor). A verifier must pin **all six** and refuse a joined
+statement that names any other value; a join over images of the prover's choosing proves nothing. No pin file exists
+yet: pinning is a release step, with the ids taken from reproducible-container builds (a laptop build's ids are not
+pinnable; they move with the toolchain and paths). The ids printed by a `TS_CONTROLS=1` build must never be pinned:
+those images read a cut mask and can skip any check, and the host labels every result line of such a build
+`CONTROLS BUILD`.
 
 It needs no block forest or handover machinery: the block forest of the anchor is already inside A (ingest), and the
 link digest is the guest's own. HANDOVER.md's cross-lineage tools (`lineage`, `is_base = 2`) do not apply: a
@@ -679,6 +694,13 @@ REPEATABLE lists, §11.1). A dishonest host can only make the combine refuse.
 | A0 A1' A2, A1' = A1 with one header timestamp +1 (it executes fine on its own) | refused: chunk 1 used other header times |
 | A0 A1 A2 with a final state of one satoshi more | refused: the last chunk does not end at the final state |
 
+The chunk guest also requires its trie witness to be in counts mode (`wit[0] == 1`, the core's own condition): an
+empty trie's root is zero in both modes, so without it chunk 0 could start a trie that commits no values or counts,
+every later chunk continue it, and neither the combine nor the join would see the mode. The one-shot guest requires
+the same, and that its witness opens the empty trie. `chunk_controls.sh` (given the controls build as its fourth
+argument) feeds chunk 0 with its witness's mode word set to 0: refused by the real chunk image and by the controls
+build without a cut, executed by the controls build with that check cut (21.11.2026).
+
 ### 12.4 Chunked ingest: measured at 1 M and 10 M coins
 
 Synthetic snapshots (`ts-anchor synth`, Core's format, regtest headers to 110, P2WPKH coins, 2 per txid), with every
@@ -724,7 +746,8 @@ both planners wrote the same expected journal. The 8-chunk plan took 2,610 s (43
 the mapped trie).
 
 Where a chunk's cycles go (16 × 625 k at 10 M, the guest's own counts per coin): the snapshot phase (parse,
-`hash_serialized_3`, leaf, ECMH, coin log, trie key) is **flat at 7,216 – 7,229**; the trie insert grows with the
+`hash_serialized_3`, leaf, ECMH, coin log, trie key) is **flat at 7,216 – 7,232** (7,216.5 – 7,231.8: the `coins` count of
+each chunk's `TSC` line / 625,000, MEASURED); the trie insert grows with the
 trie it lands in: 2,267 (chunk 0, empty trie) → 2,704 (chunk 1, ~0.9 M) → 3,282 (chunk 8, ~5.3 M) → 3,455 (chunk 15,
 ~9.7 M), about 200-230 cycles per doubling; reading the trie witness grows likewise, 15 → 116 → 280 → 338 (13.1 M
 witness words in chunk 15). The per-coin total over the whole 10 M build, 10,647, happens to equal the 1 M build's in
@@ -751,7 +774,8 @@ txids + tracked + REPEATABLE at 935,000), is not known either and is given per 1
 LIBZYNC.md §4): ≈ 1.2×10^12 cycles per 10^8 coins ≈ **500 card-hours ≈ $1,250 per 10^8 coins** at $2.49/hr, spread
 over 160 independent chunk proofs of ≈ 7.4×10^9 cycles (≈ 3 h each on one card); plus the combine, ≈ 2 h + 5.5-9.3 h
 per 10^5 BIP30 entries on one card (the BIP30 tree is one receipt here; it can be split by key prefix into
-independent subtree receipts, NOT built). Everything in this paragraph is a projection.
+independent subtree receipts, NOT built). Everything in this paragraph is a projection, and its rate is in user
+cycles, which understates the chunks by about 9% (§13.4, "A bias in that rate").
 
 
 ### 12.6 Status, and what is not done
@@ -860,6 +884,16 @@ drives it on regtest H = 104 (the REAL `block_104.rcpt`, image `eb2cd424`, verif
 with every control refused by the real image and accepted by the controls build with its one check cut. I do not
 repeat its numbers here; this section is about the measurement above.
 
+The join checks each core journal's `self_id` against the image it verified that receipt under (§11.3 step 2; cut
+bit `CUT_SELF` = 32 in the controls build). Two controls drive it: main@H's journal with `self_id` changed and every
+other field as committed (what the real core image commits when it is run with a rogue `self_id`; `ts-anchor
+join-inputs --forge-main-self-id`, entering as a dev-mode claim under the real `main_image`), and the anchored tip's
+journal with `self_id` changed (`--forge-tip-self-id`). Each is refused by the real join image and by the controls
+build without a cut, and joined by the controls build with only `CUT_SELF` cut (21.11.2026), so the refusal comes from
+that check. `ts-anchor`'s native `join`, `join-inputs` and `join-receipt` make the same check (`--image` /
+`--main-image` and `--tip-image`). The six image ids and the genesis anchor the join is given must be pinned by the
+verifier (§11.3, "What the verifier pins"); no pin file exists yet, and that is a release step.
+
 ### 13.4 Projection at 1.6e8 coins (PROJECTED, not a measurement)
 
 **Input.** No snapshot of that size is on this laptop and I did not run `dumptxoutset`, so I streamed a synthetic one
@@ -888,6 +922,16 @@ How the two derived columns were computed:
 **In proving time** (PROJECTED, at the header-chain zAPP's measured proving rate on one RTX PRO 6000, ≈ 0.66 M cycles/s,
 LIBZYNC.md §4, as §12.5 uses): 1.997e12 cycles ≈ 3.0e6 card-seconds ≈ 840 card-hours, ≈ $2,090 at $2.49/hr, of which
 the 256 chunks and 16 pieces are independent receipts (the largest chunk ≈ 3.2 h on one card).
+
+**A bias in that rate.** The 0.66 M cycles/s is in USER cycles: 2,350,725,289 user cycles proved in 59.4 min, MEASURED
+(LIBZYNC.md §4). That run's padded cycles were 2,437 segments × 2^20 = 2,555,379,712, a padded/user ratio of **1.087**
+(COMPUTED), so the card proved ≈ 0.717 M padded cycles/s. The prover's work follows padded cycles, and the chunks pad
+more: 1.188 (MEASURED at 10 M, above), the pieces 1.041. At the padded rate, with each part at its own measured ratio
+(combine at 1.0, assumed): 1.888e12 × 1.1882 + 1.044e11 × 1.0412 + 4.395e9 ≈ 2.356e12 padded cycles / 0.717e6 ≈
+3.29e6 card-seconds ≈ **913 card-hours, ≈ $2,273** at $2.49/hr (PROJECTED; 919 card-hours if every part padded at
+1.188), and the largest chunk ≈ 3.5 h on one card. This assumes proving time is proportional to padded cycles across
+guests, which I have not measured. §12.5's proving-time paragraph has the same bias: its ≈ 500 card-hours per 10^8
+coins becomes ≈ 550 (≈ $1,375) at the chunks' ratio, and its ≈ 3 h per chunk ≈ 3.4 h (PROJECTED).
 
 **What this projection does not know.** Mainnet's N and K (the live coins and the BIP30 entries at 935,000) are not
 known offline (§12.5); 1.6e8 and 800,000 are this synthetic set's, not mainnet's. Mainnet's script mix is not P2WPKH

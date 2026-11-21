@@ -60,7 +60,8 @@ ctl "main@105 joined with the ingest at 104"                            $((MATCH
 ctl "main@H not genesis-anchored (dev-mode claim)"                       $GEN Jgen final.in.split.rcpt
 ctl "the verifier pins another chunk image"                              $TAIL J final.in.split.rcpt "TS_CHUNK_IMAGE=$(printf '%064d' 7)"
 ctl "the verifier expects an inline tree, the ingest is split"           $TAIL J final.in.split.rcpt TS_BIP30_IMAGE=0
-ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK)) Jlow final.in.split.rcpt
+# (main@104's own state: its self_id is main_image, not tip_image, so the self_id check refuses it as well)
+ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK|SELF)) Jlow final.in.split.rcpt
 # S1: the REAL core image run with self_id = a rogue image commits that self_id; its receipt verifies under the real id
 ctl "main@H recursed against another image (self_id != main_image)"     $SELF Jsm final.in.split.rcpt
 ctl "anchored tip recursed against another image (self_id != tip_image)" $SELF Jst final.in.split.rcpt
@@ -68,10 +69,17 @@ ctl "anchored tip recursed against another image (self_id != tip_image)" $SELF J
 want "tip claimed under another image: real join image" refused "$(join "$IH" 0 J I/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
 want "tip claimed under another image: controls, all cuts" refused "$(join "$IHC" $ALL J IC/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
 # the controls build's result lines say so (an id it prints must never be pinned); the real build's do not
-case "$(join "$IHC" 0 J IC/final.in.split.rcpt)" in *"CONTROLS BUILD"*) echo "PASS controls build labels its JOINED line";;
-  *) echo "FAIL controls build: JOINED line not labelled CONTROLS"; bad=$((bad+1));; esac
-case "$(join "$IH" 0 J I/final.in.split.rcpt)" in *"CONTROLS BUILD"*) echo "FAIL real build: JOINED line labelled CONTROLS"; bad=$((bad+1));;
-  *) echo "PASS real build's JOINED line is not labelled CONTROLS";; esac
+labelled() { env TS_CUT=0 "$1" join J "$2" 2>/dev/null | grep -a "^JOINED" | grep -ac "CONTROLS BUILD"; }
+[ "$(labelled "$IHC" IC/final.in.split.rcpt)" = 1 ] && echo "PASS controls build labels its JOINED line" \
+  || { echo "FAIL controls build: JOINED line not labelled CONTROLS"; bad=$((bad+1)); }
+[ "$(labelled "$IH" I/final.in.split.rcpt)" = 0 ] && echo "PASS real build's JOINED line is not labelled CONTROLS" \
+  || { echo "FAIL real build: JOINED line labelled CONTROLS"; bad=$((bad+1)); }
+# the dev-mode substitution of main@H (main.journal.fake) is said on stdout, and on the JOINED line
+o=$("$IHC" join Jgen IC/final.in.split.rcpt 2>/dev/null)   # refused (cut 0); the substitution is said first
+if grep -aq "^CONTROL: main@H is a DEV-MODE CLAIM" <<< "$o"; then echo "PASS main.journal.fake substitution on stdout"
+else echo "FAIL main.journal.fake substitution not on stdout"; bad=$((bad+1)); fi
+[ "$(env TS_CUT=$GEN "$IHC" join Jgen IC/final.in.split.rcpt 2>/dev/null | grep -a "^JOINED" | grep -ac "DEV-MODE CLAIM")" = 1 ] \
+  && echo "PASS a join over main.journal.fake says so on its JOINED line" || { echo "FAIL JOINED line over main.journal.fake not labelled"; bad=$((bad+1)); }
 # the native paths (ts-anchor): the same self_id check
 native() {  # native <label> <want: ok|refused> <cmd...>
   local label=$1 w=$2; shift 2; local got=refused
