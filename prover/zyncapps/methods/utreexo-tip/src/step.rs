@@ -8,8 +8,8 @@
 //! Shared by the tip guest (`main.rs`) and the host (`zyncapp`, #[path]-included), so the host runs the same code
 //! natively before proving. The includer provides `crate::utreexo_roots` (libzync/src/utreexo_roots.rs: the leaf hash)
 //! and `crate::facts` (libzync/src/facts.rs: the compact-size reader).
-//! Not part of any other image: editing this file moves the utreexo TIP image only (never the base image 27bea7da,
-//! never the core).
+//! Not part of any other image: editing this file moves the utreexo TIP image only (never the base image, the
+//! `zyncapp-utreexo` line of reproduce/LIBZYNC_IDS, never the core).
 
 use crate::utreexo_roots as ur;
 use alloc::collections::BTreeSet;
