@@ -31,9 +31,15 @@ DROPINS_DIR=coordinator/deploy/dropins
 # Unit files live in three places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
 # coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/. Reading only the first made
 # every setting of a v2 unit "appear NOWHERE in the repo" (2026-11-12: the switch's units failed this check).
+# ⛔ EVERY DIRECTORY, NOT A LIST OF THEM. The list was three directories; coordinator/deploy/headers-api/ (the MMR
+# path service) and coordinator/deploy/watchdog/ came later and were never added, so every setting of
+# hazync-headers-api "appeared NOWHERE in the repo" against a unit file declaring each one (measured 21.11.2026).
+# test-check-unit-drift.sh 9 resolves every *.service in the repo through this function and refuses a unit name
+# that two directories both declare (which one wins would then be an accident of glob order).
 repo_unit() {
     local d
-    for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do
+    for d in coordinator/deploy coordinator/deploy/*/; do
+        d=${d%/}
         [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }
     done
     return 0

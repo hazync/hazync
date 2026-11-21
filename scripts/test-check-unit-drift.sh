@@ -205,6 +205,34 @@ else
     fi
 fi
 
+# 9. ⛔ EVERY UNIT FILE IN THE REPO IS ONE repo_unit CAN FIND. A fixed list of directories missed headers-api/ and
+#    watchdog/, so hazync-headers-api's every setting read as "appears NOWHERE in the repo" (21.11.2026).
+rfn=$(sed -n '/^repo_unit()/,/^}/p' scripts/check-unit-drift.sh)
+if [ "$CONTROL" = yes ]; then   # the pre-fix list of three directories
+    rfn='repo_unit() { local d; for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }; done; return 0; }'
+fi
+if ! printf '%s\n' "$rfn" | grep -q 'repo_unit()'; then
+    bad "could not extract repo_unit from scripts/check-unit-drift.sh"
+else
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "$rfn")
+    lost=""; n=0
+    while IFS= read -r f; do
+        n=$((n + 1)); u=$(basename "$f" .service)
+        cmp -s <(repo_unit "$u") "$f" || lost="$lost $f"
+    done < <(git ls-files 'coordinator/deploy/*.service')
+    [ "$n" -gt 30 ] || bad "only $n unit files listed: this would pass vacuously"
+    if [ -z "$lost" ]; then
+        if [ "$CONTROL" = yes ]; then bad "control did NOT reproduce the missed directories -- it is testing nothing"
+        else ok "all $n repo unit files resolve through repo_unit"; fi
+    else
+        if [ "$CONTROL" = yes ]; then ok "control reproduces it: not found:$lost"
+        else bad "unit files repo_unit cannot find:$lost"; fi
+    fi
+    dup=$(git ls-files 'coordinator/deploy/*.service' | xargs -n1 basename | sort | uniq -d | paste -sd' ' -)
+    [ -z "$dup" ] && ok "no unit name is declared in two directories" || bad "unit names declared twice: $dup"
+fi
+
 echo
 if [ "$fails" = 0 ]; then echo "PASS ($([ "$CONTROL" = yes ] && echo control || echo real))"; exit 0; fi
 echo "FAIL: $fails assertion(s)"; exit 1
