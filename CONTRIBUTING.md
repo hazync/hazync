@@ -398,8 +398,12 @@ are joined into what does, so they are the check by hand.
 
 ## If something breaks
 
-- The verifier prints ``weak version `GLIBC_2.39' not found`` on Ubuntu 22.04 and then runs normally. That line is a
-  warning about an optional symbol, not a failure: the check's own result is the `SWIFTSYNC_VERIFY_*` line.
+- The verifier (`hazync-verify-x86_64-linux-gnu`, and `hazync-verify-aarch64`) of releases up to v0.27.0 needs glibc
+  2.39: on Ubuntu 22.04 the v0.24.0-v0.26.0 one prints ``weak version `GLIBC_2.39' not found`` and then runs normally
+  (the result is the `SWIFTSYNC_VERIFY_*` line), while the v0.26.1 and v0.27.0 one, and every aarch64 one, stops with
+  ``version `GLIBC_2.39' not found``. Run it on Ubuntu 24.04+ or in a container (`docker run --rm -v "$PWD:/w" -w /w
+  ubuntu:24.04 ./hazync-verify-x86_64-linux-gnu …`), or use the host's own `libzync-verify`. Later releases build it
+  for glibc 2.34 like the hosts ([`docs/BUILD_AND_RELEASE.md`](docs/BUILD_AND_RELEASE.md), "The glibc floor").
 - `./host: cannot execute` or a `GLIBC` error — the prebuilt Linux binaries need glibc 2.34+ (Ubuntu 22.04+). On an older distro, run in a container or build from source (see [`prover/README.md`](prover/README.md)).
 - The Linux CUDA prover needs **only the NVIDIA driver** (`libcuda.so.1`), not a CUDA toolkit or runtime:
 

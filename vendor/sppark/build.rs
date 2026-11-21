@@ -45,6 +45,34 @@ fn main() {
             base_dir.join("util").to_string_lossy()
         );
     }
+    // HAZYNC_RERUN_ON_HEADERS — the v0.26.1/v0.27.0 Linux CUDA host segfault (20.11.2026).
+    //
+    // ⛔ IN THE VENDORED LAYOUT THIS SCRIPT USED TO WATCH NOTHING. The rerun-if-changed lines above run
+    // only when `sppark/` is NOT beside this file (sppark's own repo layout); vendored, it is, so they
+    // were skipped -- and the rerun-if-env-changed lines below still count as "the script declared what
+    // it depends on", which switches off cargo's default of re-running on any change in the package.
+    // So a change to sppark/util/gpu_t.cuh (#727 added members to stream_t) neither rebuilt
+    // all_gpus.cpp (libsppark_cuda.a, which CONSTRUCTS every gpu_t/stream_t) nor touched this script's
+    // output, which is what tells the dependent -sys crates that sppark moved. A warm target linked an
+    // old-layout stream_t constructor against new-layout users: cuStreamSynchronize on garbage from
+    // stream_t::Dmalloc <- NTTParameters <- sppark_init on the first GPU step.
+    //
+    // Watch the whole header tree (cargo scans a directory recursively, by mtime) in the vendored layout
+    // (in the repo layout the five lines above already do, and base_dir is the repo ROOT there, target/
+    // and all), plus this script and the probe source in both. When this re-runs its output file is rewritten, which makes every
+    // build script that depends on sppark (DEP_SPPARK_ROOT) stale too: cargo re-runs a build script
+    // whose `links` dependency's build-script output is newer than its own.
+    if base_dir == manifest_dir.join("sppark") {
+        println!("cargo:rerun-if-changed={}", base_dir.to_string_lossy());
+    }
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src/cuda_available.cpp");
+    // nvcc reads these itself, so they shape libsppark_cuda.a (the architectures it is compiled for) without passing
+    // through cc: undeclared, a warm target kept kernels built for another architecture list (windows-prove.yml keys
+    // its cache on that list for exactly this reason).
+    println!("cargo:rerun-if-env-changed=NVCC_APPEND_FLAGS");
+    println!("cargo:rerun-if-env-changed=NVCC_PREPEND_FLAGS");
+
     // pass DEP_SPPARK_* variables to dependents
     println!("cargo:ROOT={}", base_dir.to_string_lossy());
 

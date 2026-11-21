@@ -13,6 +13,15 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.27.1 — 2026-11-21 — fix release: the Linux GPU prover works again; images unchanged (`46666b6f`)
+The images are unchanged (mainnet `46666b6f`, signet `01a80f17`, headers `de54b94f`). The Linux CUDA host of v0.26.1 and
+v0.27.0 stopped on its first GPU step: a stale sppark build cache mixed two layouts of one structure (#739's header change);
+v0.27.1's host is built clean, and the vendored GPU crates rebuild when a shared header changes. Every release is now proved
+on real GPUs before it ships (#781): a Linux gate proves blocks 170 and 200,000 on one pre-Blackwell and one Blackwell card,
+and the Windows host proves block 170 on a real card. The Linux verifiers run on glibc 2.34 (Ubuntu 22.04, Debian 12) again.
+Also: the header-chain follower expects `de54b94f` (#773), the measured cost curve (#782), cycle profiles of block 962,000
+(#778), docs (#775, #776, #780), the rig's Core download retries (#777). Notes: [`docs/RELEASE_NOTES_v0.27.1.md`](docs/RELEASE_NOTES_v0.27.1.md).
+
 ## v0.27.0 — 2026-11-20 — zyncAPPs and reorg handling; image unchanged (`46666b6f`)
 The core images are unchanged (mainnet `46666b6f`, signet `01a80f17`). The header-chain zyncAPP moves to `de54b94f`: an
 MMR of every block hash, so a block or a transaction in it can be checked against the proven chain; the whole chain to

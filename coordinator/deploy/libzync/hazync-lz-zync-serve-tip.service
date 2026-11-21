@@ -1,0 +1,27 @@
+[Unit]
+Description=Hazync libzync board: zync-serve TIP MODE, the zyncAPP facts read from the prep runs' disk tries at pinned roots (local only; ZAPP_FOLLOWER Z2-Z4)
+After=network.target
+
+[Service]
+User=hazync
+# docs/libzync/ZAPP_FOLLOWER.md §4-§5, §10 Z2-Z4. No history and nothing loaded: counting-trie facts at every height of
+# at.json (kept by hazync-lz-zapp-follow-tip), each read from its prep run's trie (the board pass's below the handover
+# height X, the tip run's from X - 1) at the root that run logged, opened READ-ONLY (it takes no lock and writes
+# nothing; prep keeps the pinned roots' slots, trie/PIN). ?at=<h> picks the height (the page sends its proof's).
+# Built with: cargo build --profile zync-serve --features tip --bin zync-serve (swiftsync-verify/; panic = unwind: a walk
+# the store moved under is answered 503, the service stays up). Installed beside the old zync-serve as zync-serve-tip.
+# Port 8602, beside the old service on 8601 until the relay switches (RUNBOOK, "Coin check in tip mode").
+ExecStart=/opt/hazync-lz/bin/zync-serve-tip --tip --at-file /var/lib/hazync-lz/zapp-tip/at.json 127.0.0.1:8602
+Environment=ZYNC_WALK_CAP=100000
+Restart=on-failure
+RestartSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/lib/hazync-lz/zapp-tip /opt/hazync-lz/bin -/var/lib/libzync-board/trie -/srv/bulk/libzync-prep/trie
+# page cache only: the trie is read with positioned reads, nothing is held (ZAPP_FOLLOWER §8)
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target

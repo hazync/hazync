@@ -19,6 +19,7 @@ can be tested without a GPU.
 """
 import os, sys, json, sqlite3, hashlib, subprocess, base64, time, threading, tarfile, io, re, unicodedata, secrets, bisect, math
 import collections
+import shutil
 from fractions import Fraction
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import urllib.request
@@ -47,8 +48,12 @@ LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
 
 
 def _bridge_files(blk):
-    """The bridge's file for block `blk` (a libzync coordinator: prep's leaf bundle), as a list (empty: no bridge)."""
-    return [os.path.join(BRIDGE_DIR, f"leaf_{blk}.bin" if LIBZYNC else f"bundle_{blk}.json")] if BRIDGE_DIR else []
+    """The bridge's file for block `blk` (a libzync coordinator: prep's leaf bundle), as a list (empty: no bridge). With
+    a tip run (REORG.md §19, D1), blocks from HAZYNC_LZ_TIP_FROM on are that run's bundles."""
+    d = _bridge_dir_for(blk)
+    if d and LIBZYNC and reorg_fence(blk, state=False) is not None:
+        return []                       # its run stopped for a reorg below it: the bundle is the orphaned branch's
+    return [os.path.join(d, f"leaf_{blk}.bin" if LIBZYNC else f"bundle_{blk}.json")] if d else []
 
 # ── How high does this coordinator go? ────────────────────────────────────────────────────────────
 #
@@ -85,9 +90,15 @@ def _servable_high(force=False):
     with _tip_lock:
         if not force and _tip_cache["v"] is not None and now - _tip_cache["t"] < TIP_TTL:
             return _tip_cache["v"]
-    hi = None
-    for d, pre, ext in ((BRIDGE_DIR, "leaf_" if LIBZYNC else "bundle_", ".bin" if LIBZYNC else ".json"),
-                        (WITNESS, "block_", ".json")):
+    hi = board = None
+    board_unread = False
+    # (directory, prefix, extension, the heights it serves, is it the board pass's): with a tip run (D1) its bundles
+    # count from TIP_FROM only (its sample bundles below X are not served), and the board pass's below TIP_FROM only
+    lz = ("leaf_" if LIBZYNC else "bundle_", ".bin" if LIBZYNC else ".json")
+    dirs = [(BRIDGE_DIR, *lz, (0, TIP_FROM or None), True), (WITNESS, "block_", ".json", (0, None), False)]
+    if TIP_FROM:
+        dirs.append((TIP_BRIDGE_DIR, *lz, (TIP_FROM, None), False))
+    for d, pre, ext, (lo_ok, hi_ex), is_board in dirs:
         if not d:
             continue
         try:
@@ -98,13 +109,41 @@ def _servable_high(force=False):
                         core = n[len(pre):-len(ext)]
                         if core.isdigit():
                             v = int(core)
+                            if v < lo_ok or (hi_ex is not None and v >= hi_ex):
+                                continue
                             if hi is None or v > hi:
                                 hi = v
+                            if is_board and (board is None or v > board):
+                                board = v
         except OSError:
-            continue          # missing or unreadable directory is "nothing here", not a crash
+            # missing or unreadable directory is "nothing here", not a crash; but the board pass's highest bundle is
+            # kept from the last scan: None would make the gap jump skip every block below TIP_FROM (review, LOW 11)
+            board_unread = board_unread or is_board
+            continue
     with _tip_lock:
-        _tip_cache.update(t=now, v=hi)
+        if board_unread and TIP_FROM:
+            board = _tip_cache.get("board")
+        _tip_cache.update(t=now, v=hi, board=board)
     return hi
+
+
+def _board_servable_high():
+    """The board pass's highest bundle (cached with _servable_high), or None: above it and below TIP_FROM nothing is
+    served (the gap between the backfill and the tip run, REORG.md §19), and the allocation scans jump it."""
+    _servable_high()
+    with _tip_lock:
+        return _tip_cache.get("board")
+
+
+def _skip_gap(h, board=False):
+    """`h`, or TIP_FROM when h lies in the gap no run serves (above the board pass's highest bundle, below TIP_FROM): a
+    scan from 1 to the tip run's bundles would otherwise test ~970,000 heights for a file under the claim lock. A scan
+    passes `board` (_board_servable_high(), read once per scan)."""
+    if TIP_FROM and h < TIP_FROM:
+        b = _board_servable_high() if board is False else board
+        if b is None or h > b:
+            return TIP_FROM
+    return h
 
 def node_tip():
     """The archive node's real height, or None if we cannot currently trust an answer.
@@ -1069,9 +1108,11 @@ def pick(body):
     # the exact check and the ceiling is what stops it running away: without the bound, a coordinator
     # with no bundles would stat its way through two million heights before admitting it has nothing.
     _ceiling = provable_tip()
+    _board_hi = _board_servable_high()
     for avoid_busy in (True, False):
         n = max(1, fr + 1)
         for _ in range(2_000_000):
+            n = _skip_gap(n, _board_hi)
             if n >= _ceiling:
                 break
             # The SAME test claim() applies, so what this suggests is what that would hand out. The
@@ -1235,8 +1276,13 @@ def verify_receipt(receipt: bytes, rng):
         # start and checks it against that state (genesis, or leaf_<lo>.bin's prev)
         # and (--check-end) that the state it ends on is the board's own at hi: without it a prover could mine its own
         # block on the real state before it (difficulty 1 early on) and have a block that is not Bitcoin's accepted
-        r = subprocess.run([HOST_BIN, "verify-any", tmp] + ([str(max(rng["lo"], 1)), "--check-end"] if LIBZYNC else []),
-                           capture_output=True, timeout=120)
+        env, view = _lz_verify_env(max(rng["lo"], 1), rng["hi"], tmp)
+        try:
+            r = subprocess.run([HOST_BIN, "verify-any", tmp] + ([str(max(rng["lo"], 1)), "--check-end"] if LIBZYNC else []),
+                               capture_output=True, timeout=120, env=env)
+        finally:
+            if view:
+                shutil.rmtree(view, ignore_errors=True)
         out = r.stdout.decode(errors="replace")  # S3: parse ONLY stdout, never fold stderr/RUST_LOG in
         # take the single line the verifier prints (it starts with RANGE-OK) — no free-text can inject keys
         line = next((l for l in out.splitlines() if l.startswith("RANGE-OK")), None)
@@ -1343,8 +1389,23 @@ def verify_spine(receipt: bytes):
         # whose anchor is not the digest of the genesis state), and its RANGE-OK line is read below as before.
         # --check-end: the spine must also END on the board's own state at its hi, or a longer chain of blocks mined
         # from genesis (difficulty 1 early on) would replace the real spine and nothing real could extend it again
-        g = (subprocess.run([HOST_BIN, "verify-any", tmp, "1", "--check-end"], capture_output=True, timeout=180) if LIBZYNC
-             else subprocess.run([HOST_BIN, "verify-range", tmp], capture_output=True, timeout=180))
+        if LIBZYNC and TIP_FROM:
+            # with a tip run (D1, review LOW 8): the spine's height first (verify-any without --check-end reads no state:
+            # its start is genesis), then --check-end against a view of the ONE state its end needs, from the run that
+            # holds that height (as the zAPP follower does): never a leaf bundle's `prev`, never the other run's state
+            g = subprocess.run([HOST_BIN, "verify-any", tmp, "1"], capture_output=True, timeout=180)
+            line0 = next((l for l in g.stdout.decode(errors="replace").splitlines() if l.startswith("RANGE-OK")), None)
+            hi0 = dict(t.split("=", 1) for t in line0.split() if "=" in t).get("hi") if line0 else None
+            if g.returncode == 0 and hi0 and hi0.isdigit():
+                env, view = _lz_verify_env(1, int(hi0), tmp)
+                try:
+                    g = subprocess.run([HOST_BIN, "verify-any", tmp, "1", "--check-end"], capture_output=True, timeout=180, env=env)
+                finally:
+                    shutil.rmtree(view, ignore_errors=True)
+        elif LIBZYNC:
+            g = subprocess.run([HOST_BIN, "verify-any", tmp, "1", "--check-end"], capture_output=True, timeout=180)
+        else:
+            g = subprocess.run([HOST_BIN, "verify-range", tmp], capture_output=True, timeout=180)
         if g.returncode != 0:
             both = (g.stdout + g.stderr).decode(errors="replace")
             if "MISMATCH" in both:
@@ -1609,6 +1670,222 @@ def _submit_spine_verified(receipt, sha, seed, pk, sig, handle):
 LZ_STATE_DIR = os.environ.get("HAZYNC_LZ_STATE_DIR", "")
 REORG_DIR = os.environ.get("HAZYNC_LZ_REORG_DIR", os.path.join(LZ_STATE_DIR, "reorg", "records") if LZ_STATE_DIR else "")
 REORG_ACK_DIR = os.environ.get("HAZYNC_LZ_REORG_ACK_DIR", "") or REORG_DIR
+
+# ── D1, the tip run (docs/libzync/REORG.md §3, §14 decision 1, §19) ───────────────────────────────────────────────────
+#
+# Two prep runs feed this board. The BOARD PASS (HAZYNC_BRIDGE_OUT, HAZYNC_LZ_STATE_DIR: libzync-board-prep, paced by
+# proving) serves blocks 1..X-1; the TIP RUN (the paper prep, libzync-prep, following the node's tip) serves every block
+# from X = HAZYNC_LZ_TIP_FROM on, and the state X-1 its bundles are cut against. Both run the same host from genesis,
+# so their states agree where both have them (checked: the start-up and the backstop compare them, _handover_check).
+#
+#   block b's bundle        the tip run's if b >= X, else the board pass's            (_bridge_dir_for)
+#   state_<h>.json          the tip run's if h >= X - 1, else the board pass's        (_state_dir_for)
+#   reorg records / acks    each run's own records directory and ack directory        (_reorg_sources)
+#   verify-any              a per-call view of exactly the two states it reads        (_lz_verify_env)
+#
+# Unset (HAZYNC_LZ_TIP_FROM empty or 0): one run, exactly as before.
+TIP_FROM = int(os.environ.get("HAZYNC_LZ_TIP_FROM", "0") or 0)
+TIP_STATE_DIR = os.environ.get("HAZYNC_LZ_TIP_STATE_DIR", "") if TIP_FROM else ""
+TIP_BRIDGE_DIR = os.environ.get("HAZYNC_LZ_TIP_BRIDGE_OUT", "") if TIP_FROM else ""
+TIP_REORG_DIR = (os.environ.get("HAZYNC_LZ_TIP_REORG_DIR", "")
+                 or (os.path.join(TIP_STATE_DIR, "reorg", "records") if TIP_STATE_DIR else "")) if TIP_FROM else ""
+TIP_REORG_ACK_DIR = (os.environ.get("HAZYNC_LZ_TIP_REORG_ACK_DIR", "") or TIP_REORG_DIR) if TIP_FROM else ""
+# claim() hands out the tip run's blocks before the backfill's (a deployment decision, REORG.md §19: off by default)
+TIP_CLAIM_FIRST = os.environ.get("TIP_CLAIM_FIRST", "0") == "1"
+# Each run's block directory (its fetcher's), where a reorg STOP leaves its marker (blocks/REORG, blocks/REORG_TOO_DEEP:
+# REORG.md §4, §11). With automatic rewinds off, that marker is the only sign of a reorg until a person rewinds: prep has
+# stopped, but its bundles and states above the fork are still the orphaned branch's. The board then FENCES that run
+# above the fork (reorg_fence): nothing above it is served, claimed, verified or credited until the marker goes (review
+# of D1, MEDIUM 2). Unset: no fence for that run.
+BOARD_BLOCKS_DIR = os.environ.get("HAZYNC_LZ_BLOCKS_DIR", "")
+TIP_BLOCKS_DIR = os.environ.get("HAZYNC_LZ_TIP_BLOCKS_DIR", "") if TIP_FROM else ""
+_fence_cache = {"t": 0.0, "v": {}}
+
+
+def _marker_fences(fresh=False):
+    """{run: fence height} for each run whose block directory holds a reorg marker: the marker's fork, or, when it
+    names none (REORG_TOO_DEEP beyond J), the run's first height minus one (all of it). A tip-run fork below X - 1
+    fences the board pass too (its blocks above the fork are the orphaned ones as well; review round 2, LOW 6).
+    Cached for a second; `fresh` reads the markers now (the commit check, review round 2, LOW 5)."""
+    now = time.time()
+    if not fresh and now - _fence_cache["t"] < 1.0:
+        return _fence_cache["v"]
+    out = {}
+    for run, d, floor in (("board", BOARD_BLOCKS_DIR, 0), ("tip", TIP_BLOCKS_DIR, max(TIP_FROM - 1, 0))):
+        if not d:
+            continue
+        for name in ("REORG", "REORG_TOO_DEEP"):
+            p = os.path.join(d, name)
+            if not os.path.exists(p):
+                continue
+            try:
+                with open(p) as f:
+                    fork = json.load(f).get("fork")
+                fence = int(fork) if fork is not None else floor
+            except (OSError, ValueError, TypeError, AttributeError):
+                fence = floor                # a marker that does not read fences the whole run: fail closed
+            out[run] = min(out.get(run, fence), fence)
+    if TIP_FROM and out.get("tip") is not None and out["tip"] < TIP_FROM - 1:
+        out["board"] = min(out.get("board", out["tip"]), out["tip"])
+    _fence_cache.update(t=now, v=out)
+    return out
+
+
+def reorg_fence(h, state=True, fresh=False):
+    """The fence over height h (a state when `state`, else a block's bundle): the run that holds h stopped for a reorg
+    whose fork is below h. Returns the fork, or None (no fence)."""
+    if not (BOARD_BLOCKS_DIR or TIP_BLOCKS_DIR):
+        return None
+    run = "tip" if TIP_FROM and h >= (TIP_FROM - 1 if state else TIP_FROM) else "board"
+    f = _marker_fences(fresh).get(run)
+    return f if f is not None and h > f else None
+
+
+def _bridge_dir_for(blk):
+    """The directory of block `blk`'s bundle: the tip run's from TIP_FROM on, else the board pass's."""
+    return TIP_BRIDGE_DIR if TIP_FROM and blk >= TIP_FROM else BRIDGE_DIR
+
+
+def _state_dir_for(h):
+    """The directory of state_<h>.json (the state AFTER block h): the tip run's from TIP_FROM - 1 on (the state its first
+    bundle is cut against), else the board pass's."""
+    return TIP_STATE_DIR if TIP_FROM and h >= TIP_FROM - 1 else LZ_STATE_DIR
+
+
+def _reorg_sources():
+    """(src, state dir, records dir, ack dir) per prep run whose reorg records this board follows. `src` is what the
+    `reorgs` row records: `prep` (the board pass, as before D1) or `prep-tip`."""
+    out = [("prep", LZ_STATE_DIR, REORG_DIR, REORG_ACK_DIR)]
+    if TIP_FROM:
+        out.append(("prep-tip", TIP_STATE_DIR, TIP_REORG_DIR, TIP_REORG_ACK_DIR))
+    return out
+
+
+def _tip_config_problem():
+    """Why the tip run's configuration cannot work (start-up refuses it, exit 3), or None."""
+    if not TIP_FROM:
+        return None
+    if not LIBZYNC:
+        return "HAZYNC_LZ_TIP_FROM is set on a coordinator that is not libzync (HAZYNC_LIBZYNC=1)"
+    if TIP_FROM < 2:
+        return f"HAZYNC_LZ_TIP_FROM={TIP_FROM}: the tip run takes over at a block above 1"
+    miss = [k for k, v in (("HAZYNC_LZ_TIP_STATE_DIR", TIP_STATE_DIR), ("HAZYNC_LZ_TIP_BRIDGE_OUT", TIP_BRIDGE_DIR),
+                           ("HAZYNC_LZ_STATE_DIR", LZ_STATE_DIR), ("HAZYNC_BRIDGE_OUT", BRIDGE_DIR)) if not v]
+    if miss:
+        return f"HAZYNC_LZ_TIP_FROM={TIP_FROM} needs {', '.join(miss)}"
+    rp = lambda x: os.path.realpath(x)
+    # the reorg fence needs both runs' block directories: without them a stop marker is never seen and the fence fails
+    # OPEN (review round 2, LOW-MEDIUM 4)
+    for k, v in (("HAZYNC_LZ_TIP_BLOCKS_DIR", TIP_BLOCKS_DIR), ("HAZYNC_LZ_BLOCKS_DIR", BOARD_BLOCKS_DIR)):
+        if not v or not os.path.isdir(v) or not os.access(v, os.R_OK | os.X_OK):
+            return f"{k}={v or '(unset)'} is not a readable directory: the reorg fence would never see a stop marker"
+    if rp(TIP_STATE_DIR) == rp(LZ_STATE_DIR) or rp(TIP_BRIDGE_DIR) == rp(BRIDGE_DIR):
+        return "the tip run's state or bundle directory is the board pass's: two runs need two directories"
+    # the two runs number their epochs independently: one ack directory would let one run's ack <E>.ack answer the
+    # other's record <E>.json (and the ack's sha256 would refuse it: a rewind that waits 10 min and stops)
+    if rp(TIP_REORG_ACK_DIR) == rp(REORG_ACK_DIR) or rp(TIP_REORG_DIR) == rp(REORG_DIR):
+        return ("the tip run's reorg records or acks share the board pass's directory "
+                "(HAZYNC_LZ_TIP_REORG_ACK_DIR must be its own; prep's side: HAZYNC_REORG_ACK_DIR)")
+    return None
+
+
+def _state_bytes(d, h):
+    """state_<h>.json in `d`, parsed, or None (missing, empty after a crash, or not JSON)."""
+    try:
+        with open(os.path.join(d, f"state_{int(h)}.json")) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def _handover_check():
+    """D1's invariant: where both runs hold a state, it is the same state (both prep the same chain from genesis with
+    the same host), so a range the board pass proved up to X-1 joins one the tip run's bundle starts at X. Compared at
+    the highest height both hold at or below X-1 (the board pass's newest state there). Returns None (agree, or nothing
+    to compare yet) or what differs."""
+    if not TIP_FROM:
+        return None
+    top = _board_state_top()
+    if top is None:
+        return _UNKNOWN
+    a, b = _state_bytes(LZ_STATE_DIR, top), _state_bytes(TIP_STATE_DIR, top)
+    if a is None or b is None:
+        return _UNKNOWN          # the tip run behind the board pass there (restarted from genesis), or a torn file
+    if a != b:
+        diff = sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+        return f"the board pass and the tip run disagree on state_{top}.json (fields {diff[:6]}): REORG.md §19"
+    return None
+
+
+# _handover_check's "nothing compared" (a missing or torn state): neither raises nor clears the alert (round 2, LOW 9)
+_UNKNOWN = "unknown"
+
+
+_board_top_cache = {"t": 0.0, "v": None}
+
+
+def _board_state_top():
+    """The board pass's newest state_<h>.json at or below TIP_FROM - 1, or None. From its PREP_TIP.json (P2, the height
+    its stores are at), capped at X-1; cached a minute (the backstop calls it every minute)."""
+    now = time.time()
+    if now - _board_top_cache["t"] < 60:
+        return _board_top_cache["v"]
+    v = None
+    try:
+        with open(os.path.join(LZ_STATE_DIR, "PREP_TIP.json")) as f:
+            v = min(int(json.load(f)["height"]), TIP_FROM - 1)
+    except (OSError, ValueError, KeyError, TypeError):
+        v = None
+    if v is not None and v < 1:
+        v = None
+    _board_top_cache.update(t=now, v=v)
+    return v
+
+
+def lz_states_unreadable(lo, hi):
+    """With a tip run (the per-call view): the first of state_<lo-1>.json (lo > 1) and state_<hi>.json, in the run that
+    holds it, that is missing, empty (a write torn by a power loss: states between save points are not synced) or not
+    JSON; else None. The verifier would read the same file and fail with a parse or "no state" error, which the board
+    would count against the block (review of D1, LOW-MEDIUM 7)."""
+    if not (LIBZYNC and TIP_FROM):
+        return None
+    for h in ([lo - 1] if lo > 1 else []) + [hi]:
+        if _state_bytes(_state_dir_for(h), h) is None:
+            return h
+    return None
+
+
+def _lz_verify_env(lo, hi, tag):
+    """(env, view dir or None) for `verify-any <rcpt> lo --check-end` of the range [lo..hi]. One run: the process's own
+    environment (HAZYNC_LZ_STATE_DIR, HAZYNC_BRIDGE_OUT), as before D1. With a tip run: a fresh directory holding only
+    the two states the verifier reads, each linked from the run _state_dir_for names (state_<lo-1>.json, unless lo is
+    1, and state_<hi>.json), as both its state directory and its bundle directory (it holds no bundle, so the verifier
+    takes the state files). The commit-time check (reorg_refusal) reads the same files, so the two cannot disagree
+    about which run a height belongs to. The caller removes the view."""
+    if not (LIBZYNC and TIP_FROM):
+        return None, None
+    view = f"{tag}.view"
+    shutil.rmtree(view, ignore_errors=True)
+    os.makedirs(view)
+    for h in ([lo - 1] if lo > 1 else []) + [hi]:
+        src = os.path.join(_state_dir_for(h), f"state_{h}.json")
+        dst = os.path.join(view, f"state_{h}.json")
+        if not os.path.lexists(dst):
+            os.symlink(src, dst)
+    env = dict(os.environ, HAZYNC_LZ_STATE_DIR=view, HAZYNC_BRIDGE_OUT=view)
+    return env, view
+
+
+def sweep_views():
+    """At start-up: verification views a crash left behind under COORD_STATE (review, LOW 11)."""
+    try:
+        for n in os.listdir(STATE_DIR):
+            if n.endswith(".view"):
+                shutil.rmtree(os.path.join(STATE_DIR, n), ignore_errors=True)
+    except OSError:
+        pass
+
+
 REORG_POLL_S = float(os.environ.get("REORG_POLL_S", "2"))
 # a failed verification of a block a reorg orphaned within this long is answered 409 `reorged` and NOT counted against
 # the block (it would otherwise park the new chain's block after MAX_ATTEMPTS workers finished their orphaned claims)
@@ -1620,13 +1897,17 @@ SPINE_HEADS = os.path.join(SPINE_DIR, "heads")
 _REORG_SHAPED = ("not anchored on the state before", "is not the board's", "has no state at block", "no leaf bundle")
 
 
-def lz_state_tip(h):
+def lz_state_tip(h, d=None):
     """The block hash of prep's state_<h>.json as verify-any prints it (in_bhash / out_bhash: the state's tip_hash bytes
-    in hex, internal order), or None (no state directory, no file, or one that does not read)."""
-    if not LZ_STATE_DIR or h < 0:
+    in hex, internal order), or None (no state directory, no file, or one that does not read). From the run that holds
+    height h (_state_dir_for), or from `d`."""
+    if d is None and h >= 0 and reorg_fence(int(h)) is not None:
+        return None                     # fenced: the run that holds h stopped for a reorg below it (reorg_fence)
+    d = d or (_state_dir_for(int(h)) if h >= 0 else "")
+    if not d or h < 0:
         return None
     try:
-        with open(os.path.join(LZ_STATE_DIR, f"state_{int(h)}.json")) as f:
+        with open(os.path.join(d, f"state_{int(h)}.json")) as f:
             t = json.load(f)["tip_hash"]
         return bytes(t).hex() if len(t) == 32 else None
     except (OSError, ValueError, KeyError, TypeError):
@@ -1670,6 +1951,10 @@ def reorg_refusal(c, lo, hi, meta, epoch_at_start, check_in=True):
        real verifier (the pure mock has no boundary hashes); lo = 1 starts on the genesis anchor, not on a state file."""
     if any(f < hi for f in _reorgs_since(c, epoch_at_start)):
         return f"reorged: a chain reorganisation below block {hi} was applied while this proof was being verified"
+    # a reorg STOP (the fetcher's marker) that appeared while it was being verified: read now, not from the cache
+    _fe = reorg_fence(hi, fresh=True) if LIBZYNC else None
+    if _fe is not None:
+        return f"reorged: the prep run holding block {hi} stopped for a chain reorganisation at block {_fe}"
     if LIBZYNC and LZ_STATE_DIR and VERIFY != "mock" and meta:
         if check_in and lo > 1:
             want = lz_state_tip(lo - 1)
@@ -1906,9 +2191,10 @@ def _read_record(path):
         return None, str(e)
 
 
-def _ack(name, record, sha, epoch):
-    os.makedirs(REORG_ACK_DIR, exist_ok=True)
-    _write_atomic(os.path.join(REORG_ACK_DIR, f"{name}.ack"),
+def _ack(name, record, sha, epoch, ack_dir=None):
+    ack_dir = ack_dir or REORG_ACK_DIR
+    os.makedirs(ack_dir, exist_ok=True)
+    _write_atomic(os.path.join(ack_dir, f"{name}.ack"),
                   json.dumps({"epoch": int(record["epoch"]), "record_sha256": sha, "coord_epoch": epoch,
                               "fork": int(record["fork"]), "at": time.time()}).encode())
 
@@ -1927,13 +2213,15 @@ def _note(name, key, msg):
         _reorg_noted[name] = key
 
 
-def _prep_waiting_on(epoch):
+def _prep_waiting_on(epoch, state_dir=None):
     """Is prep's rewind of `epoch` in progress: out/REWIND there and naming it? Prep keeps its intent until the ack
-    comes, so a record without it is one prep is no longer waiting for (review of P4, M1)."""
-    if not LZ_STATE_DIR:
+    comes, so a record without it is one prep is no longer waiting for (review of P4, M1). In the run whose state
+    directory is `state_dir` (default: the board pass's)."""
+    state_dir = state_dir or LZ_STATE_DIR
+    if not state_dir:
         return False
     try:
-        with open(os.path.join(LZ_STATE_DIR, "REWIND")) as f:
+        with open(os.path.join(state_dir, "REWIND")) as f:
             return int(json.load(f)["epoch"]) == int(epoch)
     except (OSError, ValueError, KeyError, TypeError):
         return False
@@ -1948,70 +2236,105 @@ def reorg_poll(startup=False):
     marked `done`; and the backstop (review of P4, H1): the board's highest verified range must end on prep's state at
     its height, or /api/meta says so (`reorg_alert`) and the journal does once. Returns the epochs applied."""
     done = []
-    if REORG_DIR and os.path.isdir(REORG_DIR):
-        names = sorted((n[:-5] for n in os.listdir(REORG_DIR) if n.endswith(".json") and n[:-5].isdigit()), key=int)
+    for src, sdir, rdir, adir in _reorg_sources():
+        done += _reorg_poll_source(src, sdir, rdir, adir, startup)
+    _reorg_mark_done()
+    if startup:
+        _backstop_at[0] = time.time()
+        reorg_backstop()
+    _write_done_files()
+    return done
+
+
+def _reorg_poll_source(src, sdir, rdir, adir, startup):
+    """reorg_poll for one prep run (D1: the board pass, `prep`, and the tip run, `prep-tip`): its records in `rdir`, its
+    intent in `sdir`, its acks to `adir`. Names in the journal carry the run when there are two."""
+    done = []
+    tag = "" if src == "prep" else f"{src}/"
+    if rdir and os.path.isdir(rdir):
+        names = sorted((n[:-5] for n in os.listdir(rdir) if n.endswith(".json") and n[:-5].isdigit()), key=int)
         for name in names:
-            rec, sha = _read_record(os.path.join(REORG_DIR, name + ".json"))
+            rec, sha = _read_record(os.path.join(rdir, name + ".json"))
             if rec is None:
                 if startup:
-                    raise RuntimeError(f"reorg record {name}.json does not read ({sha}): fix or move it before starting")
-                _note(name, sha, f"[reorg] record {name}.json does not read ({sha}): not applied, not acked")
+                    raise RuntimeError(f"reorg record {tag}{name}.json does not read ({sha}): fix or move it before starting")
+                _note(tag + name, sha, f"[reorg] record {tag}{name}.json does not read ({sha}): not applied, not acked")
                 continue
             c = db()
             try:
                 row = c.execute("SELECT epoch FROM reorgs WHERE record_sha=?", (sha,)).fetchone()
-                top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
+                top = _verified_top(c, src)
             finally:
                 c.close()
             if row:
-                a = os.path.join(REORG_ACK_DIR, name + ".ack")
+                a = os.path.join(adir, name + ".ack")
                 try:
                     ok = json.load(open(a)).get("record_sha256") == sha
                 except (OSError, ValueError):
                     ok = False
                 if not ok:
-                    _ack(name, rec, sha, int(row[0]))
+                    _ack(name, rec, sha, int(row[0]), adir)
                 continue
             f = int(rec["fork"])
-            if not _prep_waiting_on(rec["epoch"]):
-                _note(name, "stale", f"[reorg] REFUSED record {name}.json (fork {f}): prep is not waiting on it (no "
+            if not _prep_waiting_on(rec["epoch"], sdir):
+                _note(tag + name, "stale", f"[reorg] REFUSED record {tag}{name}.json (fork {f}): prep is not waiting on it (no "
                       f"out/REWIND of epoch {rec['epoch']}): not applied, not acked. A rewind the board must follow by hand: "
                       f"server.py --reorg-to {f} (REORG.md §11)")
                 continue
             if top - f > REORG_AUTO_MAX_DEPTH:
-                _note(name, "deep", f"[reorg] REFUSED record {name}.json: fork {f} is {top - f} below the board's highest "
+                _note(tag + name, "deep", f"[reorg] REFUSED record {tag}{name}.json: fork {f} is {top - f} below the board's highest "
                       f"verified block {top} (REORG_AUTO_MAX_DEPTH {REORG_AUTO_MAX_DEPTH}): only by hand, server.py "
                       f"--reorg-to {f} (REORG.md §11); prep waits and then stops")
                 continue
             first = next((x for h, x in rec["orphaned"] if h == f + 1), None)
-            if first is not None and lz_state_tip(f + 1) is not None and _display(lz_state_tip(f + 1)) == first:
-                _note(name, "unmoved", f"[reorg] record {name}.json: prep's state {f + 1} is still the orphaned block; "
+            if first is not None and lz_state_tip(f + 1, sdir) is not None and _display(lz_state_tip(f + 1, sdir)) == first:
+                _note(tag + name, "unmoved", f"[reorg] record {tag}{name}.json: prep's state {f + 1} is still the orphaned block; "
                       f"waiting for its files to move (REORG.md §5 step 3)")
                 continue
-            r = reorg_rewind(f, "prep", record=rec, record_sha=sha, prep_epoch=int(rec["epoch"]))
-            _ack(name, rec, sha, r["epoch"])
+            # D1 (REORG.md §19): a fork of the tip run below X - 1 orphans blocks the BOARD PASS holds too (its states and
+            # bundles above the fork are not moved by the tip run's rewind, and they would serve and re-verify the orphaned
+            # blocks). Practically impossible (X is far below the tip by the time the board pass reaches it), and not
+            # handled by itself: refused, loudly, for a person (stop both, rewind the board pass, then the ledger)
+            _b = lz_state_tip(f + 1, LZ_STATE_DIR)
+            if src == "prep-tip" and f < TIP_FROM - 1 and _b is not None and _display(_b) == first:
+                _note(tag + name, "below-x", f"[reorg] REFUSED record {tag}{name}.json: the tip run's fork {f} is below the "
+                      f"handover height {TIP_FROM} and the board pass holds the ORPHANED block {f + 1}: the board pass must be rewound "
+                      f"too, by hand (REORG.md §19); not applied, not acked")
+                continue
+            r = reorg_rewind(f, src, record=rec, record_sha=sha, prep_epoch=int(rec["epoch"]))
+            _ack(name, rec, sha, r["epoch"], adir)
             done.append(r["epoch"])
+    return done
+
+
+def _verified_top(c, src):
+    """The highest verified block of a run's region: the board pass's (`prep`) below TIP_FROM when there is a tip run,
+    else the board's highest. REORG_AUTO_MAX_DEPTH and the backstop's window count from it (review, LOW 11)."""
+    if src == "prep" and TIP_FROM:
+        return c.execute("SELECT MAX(hi) FROM vranges WHERE hi < ?", (TIP_FROM,)).fetchone()[0] or 0
+    return c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
+
+
+def _reorg_mark_done():
+    """Rewinds whose new branch has appeared (state_<F+1>.json of another block, in the run that wrote the record) are
+    marked `done`."""
     c = db()
     try:
         newest = reorg_epoch(c)
-        for r in c.execute("SELECT epoch, fork, orphaned FROM reorgs WHERE state='rewinding'").fetchall():
+        for r in c.execute("SELECT epoch, fork, orphaned, src FROM reorgs WHERE state='rewinding'").fetchall():
             f = int(r["fork"])
             orph = dict((int(h), x) for h, x in json.loads(r["orphaned"] or "[]"))
-            t = lz_state_tip(f + 1) if LZ_STATE_DIR else "none"
+            sd = {"prep": LZ_STATE_DIR, "prep-tip": TIP_STATE_DIR}.get(r["src"]) or _state_dir_for(f + 1)
+            t = lz_state_tip(f + 1, sd) if sd else "none"
             # done: the new branch's state at F+1 is there, or a newer rewind superseded this one (A -> B -> A would
             # otherwise leave the first one `rewinding` for good: its F+1 is A's block again; review round 3, LOW)
-            if r["epoch"] < newest or (t is not None and (not LZ_STATE_DIR or _display(t) != orph.get(f + 1))):
+            if r["epoch"] < newest or (t is not None and (not sd or _display(t) != orph.get(f + 1))):
                 c.execute("UPDATE reorgs SET state='done', done_at=? WHERE epoch=?", (time.time(), r["epoch"]))
                 with _sf_lock:
                     _sf.pop("reorg:meta", None)
         c.commit()
     finally:
         c.close()
-    if startup:
-        _backstop_at[0] = time.time()
-        reorg_backstop()
-    _write_done_files()
-    return done
 
 
 def _write_done_files():
@@ -2052,27 +2375,36 @@ def reorg_backstop(now=None):
             c.commit()
             print(f"[reorg] alert cleared: a rewind below {min(latched['heights'])} was applied", flush=True)
             latched = None
-        rw = os.path.join(LZ_STATE_DIR, "REWIND")
-        try:
-            rw_age = now - os.stat(rw).st_mtime
-        except OSError:
-            rw_age = None
+        # a rewind in progress in either run (D1: the board pass and the tip run) quiets it
+        rw_age = None
+        for _src, sdir, _r, _a in _reorg_sources():
+            try:
+                age = now - os.stat(os.path.join(sdir, "REWIND")).st_mtime
+            except OSError:
+                continue
+            rw_age = age if rw_age is None else min(rw_age, age)
         # quiet while a rewind is in progress, but not for ever (round 4, L4): an intent older than REORG_REWIND_QUIET_S
         # is a rewind that stopped, and the board's rows are checked again
         if rw_age is None or rw_age > REORG_REWIND_QUIET_S:
-            top = c.execute("SELECT MAX(hi) FROM vranges").fetchone()[0] or 0
+            # the window below each run's own highest verified block (D1: a tip block verified at the tip must not end
+            # the comparison of the backfill's ranges, ~970,000 blocks below it; review, LOW 11)
+            top = _verified_top(c, None)
             rows = c.execute("SELECT lo, hi, in_bhash, out_bhash FROM vranges WHERE hi > ? AND out_bhash != ''",
                              (top - REORG_AUTO_MAX_DEPTH,)).fetchall()
+            if TIP_FROM:
+                btop = _verified_top(c, "prep")
+                rows += c.execute("SELECT lo, hi, in_bhash, out_bhash FROM vranges WHERE hi > ? AND hi < ? AND hi <= ? "
+                                  "AND out_bhash != ''", (btop - REORG_AUTO_MAX_DEPTH, TIP_FROM, top - REORG_AUTO_MAX_DEPTH)).fetchall()
             tips, bad, empty = {}, [], set()
 
             def tipof(h):
                 # a zero-length state is a torn write after a power loss (prep replays over it, round 5): not compared
                 if h not in tips:
                     try:
-                        z = os.path.getsize(os.path.join(LZ_STATE_DIR, f"state_{h}.json")) == 0
+                        z = os.path.getsize(os.path.join(_state_dir_for(h), f"state_{h}.json")) == 0
                     except OSError:
                         z = False
-                    tips[h] = "EMPTY" if z else lz_state_tip(h)
+                    tips[h] = "EMPTY" if z else lz_state_tip(h, _state_dir_for(h))   # the files, not the fence
                 if tips[h] == "EMPTY":
                     empty.add(h)
                 return tips[h]
@@ -2084,6 +2416,24 @@ def reorg_backstop(now=None):
                 if off(int(r["hi"]), r["out_bhash"]) or (int(r["lo"]) > 1 and r["in_bhash"] and off(int(r["lo"]) - 1, r["in_bhash"])):
                     bad.append(int(r["hi"]))
             note = {"compared": len(rows), "empty_states": len(empty)}
+            # D1: the two runs agree where both have a state (REORG.md §19). Its own key (`handover_alert`, which
+            # hazync-lz-check-reorg pages on too), set while they differ and cleared as soon as they agree again: it
+            # neither latches for ever nor blocks the latch of a verified range off prep's chain (review, LOW-MEDIUM 6)
+            hv = _handover_check()
+            had = c.execute("SELECT v FROM meta WHERE k='handover_alert'").fetchone()
+            if hv is _UNKNOWN:
+                note["handover"] = "not compared (a state missing or torn)"
+            elif hv:
+                note["handover"] = hv
+                if not had:
+                    c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('handover_alert',?)",
+                              (json.dumps({"at": now, "height": _board_state_top(), "msg": hv}),))
+                    c.commit()
+                    print(f"[reorg] ALERT {hv}", flush=True)
+            elif had:
+                c.execute("DELETE FROM meta WHERE k='handover_alert'")
+                c.commit()
+                print("[reorg] the board pass and the tip run agree again: handover alert cleared", flush=True)
             if bad and not latched:
                 latched = {"heights": sorted(set(bad))[:100], "count": len(bad), "at": now,
                            "msg": f"{len(bad)} verified range(s) are not on prep's chain now (from block {min(bad)}): "
@@ -2125,6 +2475,26 @@ def reorg_meta():
 
 
 REORG_META_TTL = float(os.environ.get("REORG_META_TTL", "5"))
+
+
+def tip_run_meta():
+    """/api/meta's `tip_run` (D1, REORG.md §19), or None with one run: the handover height, the highest block each run
+    serves a bundle for, and where the tip run's stores are (its PREP_TIP.json: height and age, for the stall check)."""
+    if not TIP_FROM:
+        return None
+    def build():
+        pt = None
+        try:
+            st = os.stat(os.path.join(TIP_STATE_DIR, "PREP_TIP.json"))
+            with open(os.path.join(TIP_STATE_DIR, "PREP_TIP.json")) as f:
+                pt = {"height": int(json.load(f)["height"]), "age_s": round(time.time() - st.st_mtime)}
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        hi = _servable_high()
+        return {"from": TIP_FROM, "servable_high": hi if hi is not None and hi >= TIP_FROM else None,
+                "board_servable_high": _board_servable_high(), "prep_tip": pt, "claim_first": TIP_CLAIM_FIRST,
+                "fences": _marker_fences()}
+    return _single_flight("tiprun:meta", REORG_META_TTL, build)
 
 
 def reorg_detail(epoch):
@@ -4296,12 +4666,23 @@ _ZYNC_PATH = re.compile(r"^/(tip|trie/balance/[0-9a-f]{2,20000}|trie/history/[0-
                         r"|trie/coin/[0-9a-f]{2,20000}/[0-9a-f]{64}/[0-9]{1,10})$")
 
 
-def zync_relay(path):
-    """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set."""
+ZYNC_RELAY_AT = os.environ.get("ZYNC_RELAY_AT", "0") == "1"
+
+
+def zync_relay(path, at=None):
+    """(status, body) for a zyncAPP fact request. Only the read-only paths above, only when ZYNC_SERVE_URL is set. `at`
+    (ZAPP_FOLLOWER §5, Z4: the height of the proof the page holds; zync-serve's tip mode serves the two newest pinned
+    heights) is passed on as `?at=<h>`, a height and nothing else."""
     if not ZYNC_SERVE:
         return 404, "no zyncAPP fact service on this coordinator"
     if not _ZYNC_PATH.match(path):
         return 400, "not a zyncAPP fact path (/tip, /trie/balance/<spk>, /trie/history/<spk>, /trie/coin/<spk>/<txid>/<vout>)"
+    # passed on only to a fact service that takes it (ZYNC_RELAY_AT=1: zync-serve's tip mode, set at the Z3 switch); an
+    # older zync-serve reads `?at=` as part of the script and refuses the request
+    if at is not None and ZYNC_RELAY_AT:
+        if not re.fullmatch(r"[0-9]{1,9}", at):
+            return 400, "at: a block height"
+        path += f"?at={int(at)}"
     try:
         with urllib.request.urlopen(ZYNC_SERVE.rstrip("/") + path, timeout=20) as r:
             body = r.read(8 * 1024 * 1024 + 1)
@@ -4584,11 +4965,9 @@ def claim(body):
             # handover: in N's era blocks up to H are not N's to prove, so the scan starts above H
             if handover_era() == "post":
                 h = LZ_HANDOVER_AT + 1
-            while h < _ceiling:
-                if h not in proven and h not in held and era_open(h) and witness_available(h):
-                    break
-                h += 1
-            else:
+            # D1 (REORG.md §19): TIP_CLAIM_FIRST=1 hands out the tip run's blocks (from TIP_FROM) before the backfill's
+            h = _claim_scan(h, _ceiling, proven, held, tip_first=TIP_CLAIM_FIRST and tip_capable(c, pk, body))
+            if h is None:
                 c.close()
                 return 409, {"error": "nothing available to claim"}
         c.execute("INSERT OR REPLACE INTO ranges(id,lo,hi,status,assignee,handle,claimed_at,claim_nonce,claim_signed,"
@@ -4605,6 +4984,46 @@ def claim(body):
     return 200, {"ok": True, "range": str(h), "ttl": CLAIM_TTL,
                  "note": "claimed for %d minutes; submissions are accepted for any height regardless"
                          % int(CLAIM_TTL / 60)}
+
+
+# TIP_CLAIM_FIRST hands tip blocks first only to a worker that can prove one in reasonable time (review round 2, NEW):
+# a mainnet tip block on a 4 GB card would hold the block for hours or fail. The board knows nothing about a card, so
+# the worker says it (`"tip": true` in its claim, HAZYNC_TIP=1: the operator's statement for that box), or it has EARNED
+# it: one of its single tip blocks (>= TIP_FROM) verified within TIP_CLAIM_EARNED_S of its claim. Everyone else gets
+# the backfill first, and tip blocks only once nothing below X is open, as without TIP_CLAIM_FIRST.
+TIP_CLAIM_EARNED_S = float(os.environ.get("TIP_CLAIM_EARNED_S", "3600"))
+
+
+def tip_capable(c, pk, body):
+    """Does this claim get tip blocks first? (TIP_CLAIM_FIRST)"""
+    if (body or {}).get("tip") is True:
+        return True
+    if not pk or not TIP_FROM:
+        return False
+    return c.execute("SELECT 1 FROM vranges v JOIN ranges r ON r.id = v.id WHERE v.pubkey=? AND v.lo = v.hi AND v.lo >= ? "
+                     "AND r.claimed_at IS NOT NULL AND r.verified_at IS NOT NULL AND r.assignee=? "
+                     "AND r.verified_at - r.claimed_at <= ? LIMIT 1", (pk, TIP_FROM, pk, TIP_CLAIM_EARNED_S)).fetchone() is not None
+
+
+def _claim_scan(start, ceiling, proven, held, tip_first=None):
+    """The first block claim() may hand out at or above `start` and below `ceiling`, or None: open (not proven, not
+    held), in the open era, with a witness. The gap no run serves (_skip_gap) is jumped. With a tip run and
+    TIP_CLAIM_FIRST=1, the tip run's blocks [TIP_FROM, ceiling) are scanned before [start, TIP_FROM)."""
+    board = _board_servable_high()
+    def scan(h, top):
+        while h < top:
+            g = _skip_gap(h, board)
+            if g != h:
+                h = g
+                continue
+            if h not in proven and h not in held and era_open(h) and witness_available(h):
+                return h
+            h += 1
+        return None
+    if TIP_FROM and (TIP_CLAIM_FIRST if tip_first is None else tip_first) and start < TIP_FROM:
+        got = scan(TIP_FROM, ceiling)
+        return got if got is not None else scan(start, min(ceiling, TIP_FROM))
+    return scan(start, ceiling)
 
 
 def beat(body):
@@ -5023,6 +5442,19 @@ def submit(body):
         return 409, {"error": f"this receipt is already the verified proof of {_known}: a replay is not a new proof"}
     # 2. expensive verification OUTSIDE the lock (concurrent submits for different ranges run in parallel),
     #    but bounded by _verify_sem so a burst can't spawn unlimited STARK verifications and OOM the box.
+    # Before verifying (review of D1, MEDIUM 2 and LOW-MEDIUM 7): a range above a run's reorg fence is not taken (its
+    # states are the orphaned branch's until a person rewinds), and one whose boundary state is missing, empty or torn
+    # right now is asked again later; neither is counted against the block.
+    if LIBZYNC:
+        _f = reorg_fence(_hi)
+        if _f is not None:
+            return 409, {"error": f"reorged: the prep run holding block {_hi} stopped for a chain reorganisation at block "
+                                  f"{_f}; nothing above it is verified until it is rewound", "reorged": True, "range": rid}
+        _miss = lz_states_unreadable(max(_lo, 1), _hi)
+        if _miss is not None:
+            return 503, {"error": f"the board's state at block {_miss} cannot be read right now (prep is writing it, or "
+                                  f"moving it for a reorg): submit again in a minute; nothing was counted", "range": rid,
+                         "retry": True}
     _ep0 = reorg_epoch()                      # REORG §4: a rewind applied while this verifies is caught at commit
     with _verify_sem:
         sig_ok = verify_sig(pk, sig, receipt)
@@ -5208,7 +5640,9 @@ class H(BaseHTTPRequestHandler):
                                     "reproduce": "reproduce/METHOD_ID",
                                     "source_sha256": source_sha256(),
                                     # REORG §7: the newest chain reorganisation the board rewound for (None: never)
-                                    "reorg": reorg_meta(), "reorg_alert": _reorg_alert["v"]})
+                                    "reorg": reorg_meta(), "reorg_alert": _reorg_alert["v"],
+                                    # D1 (REORG.md §19): the tip run above HAZYNC_LZ_TIP_FROM (None: one run)
+                                    "tip_run": tip_run_meta()})
         if p == "/api/foldable":                           # adjacent pairs whose fold does not exist yet
             try: n = max(1, min(32, int(parse_qs(urlparse(self.path).query).get("limit", [str(FOLDABLE_DEFAULT)])[0])))
             except Exception: n = FOLDABLE_DEFAULT
@@ -5244,7 +5678,8 @@ class H(BaseHTTPRequestHandler):
                                   headers={"Content-Disposition": 'attachment; filename="hazync-zapp.hzk"'})
             return self._send(404, {"error": "no zyncAPP proof on this coordinator"})
         if p.startswith("/api/zync/"):                     # zyncAPP facts, relayed from a local zync-serve (untrusted)
-            code, body = zync_relay(p[len("/api/zync"):])
+            _at = parse_qs(urlparse(self.path).query).get("at")
+            code, body = zync_relay(p[len("/api/zync"):], _at[0] if _at else None)
             return self._send(code, raw=body) if code == 200 else self._send(code, {"error": body})
         m = re.fullmatch(r"/api/reorg/([0-9]{1,9})", p)
         if m:                                              # one reorg in full (REORG §7)
@@ -5521,6 +5956,20 @@ if __name__ == "__main__":
             print("[hazync-coordinator] PEER_COORDINATORS is set on a libzync coordinator that follows prep's reorgs "
                   "(REORG.md §17): peer sync could adopt rows of an orphaned branch back; unset one", flush=True)
             sys.exit(3)
+        sweep_views()
+        _tp = _tip_config_problem()
+        if _tp:
+            print(f"[hazync-coordinator] the tip run (REORG.md §19): {_tp}", flush=True)
+            sys.exit(3)
+        # the handover height hazync-lz-check-reorg compares the tip run's settings with (round 3, LOW 6: said when lost)
+        try:
+            _c = db(); _c.execute("INSERT OR REPLACE INTO meta(k,v) VALUES('tip_from',?)", (str(TIP_FROM),)); _c.commit(); _c.close()
+        except sqlite3.Error as e:
+            print(f"[hazync-coordinator] could not record tip_from in meta ({e}): hazync-lz-check-reorg will say its X "
+                  f"checks did not run", flush=True)
+        if TIP_FROM:
+            print(f"  tip run    blocks from {TIP_FROM}: bundles {TIP_BRIDGE_DIR}, states {TIP_STATE_DIR}, records "
+                  f"{TIP_REORG_DIR}, acks {TIP_REORG_ACK_DIR}{'; claimed first' if TIP_CLAIM_FIRST else ''}", flush=True)
         try:
             _applied = reorg_poll(startup=True)
         except RuntimeError as e:
