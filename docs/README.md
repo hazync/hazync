@@ -19,7 +19,8 @@ of the past and are not kept current.
 | [`../README.md`](../README.md) | what Hazync is and where it stands |
 | [`EXPLAINER.md`](EXPLAINER.md) | Hazync v2 in plain words |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | prove blocks on your GPU (Linux, Windows natively or via WSL2), verify a proof |
-| [`RELEASE_NOTES_v0.27.0.md`](RELEASE_NOTES_v0.27.0.md) | the current release: six zyncAPPs, the header-chain MMR, reorg handling P1–P6, a stricter verifier, the self-updating Windows app; image unchanged |
+| [`RELEASE_NOTES_v0.27.1.md`](RELEASE_NOTES_v0.27.1.md) | the current release: the Linux GPU prover fixed (a clean build), every release proved on real GPUs first, Linux verifiers on glibc 2.34; images unchanged |
+| [`RELEASE_NOTES_v0.27.0.md`](RELEASE_NOTES_v0.27.0.md) | six zyncAPPs, the header-chain MMR, reorg handling P1–P6, a stricter verifier, the self-updating Windows app; image unchanged |
 | [`RELEASE_NOTES_v0.26.1.md`](RELEASE_NOTES_v0.26.1.md) | the Windows CPU prover, Pascal cards, coordinator fixes; image unchanged |
 | [`RELEASE_NOTES_v0.26.0.md`](RELEASE_NOTES_v0.26.0.md) | undo data in every block's proof, image `46666b6f`; the board proves again from genesis |
 | [`RELEASE_NOTES_v0.25.0.md`](RELEASE_NOTES_v0.25.0.md) | the Windows installer; images unchanged |
