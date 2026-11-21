@@ -50,6 +50,7 @@ $H method-id                                              # the embedded image i
 $H libzync-prep <lo> <hi> <json dir> genesis <out>        # the states and hint bundles for blocks lo..hi
 $H libzync-prove-range <lo> <hi> <json dir> genesis <out> # prove lo..hi from genesis (chunks, trie, aggregate)
 $H libzync-join <left.rcpt> <right.rcpt> <out.rcpt>       # join two adjacent proofs (mode 18)
+$H libzync-prep-rewind <out dir> <block dir> [--allow-deep]  # undo prep's stores back to a fork (v0.27.0; docs/libzync/REORG.md §16)
 $H libzync-verify <receipt> [--expect <h>:<hash>]         # OK / DEMO / FAIL, as swiftsync-verify
 $H libzync-snark-wrap <receipt> <out>                     # Groth16 wrap of a chain receipt
 HAZYNC_BLOCK=block_962000.json $H agg-exec-fake           # one block's aggregate in execute mode, no GPU

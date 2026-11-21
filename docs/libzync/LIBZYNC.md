@@ -4,11 +4,13 @@
 v0.22.1, image `37987b85…`); its documents are kept as a record in [`docs/history/`](../history/).
 
 **On `main` since 2026-11-08 (#670). Released as v0.24.0 (2026-11-12) on RISC Zero 3.1.0**
-([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md)). **Published images** (frozen core c14 guest source,
+([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md)); the current release is v0.27.0 (20.11.2026), core images
+unchanged since v0.26.0. **Published images** (frozen core c14 guest source,
 tag `libzync-c14` = `ce4e1e3`, rebuilt on risc0 3.1.0 at `7dfb05b`; built by `reproduce/libzync.Dockerfile`,
 reproduced by two builds and by CI): mainnet **`46666b6f…`** (v0.26.0; from genesis, with the per-block undo-data commitment,
 [`UNDO.md`](UNDO.md)), signet **`01a80f17…`**, header-chain zyncAPP
-**`2db34e12…`** ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). v0.23.0 (risc0 3.0.5, mainnet
+**`de54b94f…`** (v0.27.0, with an MMR of every block hash; `2db34e12…` in v0.24.0 to v0.26.1), and the other zyncAPPs'
+images ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). v0.23.0 (risc0 3.0.5, mainnet
 `863c9ce3…`, signet `73b62530…`) is **withdrawn**: 3.1.0 fixes soundness bugs in RISC Zero's proof system, and 3.1.0
 verifiers refuse 3.0.x receipts. Laptop builds of the same source give other ids (on 3.0.5, mainnet `bbf82800…`),
 because ids depend on absolute build paths; several results below were measured on those or on 3.0.5 images and say
@@ -17,8 +19,9 @@ open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rou
 [`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
 
 **In service (2026-11-12):** the public board (api.hazync.org) runs Hazync v2 under `8888d59c` since 2026-11-12 (from genesis again under `46666b6f` at v0.26.0),
-restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 38 min); the whole header chain is
-proved in one receipt under `2db34e12` and followed at the tip on CPU; zyncAPP pages are live on hazync.org
+restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 32 min of proving); the whole header chain is
+proved in one receipt (under `2db34e12`, and again under `de54b94f` with the MMR on 15.11.2026) and followed at the
+tip on CPU; zyncAPP pages are live on hazync.org
 (`/zapps/`, `/headers/`, `/zapp/`); the Windows CUDA host proves natively.
 
 ⛔ **Not audited, no proof of the whole mainnet chain's blocks yet** (the header chain is proved). See §7.
@@ -120,9 +123,11 @@ and the coordinator serves them as work items (ROADMAP H-B 8, e).
 ### zyncAPPs — [`ZYNCAPPS.md`](ZYNCAPPS.md)
 
 Separate small guests that verify a core receipt inside the zkVM (the core image id is an input, so they survive
-handovers) and answer one question. Built: `coin` (unspent / spent at the core tip) and `headers` (the header chain
-from genesis: proved genesis..975,278 in one receipt under `2db34e12`, followed at the tip by `hazync-headers-follow`).
-Being built: `zeroconf`. Live on hazync.org: `/zapps/` (the list), `/headers/` (header chain, checked in the
+handovers) and answer one question. Released in v0.27.0: `headers` (the header chain from genesis, with an MMR of
+every block hash: proved genesis..975,278 in one receipt under `de54b94f`, followed at the tip by
+`hazync-headers-follow`), `hints`, `utreexo` (with a tip mode), and `assume`, `liveness`, `statement` and `deposit`,
+which are checks on a core proof with no guest of their own (ZYNCAPPS.md §9). Built, not published: `coin` (unspent /
+spent at the core tip). Being built: `zeroconf`. Live on hazync.org: `/zapps/` (the list), `/headers/` (header chain, checked in the
 browser), `/zapp/` (Coin check: balance and history facts from the counting trie against the fixed mainnet 1..200
 core proof, checked in the browser by the WASM verifier). New core facts are appended to
 `ChainState` only at a handover. Proof bundle format: [`PROOF_BUNDLE.md`](PROOF_BUNDLE.md).
@@ -145,10 +150,11 @@ core proof, checked in the browser by the WASM verifier). New core facts are app
 | joins for a whole-chain backfill | ESTIMATED from the 6.4 s join | ~975 k joins, ~1,700 PRO 6000 card-hours, ~$4.3k at $2.49/hr | same |
 | whole mainnet chain to 970,000 | ESTIMATED 11-07 on c14 (19 sampled blocks, chunk + aggregate + trie receipt; trie modelled) | 335 T cycles: ~$148-156k on A40, ~$278-295k on PRO 6000, scripts ON (design B was 257.7 T, ~$114-119k A40); ±50% | `cost/WHOLE_CHAIN_COST.md` |
 | header chain zyncAPP, execute | `headers` guest, execute mode, real mainnet headers | 2,427 cycles per header (genesis..2,100); whole chain 975,279 headers = 2,350,725,289 cycles, 2,437 segments | ROADMAP K1; `RESULT_risc0_3_1_gpu.txt` |
+| header chain zyncAPP with the MMR, proved | `de54b94f` (risc0 3.1.0), one RTX PRO 6000, 11-15 | genesis..975,278 in one receipt: **99.5 min**, 4,656,795,655 cycles (the MMR about doubles the work per header), 4,739 segments; 227,474 bytes; $4.63 of pod time for the proof | `headers/RESULT_gpu_whole_chain_mmr.txt` |
 | header chain zyncAPP, proved | `2db34e12` (risc0 3.1.0), one RTX PRO 6000, 11-11 | genesis..975,278 in one receipt: **59.4 min** (3.0.5 image `4d04d6bf`, now retired: 57.2 min), ~$2.50; 224,138 bytes; WASM verifier 39 ms on a laptop under Node | `RESULT_risc0_3_1_gpu.txt` |
 | mainnet 1..200 from genesis | `8888d59c` (risc0 3.1.0), one RTX PRO 6000, 11-11 | **3,074 s** (block 1 21.0 s, then ~15.1 s each); receipt 227,362 bytes; verifier DEMO (below minimum work) | `RESULT_risc0_3_1_gpu.txt` |
 | v2 vs v1 (CORE `37987b85`), real mainnet state | 8 blocks 200k-300k | **19.9x** fewer proven cycles on block 200,000, 9.5x across the eight; GPU time up to 15.1x less, 7.0x across the eight | `results/CYCLES_REAL_STATE.md` |
-| first public-board run | `8888d59c`, 4× RTX PRO 6000, 2026-11-12, from genesis | 1,287 blocks in 2 h 38 min (~490 blocks/hr), ~$0.021 a block on these early blocks, $27.13 | board run, 11-12 (operator's measurement; not in the repo) |
+| first public-board run | `8888d59c`, 4× RTX PRO 6000, 2026-11-12, from genesis | 1,287 blocks in 2 h 32 min of proving (~510 blocks/hr; 2 h 38 min from pod deploy to teardown), ~$0.021 a block on these early blocks, $27.13 | board run, 11-12 (operator's measurement; not in the repo) |
 
 The GPU benchmark's coin log and trie around block 962,000 are **MODELLED** (`lz::cl_synth_around`, from the block's
 own spends and real transaction counts): the cycles are a real block's, the coin state is not mainnet history
@@ -246,14 +252,15 @@ signedness bug was in Hazync's own transcription.
 
 - **No proof of the whole mainnet chain's blocks yet.** Real receipts from published 3.1.0 images: mainnet 1..200
   from genesis (`8888d59c`, 3,074 s on one RTX PRO 6000; `experimental/libzync-bench/zapp/`), the whole header chain
-  (`2db34e12`), and the public board's proofs from genesis (1,287 blocks in its first run, 11-12). Earlier receipts
+  (`2db34e12`, and `de54b94f` with the MMR), and the public board's proofs from genesis (1,287 blocks in its first run, 11-12). Earlier receipts
   (3.0.5 image `863c9ce3`, and laptop-built images: block 962,000, the 8-block join tree, 16 leaf proofs on real
   mainnet state; `experimental/libzync-bench/results/`) are kept as records; 3.1.0 verifiers refuse them. Signet is
   proved 1..2,600 from genesis in dev mode.
 - **The board proves from genesis; the tip is not followed yet.** The board box's paced prep pass
   (`libzync-board-prep`) writes one leaf bundle per block (LZLEAF02) under `/srv/bulk/libzync-board/leaves`; the
   coordinator (`server.py` with `HAZYNC_LIBZYNC=1`) serves them as claims, and adjacent proofs are folded by joins.
-  There is no v2 bridge: following the tip with libzync is not running yet (ROADMAP N). The separate paper prep run
+  There is no v2 bridge: following the tip with libzync is not running yet (ROADMAP N). Reorg handling for it (P1 to
+  P6, [`REORG.md`](REORG.md)) is released in v0.27.0, with automatic rewinds off. The separate paper prep run
   (`libzync-prep`, state before every block toward the tip) is described in ROADMAP, mainnet prep plan.
 - **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money. Fuzzing and a
   wider rig are open (I1).

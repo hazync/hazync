@@ -19,7 +19,7 @@ ZYNCAPP=${ZYNCAPP:-$BIN/zyncapp}
 VERIFY=${VERIFY:-$BIN/zapp-headers}
 ELF=${ELF:-$BIN/zyncapp-headers.bin}
 # The published headers ELF (reproduce/LIBZYNC_IDS, zyncapp-headers line): prove with nothing else.
-WANT_ELF=${WANT_ELF:-5bd8011d37a1751b46d3411a82f272dc7aaf1acd830aa3ba92e8f7afeb955afc}
+WANT_ELF=${WANT_ELF:-0401a2d7bf7eeb1f9c729057bc0725672c7283a91bde036fa82a818d82070cb8}
 # As root with the node's cookie: one bitcoin-cli per header, so no runuser (it logs a PAM session per call).
 BITCOIN_CLI=${BITCOIN_CLI:-bitcoin-cli -conf=/etc/bitcoin/bitcoin.conf -datadir=/var/lib/bitcoind}
 # rsync destination for the published folder (served at /headers-live/). Empty: publish to $D/pub only.

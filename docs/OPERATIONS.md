@@ -47,9 +47,10 @@ prep pass on the board box (`libzync-board-prep`) writes one leaf bundle per blo
 `/srv/bulk/libzync-board/leaves`, paced by proving. Following the tip with libzync is not running yet. v2 keeps
 claims, per-block proofs, folds, the genesis-anchored spine, the leaderboard, sponsorships and the sponsor bot.
 
-Workers: the v0.24.0 release (`hazync-worker`, `hazync-run-workers.sh`, the CUDA host), run as in §3. A worker whose
-host is not `8888d59c` is refused at start (§3.4). From the v0.26.0 re-baseline the board runs
-`46666b6f` from genesis and refuses `8888d59c` workers in the same way.
+Workers: the latest release (`hazync-worker`, `hazync-run-workers.sh`, the CUDA host; v0.27.1 on 21.11.2026), run as
+in §3. A worker whose host is not the board's image is refused at start (§3.4). The board ran `8888d59c` (v0.24.0,
+v0.25.0) until the v0.26.0 re-baseline; since then it runs `46666b6f` from genesis (v0.26.0 to v0.27.1) and refuses
+`8888d59c` workers in the same way.
 
 **MEASURED, first v2 proving run** (2026-11-12, 4× RTX PRO 6000, 2 h 38 min): 1,287 blocks proven, ~490 blocks/hr,
 ~$0.021/block on early blocks, $27.13 in all. An early block takes ~22–27 s on an RTX PRO 6000, mostly fixed per-block
@@ -343,7 +344,7 @@ it runs once per artifact. `SKIP_GROTH16=1` boxes cannot `snark-wrap` at all.
 
 ### 2.7 METHOD_ID and reproducibility
 
-**Releases.** The current release is **v0.27.0**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
+**Releases.** The current release is **v0.27.1**, libzync on RISC Zero 3.1.0; `scripts/check-versions.sh` requires this
 line to name the newest tag (or one ahead of it). It ships the published libzync image `46666b6f` (unchanged since v0.26.0,
 a new chain from genesis; v0.24.0/v0.25.0 shipped `8888d59c`). v0.23.0 (`863c9ce3`, risc0
 3.0.5) was the first libzync release and v0.22.1 (`37987b85`) the CORE design's last; 3.0.5 receipts do not verify under 3.1.0.

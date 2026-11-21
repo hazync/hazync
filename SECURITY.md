@@ -15,8 +15,8 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 finding that matters most.
 
 This page covers **Hazync v2** (the libzync engine): published images mainnet `46666b6f`, signet `01a80f17` and the
-header-chain zyncAPP `de54b94f` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS); v0.26.0 shipped `2db34e12`), release v0.26.0, RISC Zero 3.1.0.
-Both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.
+header-chain zyncAPP `de54b94f` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS); v0.24.0 to v0.26.1 shipped `2db34e12`), release
+v0.27.0, RISC Zero 3.1.0. The core images are unchanged since v0.26.0, and both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.
 What a proof rests on is set out in [`docs/SOUNDNESS.md`](docs/SOUNDNESS.md), and how to review it in
 [`docs/EXTERNAL_REVIEW.md`](docs/EXTERNAL_REVIEW.md).
 
@@ -32,7 +32,8 @@ block-level rules the aggregate applies from the chunks' facts, the coin log, th
 
 | release | engine | status |
 |---|---|---|
-| v0.26.0 (latest) | Hazync v2, image `46666b6f`, RISC Zero 3.1.0 | supported: the public board runs it, from genesis |
+| v0.27.0 (latest) | Hazync v2, image `46666b6f`, RISC Zero 3.1.0 | supported: the public board runs it, from genesis |
+| v0.26.0, v0.26.1 | Hazync v2, image `46666b6f`, RISC Zero 3.1.0 | supported: the same image, so the board accepts its proofs |
 | v0.24.0, v0.25.0 | Hazync v2, image `8888d59c`, RISC Zero 3.1.0 | supported for verifying: its proofs are the board's blocks 1..1999 |
 | v0.23.0 | Hazync v2, image `863c9ce3`, RISC Zero 3.0.5 | **withdrawn**: do not deploy; 3.1.0 verifiers refuse its proofs |
 | v0.22.1 and earlier | Hazync v1, image `37987b85` (since v0.21.0) | not maintained; v0.22.1 still verifies v1 proofs |

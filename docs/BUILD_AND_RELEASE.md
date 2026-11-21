@@ -24,9 +24,11 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
   `hazync-run-workers.sh`; the Windows installer `hazync-setup-x86_64-windows.exe` (built by `release-sign.yml`);
   `SHA256SUMS.txt` and `.asc`. Ten are uploaded by `release.sh`, four added by `release-sign.yml`: the release must
   carry **exactly those 14** (13 up to v0.26.0, which had no Windows CPU host; 12 up to v0.24.0, which had no installer).
-- **Images** (v0.24.0): mainnet `8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4`, signet
-  `d4210dae…`, headers zyncAPP `2db34e12…`. `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the
-  ids and ELF hashes); `reproduce/LIBZYNC_IDS` pins them.
+- **Images** (v0.27.0): mainnet `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` and signet
+  `01a80f17…` (unchanged since v0.26.0), and the zyncAPPs' headers `de54b94f…`, hints `1894f12e…`, utreexo
+  `27bea7da…` and utreexo-tip `ab6f7a26…` (v0.24.0 shipped mainnet `8888d59c…`, signet `d4210dae…`, headers
+  `2db34e12…`). `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the ids and ELF hashes);
+  `reproduce/LIBZYNC_IDS` pins them.
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or
   passed as `HAZYNC_GUEST_ELF` and checked against its pinned sha256). The Windows host is built by `windows-prove.yml`
   on GitHub's `windows-2022` runners: dispatch it on the release commit first (`gh workflow run windows-prove.yml
@@ -323,6 +325,12 @@ of this is merged first:
 ```bash
 gh workflow run windows-prove.yml --ref main -f release_build=true   # FIRST, on the release commit (Windows host)
 RUSTUP_TOOLCHAIN=1.99.0 ./scripts/release.sh vX.Y.Z --dry-run         # preflight + build + gate; publishes nothing
+# on the LAPTOP, at the release commit (the RunPod key is there): the staged CUDA hosts on real cards -- "The real-GPU gate"
+scripts/release-gpu-gate.sh run --source hazync-coord:<release checkout>/dist --host-sha256 <staged cuda host sha256>
+# on a Windows PC: release-gpu-gate-windows.ps1 with the staged zip's host.exe, then on the laptop:
+scripts/release-gpu-gate.sh record-windows --source hazync-coord:<release checkout>/dist --report gate-windows.json \
+    --receipt block_170.rcpt --log prove.log --zip hazync-host-x86_64-windows-cuda.zip
+scripts/release-gpu-gate.sh sweep               # after ANY abnormal exit of the gate: lists leftover gate pods
 RUSTUP_TOOLCHAIN=1.99.0 NOTES=docs/RELEASE_NOTES_vX.Y.Z.md ./scripts/release.sh vX.Y.Z   # the release
 ./scripts/release.sh vX.Y.Z --verify-only                              # resume at signing for a published, unsigned release
 ```
@@ -335,9 +343,11 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    passes; at least one passing and no failed CI run on `HEAD` (cancelled runs count as neither);
    `docker`, `gh`, `node`, `python3` present; **≥ 25 GB free**; `reproduce/METHOD_ID` equals the
    `libzync-product mainnet` id of `reproduce/LIBZYNC_IDS`.
-2. **Build the Linux hosts**: `prover/build-release.sh cpu` and `cuda`, with `SKIP_GROTH16=1` and `RZUP_TIMEOUT`
-   defaulting to 7200. **A prebuilt host is accepted** (not rebuilt) when `dist/.built-from-<asset>` equals `HEAD`
-   **and** it carries the canonical id: asked with `method-id` where it runs, read from its bytes
+2. **Build the Linux hosts**: `prover/build-release.sh cpu` and `cuda`, with `SKIP_GROTH16=1`, `RZUP_TIMEOUT`
+   defaulting to 7200 and `HAZYNC_REUSE_TARGET=0`: **every C/C++/CUDA object is compiled from source**, in an empty
+   `prover/target/clean-<mode>` that is deleted before and after the build (see "Why a release build is clean"
+   below). **A prebuilt host is accepted** (not rebuilt) when `dist/.built-from-<asset>` **and**
+   `dist/.clean-build-<asset>` (written only by a clean build) equal `HEAD` **and** it carries the canonical id: asked with `method-id` where it runs, read from its bytes
    (`scripts/embeds-method-id.sh`) where it cannot (the CUDA host on a box with no driver).
    `build-release.sh` stages the published mainnet ELF at `dist/.libzync-guest/mainnet.bin` (or set
    `HAZYNC_GUEST_ELF`).
@@ -355,15 +365,24 @@ script does not pin it. The tag must match `^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9
    asserted), `hazync-coordinator.py`, `hazync-run-workers.sh`, `hazync-verify.js` (from
    `swiftsync-verify-wasm/swiftsync-verify.js`) and `hazync-verify.wasm` via `swiftsync-verify-wasm/build.sh`, only
    if a `wasm32-unknown-unknown` target is installed (otherwise it warns; stage a wasm built elsewhere in `dist/`).
-   The x86_64 verifier (`swiftsync-verify`) is built every time.
+   The x86_64 verifier (`swiftsync-verify`) is built every time, by `scripts/build-linux-verifier.sh x86_64` in
+   the hosts' pinned `ubuntu:22.04` image with Rust 1.99.0 (docker only; the toolchain is cached in docker volumes),
+   **not** with the release box's cargo. `release-sign.yml` builds `hazync-verify-aarch64` the same way.
 5. **Gate.** `dist/` must hold **exactly** the nine `release` assets of `scripts/release-assets.txt`, nothing
    else: it is not cleaned between releases, so move stray files out first. Then `scripts/check-dist.sh dist`:
-   every staged artifact must belong to the canonical guest. The CUDA host, if it cannot run here, is **checked
+   every staged artifact must belong to the canonical guest, and every Linux ELF must need **glibc 2.34 at most**
+   (`scripts/check-glibc-floor.sh`; see "The glibc floor" below). The CUDA host, if it cannot run here, is **checked
    from its bytes** unless an operator passes `HAZYNC_ATTEST_hazync_host_x86_64_linux_gnu_cuda=<id measured on a
    GPU>` (preferred; the bytes must still agree). The Windows zip is checked from its bytes;
    `HAZYNC_ATTEST_hazync_host_x86_64_windows_cuda_zip=<id>` may be passed by an operator who ran it. Then
    `scripts/check-release-verifiers.sh dist` runs the staged verifiers on the real mainnet block 1 receipt by this
    release's image (and the CLI on v0.24.0's 1..200 receipt) and on tampered copies.
+   **Step 4b, the real-GPU gate:** `scripts/release_gpu_gate.py check` must find `dist/.gpu-gate-linux-cuda.json`
+   and `dist/.gpu-gate-windows-cuda.json` naming **exactly** the staged CUDA host's, Windows zip's and verifier's
+   sha256s, this release's image, `PASS`, and (Linux) a Blackwell **and** a pre-Blackwell card that each proved and
+   verified every gate block. Otherwise the script stops before tagging and prints the gate command with the staged
+   host's sha256 (a dry run reports it and goes on). Run the gate, then re-run the same `release.sh` command: it
+   resumes. Rebuilding a host changes its sha256 and voids its marker.
 6. **Publish.** Annotated tag pushed, then `gh release create` with **all nine** assets in one call
    (`release-sign.yml` signs what is attached at publish and picks up nothing later); the release is read back
    and must carry exactly those nine, each the staged size.
@@ -402,9 +421,206 @@ the **RTX PRO 6000 (sm_120)** JIT-compile the kernels on the **first prove of a 
 then use the driver's cache. Adding a target costs build time (ptxas assembles each architecture in turn, ~6–7 min
 per kernel file, per the script's note) and was not done for v0.24.0.
 
-**Not automated, still required:** smoke-test the CUDA hosts on a real GPU (`method-id`, then
-`host libzync-prove-range 1 1 testdata/libzync/mainnet genesis out && host libzync-verify out/block_1.rcpt`, as
-`release.sh` prints), and repoint running provers (`run-workers.sh` checks the id only at startup, #99).
+**Not automated, still required:** repoint running provers (`run-workers.sh` checks the id only at startup, #99).
+Proving the CUDA hosts on real GPUs is no longer a post-release chore: `release.sh` refuses to publish without it.
+
+#### The real-GPU gate (`scripts/release-gpu-gate.sh`)
+
+**Why.** v0.26.1 and v0.27.0 published a Linux CUDA host that segfaulted on its first GPU step on an RTX PRO 6000
+(gdb: `cuStreamSynchronize` ← `stream_t::Dmalloc`, non-pooled branch ← `NTTParameters` ← `sppark_init`), while
+v0.26.0 proved the same block on the same pod. The release box has no GPU, so every check before publishing read
+the binary's **bytes** (ids, imports, sizes, `check-dist.sh`, `check-release-verifiers.sh` on the CPU binaries) and
+none ran a CUDA kernel. The gate runs the **exact staged binary** on real cards before anything is tagged.
+
+**What it proves.** The blocks of [`prover/testdata/libzync/gpu-gate/GATE`](../prover/testdata/libzync/gpu-gate/GATE):
+block **170** (the first transaction; 4 segments) and the full block **200,000** (388 transactions, 1,231 inputs, 2
+chunks, 52 segments at po2 21), each from its **real-state leaf bundle**, exactly as a board prover proves a leaf
+(`HAZYNC_LEAF_BUNDLE=leaf_<h>.bin host libzync-prove-range h h unused leaf out`). The bundles are the
+`libzync-prep` cuts of the paper prep on `hazync-proof` (image `46666b6f`), with prep's `state_<h-1>.json` and
+`state_<h>.json`, pinned in `SHA256SUMS` beside them (the same files and hashes as the cost-curve run's
+`raw/inputs.sha256`). ⚠ A re-baseline (a new image) needs new bundles, like the reference receipt (§3.5): the gate
+then fails at the verifier, never passes on a stale fixture.
+
+**How** (`scripts/release_gpu_gate.py run`, from the maintainer's laptop, where `~/.hazync/runpod.key` is):
+
+1. Refuses before renting anything unless the release box's staged `hazync-host-x86_64-linux-gnu-cuda` has the
+   sha256 you passed (step 4b prints it) and the staged verifier is there; `--dry-run` stops there. Then it lists the
+   account's pods: a leftover `hz-relgate-*` pod (an earlier run that died) is **refused** (`--sweep-first` releases
+   it), and every other pod (the sponsor bot, a fleet) is **named** but left alone. Then the SECURE stock: each
+   role keeps only the types the catalogue shows in stock, and if either role has none, nothing is rented.
+2. Rents **in parallel**, SECURE cloud, pods named `hz-relgate-<sha8>-…`: a **pre-Blackwell** card, the **A40**
+   (sm_86, $0.49/hr), else an **RTX A5000 / A6000** (sm_86) or an **L40S** (sm_89); and a **Blackwell** card, the
+   **RTX PRO 4500** ($0.72/hr), else the **RTX PRO 6000** ($2.09/hr). Each pod's only SSH key is a throwaway.
+3. As soon as SSH answers, the pod's **dead-man** is armed (`release-gpu-gate-pod.sh --deadman <s> <pod id>`):
+   after the rest of the time cap plus 25 minutes (more than a 15-minute harvest plus a 6-minute terminate, so it
+   never races the laptop's own release) the pod removes **itself**, with the pod-scoped key RunPod injects
+   (`RUNPOD_POD_ID`, `RUNPOD_API_KEY`, "Pod-scoped API key" in RunPod's environment-variable reference):
+   `runpodctl pod delete`, the REST `DELETE`, then `runpodctl pod stop`; if none of them took, it logs **COULD NOT
+   REMOVE THIS POD** and kills the gate's workload, and the pod bills until `sweep`. It refuses to act unless
+   `RUNPOD_POD_ID` is the id it was armed with. Each step that answered is in `deadman.log`, harvested with the rest.
+   ⚠ Not yet seen working on a real pod: whether the pod-scoped key may delete its own pod is not documented. A
+   stopped pod releases its GPU and still bills its volume disk (RunPod's "Manage Pods"). ⚠ **Between the create
+   and SSH answering (up to the 15-minute boot wait) there is no dead-man**: a laptop lost in that window leaves
+   the pod to `sweep`.
+4. The **release box pushes the staged host straight to each pod** (the run's key is copied to a private temp dir
+   there and removed after): 425 MB through a domestic uplink would be most of the bill. Fixtures and
+   `scripts/release-gpu-gate-pod.sh` go from the laptop.
+5. On the pod: `nvidia-smi`, the host's sha256 against yours, the fixtures against their sums, `method-id`, then
+   each gate block, timed. No retry: a gate that retries hides the fault it exists to see. A script that dies
+   without a result is seen at the next poll (`POD_SCRIPT_DIED`).
+6. **Fail fast**: when either card ends without `PROVED`, the other is stopped at once. Every step is a subprocess
+   the caps can kill. **Harvest first, then terminate** (`terminate_confirmed`), whatever happened, with a 5-minute
+   harvest deadline on a failure (15 on success); every 2 minutes a listing by the run's prefix releases a pod RunPod
+   made although the call failed (and counts it in the spend); at the end a sweep (`release_until_clean`) during
+   which further Ctrl-Cs are ignored. Ctrl-C, SIGTERM, SIGHUP and SIGQUIT all take this path.
+7. Caps: `--max-usd` (default **$4.00**, derived under **Cost**) on **this run's own** spend, estimated from its
+   pods' $/hr × time alive (lost creates included) × 1.15, checked every second. It fires early by what the live
+   pods can still cost after it (a full 15-minute harvest plus the 6-minute terminate budget, each), so the total
+   stays under the cap; and before renting, a cap that could not even cover that for the dearest in-stock types at
+   ceiling prices is refused. A pod RunPod
+   prices at $0 (or not at all) is counted at its type's ceiling, never as free, and a pod whose termination was not
+   confirmed keeps counting. The balance is read every 5 min only to **warn** when other pods on the key are
+   spending. `--max-min` (default **60**). The gate refuses to run from a checkout with uncommitted changes (it
+   names them) or whose git state it cannot read, and a `--work` inside the checkout: **keep `--work` and every
+   piece of evidence outside the checkout**, or the next run finds the tree dirty.
+8. The **staged verifier**, fetched to the laptop and checked by sha256 (it needs glibc 2.34 at most since it is
+   built in ubuntu:22.04, below), checks every harvested receipt: `hazync-verify --anchor state_<h-1>.json --expect
+   <h>:<hash> block_<h>.rcpt` must say `SWIFTSYNC_VERIFY_DEMO` (a valid proof from the given anchor; exit 2) with
+   the `--expect` check passed and no failed check, and the pod's `state_<h>.json` must equal prep's in every field
+   but `anchor_id` (a leaf is a base step on S(h-1)). One receipt with a byte flipped must be **refused**, or the
+   gate fails: a verifier that accepts it is checking nothing. Checked 20.11.2026 against a real CPU proof of
+   leaf 170 (image `46666b6f`, 918 s): exit 2 and `SWIFTSYNC_VERIFY_DEMO … FROM THE GIVEN ANCHOR ONLY` with
+   `[ok] --expect`; tampered, a wrong `--expect` hash or a wrong anchor: exit 1; the states differ only in `anchor_id`.
+9. All passed: `dist/.gpu-gate-linux-cuda.json` on the release box (host, verifier and fixture sha256s, image, the
+   laptop checkout's **commit**, each card's name and compute capability, every block's receipt sha256, prove time
+   and verdict, spend, who ran it), and every receipt's sha256 appended to `dist/.gpu-gate-history.txt` and
+   `~/.hazync/gpu-gate-receipts.txt`. Evidence stays in `--work` (default a new temp dir). Step 4b requires the
+   marker's commit to be the release commit and its fixtures to be this tree's: **run the gate from a checkout of
+   the release commit**.
+
+⛔ **After ANY abnormal exit** (the laptop slept, crashed or lost its network, a `kill -9`, a "PODS MAY STILL BE
+BILLING" line), run:
+
+```bash
+scripts/release-gpu-gate.sh sweep               # lists every hz-relgate-* pod on the key
+scripts/release-gpu-gate.sh sweep --terminate   # and releases them
+```
+
+The next `run` refuses to start while one is listed. ⚠ `sweep --terminate` releases **every** `hz-relgate-*` pod on
+the key, including one a concurrent gate run elsewhere is using: run one gate at a time per RunPod key.
+
+**Cost** (an estimate, not yet measured end to end): per pod ~5 min boot + ~2 min push + the proves (block 200,000
+is ~2 min on a PRO 6000 by the cost curve's R1 line; an A40 is slower, assume ~3x); ~15 min x ($0.49 + $0.72)/hr
+≈ **$0.30**, or ≈ **$0.65** if the PRO 6000 stands in for the PRO 4500.
+
+**The default cap, $4.00**, is set so a normal run that meets every worst case still finishes: both boots take the
+full 15 minutes, the pre-Blackwell card is the slowest (proves at ~3x a PRO 6000: leaf 170 ~3 min, block 200,000
+~6 min) and both are charged at the ceiling prices of the dearest fallback types. Pre-Blackwell: 15 + 2 push + 3 + 6
++ 2 harvest = 28 min at $1.20/hr (L40S ceiling) = $0.56. Blackwell: 15 + 2 + 1 + 2 + 2 = 22 min at $2.60/hr (PRO
+6000 ceiling) = $0.95. Spent: $1.51 x 1.15 = **$1.74**. The cap also holds back what the two live pods can cost after
+it fires, ($1.20 + $2.60)/hr x (900 + 360) s x 1.15 = **$1.53**, so it fires at $1.74 + $1.53 = $3.27 in that case:
+under $4.00. The cap is in the code beside `--max-usd` (`scripts/release_gpu_gate.py`).
+
+```bash
+export RUNPOD_API_KEY_FILE=~/.hazync/runpod.key     # the default
+scripts/release-gpu-gate.sh run --source hazync-coord:/root/<release checkout>/dist --host-sha256 <sha> --dry-run
+scripts/release-gpu-gate.sh run --source hazync-coord:/root/<release checkout>/dist --host-sha256 <sha> --work ~/relgate-vX.Y.Z
+```
+
+`--source` may also be a local `dist/` (the laptop then uploads the host itself, slowly, and writes the marker
+there; copy it to the release box's `dist/`).
+
+**The Windows CUDA host** (CI has no GPU, so this one is manual, and `release.sh` waits for it). Its marker says
+**ATTESTED**, not proved, and step 4b prints it that way: the receipt shows *a* host of this image proved block 170;
+that it was the staged zip's `host.exe` on that card is the maintainer's word, made checkable as far as it can be:
+
+1. Copy the **staged** `dist/hazync-host-x86_64-windows-cuda.zip` from the release box to the Windows PC, unzip it,
+   and put `leaf_170.bin` (from `prover/testdata/libzync/gpu-gate/`) and `scripts/release-gpu-gate-windows.ps1`
+   beside `host.exe`.
+2. In PowerShell there (`-Pascal` for a GTX 10-series card: the opt-in floor, #727):
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File release-gpu-gate-windows.ps1 -Leaf leaf_170.bin -Zip ..\hazync-host-x86_64-windows-cuda.zip [-Pascal]
+   ```
+   It hashes the `host.exe` it runs and the zip (`-Zip` is required: the zip also carries `cudart64_12.dll`), asks
+   `nvidia-smi` for the card, runs `method-id`, proves block 170 and writes `gate-windows.json` (every sha256, the GPU,
+   the timing). Every native program runs through `Start-Process` with its output redirected to files: under Windows
+   PowerShell 5.1, `& host.exe … *> log` with `$ErrorActionPreference = "Stop"` dies at the prover's first stderr
+   line (empty log, `$LASTEXITCODE` -1). `scripts/test-release-gpu-gate-windows.sh` runs the script under 5.1 where
+   one exists (WSL) with a fake `host.exe` that writes to stderr, and checks its shape everywhere.
+3. Bring `gate-windows.json`, `out\block_170.rcpt`, `prove.log` and the zip back and record it:
+   ```bash
+   scripts/release-gpu-gate.sh record-windows --source hazync-coord:/root/<release checkout>/dist \
+       --report gate-windows.json --receipt block_170.rcpt --log prove.log --zip hazync-host-x86_64-windows-cuda.zip
+   ```
+   It refuses unless the zip is the staged one, the report's `host.exe` sha256 is the staged zip's `host.exe`, the
+   receipt and log are the ones the report names, the prove exited 0 on a named GPU with this image, and the receipt
+   was **never used as evidence before** (not in the Linux marker, `dist/.gpu-gate-history.txt` or
+   `~/.hazync/gpu-gate-receipts.txt`, except as a Windows record of this same `host.exe`, so a re-record is allowed:
+   a proof is randomised, so a fresh run never repeats one; history that cannot be read is a refusal, not "none");
+   then the staged verifier must accept it and refuse a tampered copy. Step 4b also refuses a Windows receipt that
+   is one of the Linux gate's.
+
+⚠ **The markers catch mistakes; they are not tamper-proof.** Anyone who can write the release box's `dist/` can
+write a marker that passes step 4b. They stop a rebuilt, swapped, stale or untested binary from being published
+by accident, which is what happened in v0.26.1 and v0.27.0.
+
+**Tests** (no network, no GPU, each with a control that must fail): `scripts/test_release_gpu_gate.py` (against a
+fake RunPod and pod, with the real sponsor_bot release code: every pod released on every path, including SIGHUP and
+lost creates, with per-pod terminate alone and with the sweep alone; fail-fast; the run's own spend cap; leftover
+and other pods; the stock check and fallback; the dead-man armed; judge's refusals; record-windows' refusals,
+including a reused receipt), `scripts/test-release-gpu-gate.sh` (release.sh's own step 4b against a fake `dist/`:
+refused without a marker, with a wrong sha, commit or fixtures, after a rebuild, without a Blackwell card, for
+another `host.exe`, ...; proceeds with the right ones and says PROVED / ATTESTED; the clean-build stamp; the
+dead-man's calls, with stub `runpodctl`/`curl`).
+
+#### The glibc floor (every Linux binary runs on Ubuntu 22.04 / Debian 12)
+
+The hosts were always built in `ubuntu:22.04` and need `GLIBC_2.34`. The verifiers were not: the x86_64 one was
+built with the release box's own cargo (24.04) and the aarch64 one on an `ubuntu-latest` runner, so every release
+from v0.23.0 to v0.27.0 shipped verifiers needing `GLIBC_2.39`. Measured 20.11.2026 from the published assets
+(`.gnu.version_r`):
+
+| release | hosts (CPU, CUDA) | `hazync-verify-x86_64-linux-gnu` | `hazync-verify-aarch64` |
+|---|---|---|---|
+| v0.23.0 | — | 2.39 | 2.39 |
+| v0.24.0, v0.25.0, v0.26.0 | 2.34 (v0.26.0) | 2.39 **weak**: runs on 22.04, warns on every run | 2.39 |
+| v0.26.1, v0.27.0 | 2.34 | 2.39: **does not start** on 22.04 | 2.39 (v0.27.0) |
+
+Now `scripts/build-linux-verifier.sh {x86_64|aarch64}` builds both in the hosts' pinned image and refuses its own
+output above 2.34, and `check-dist.sh` refuses any staged Linux ELF above 2.34, weak or not, and any non-numeric
+`GLIBC_*` need (`GLIBC_ABI_DT_RELR` from `-Wl,-z,pack-relative-relocs` needs glibc 2.36; `GLIBC_PRIVATE` is internal),
+reading the needs from the program headers, not the strippable section headers (`scripts/test-glibc-floor.sh`,
+with a control). The published v0.26.1 and v0.27.0 verifiers stay broken on 22.04
+until the next release replaces them.
+
+#### Why a release build is clean (`prover/build-release.sh`)
+
+v0.26.1's and v0.27.0's crash was a **warm target**: #727 changed `vendor/sppark/sppark/util/gpu_t.cuh` (`stream_t`
+gained members) and `all_gpus.cpp`, and the release box reused `prover/target`. Vendored, sppark's `build.rs` watched
+nothing (its `rerun-if-changed` lines only ran in sppark's own repo layout, and its `rerun-if-env-changed` lines
+switched off cargo's "re-run on any package change"), so `libsppark_cuda.a`, which constructs every `stream_t`, was
+never rebuilt, while `risc0-sys` (whose builder watches its include directories) recompiled `supra/ntt.cu` against
+the new header: one binary, two `stream_t` layouts. `scripts/test-build-rerun.sh` reproduces this with real cargo.
+Two fixes, each sufficient alone:
+
+- **The vendored build scripts watch their headers** (`HAZYNC_RERUN_ON_HEADERS`): sppark watches its header tree;
+  `risc0-circuit-rv32im-sys`, `-keccak-sys` and `risc0-groth16-sys` read every `DEP_*_ROOT` include directory through
+  `watch_dep`, which emits `cargo:rerun-if-changed=<dir>`; `risc0-build-kernel` watches include directories for C++
+  kernels too. Cargo scans a watched directory **recursively, by mtime**, and allows absolute paths outside the
+  package, so a `DEP_*` path can be watched. And when a `links` dependency's build script re-runs, cargo re-runs
+  every dependent build script, because that output is newer than theirs. Limits: mtime, not content (a header
+  restored with an old mtime, e.g. `cp -p`, is not seen), and only what is declared.
+- **A release never trusts a warm target**: `build-release.sh` builds in `prover/target/clean-<mode>`, deleted before
+  and after (`HAZYNC_REUSE_TARGET=1` keeps it for iterating, and then writes no `.clean-build-<asset>` stamp, so
+  `release.sh` rebuilds that host). The stamp is `<commit> <sha256 of the binary>`, removed before the binary is
+  moved in and written after, and `release.sh` checks both halves. Two builds of one mode in one checkout are
+  refused (`flock` on `dist/.build-release-<mode>.lock`). Cost: the Rust dependencies are rebuilt every release (minutes, next to the CUDA
+  kernels); disk is unchanged (the target is removed after the copy-out).
+- **ONE-TIME, on the release box:** the `prover/target/release` left by earlier releases is no longer used (and is
+  root-owned). `release.sh`'s preflight says so while it exists; delete it once:
+  `docker run --rm -v "$PWD/prover:/p" ubuntu:22.04 rm -rf /p/target/release`.
+
+Neither change touches the guest: the image id is unaffected (`scripts/check-guest-inputs.sh`).
 
 ### 3.3 Verifying the published assets
 
@@ -433,7 +649,10 @@ exports as a correct one, so it is caught only by calling it. Deploy after every
 it), and on an id change in the **same cutover** as the coordinator binary swap and board reset (earlier rejects the
 live old board; later rejects the new one). Since v0.23.0 the module is the libzync verifier
 (`swiftsync-verify-wasm`), and its glue `hazync-verify.js` has the libzync API (`loadVerifier`, `verify({network,
-image, receipt})`, `imageId(network)`), not v1's: serve the release's `.wasm` and `.js` **together**.
+image, receipt})`, `imageId(network)`), not v1's: serve the release's `.wasm` and `.js` **together**. From v0.27.0 the
+core module has no `verifyHeaders`: the header checks are the header-chain zyncAPP's own module
+([`../zapps/headers/wasm/`](../zapps/headers/wasm/README.md), `zapp-headers.js`), and a page that loads the new core
+module and still calls `verifyHeaders` on it finds no such function, so deploy the two **in the same change**.
 
 Note: the source says "both sites"; bitcoinghost.org/hazync was retired 2026-09-16, so hazync.org is the only
 site serving the verifier.
@@ -603,6 +822,9 @@ Hazync v2:
   build output stops step 5 of §3.2; move it out rather than adding it to the list.
 - **The Windows host comes from a `windows-prove.yml` run of the release commit.** Dispatch it before releasing;
   its artifact expires after 14 days.
+- **A byte-checked CUDA host is not a working one** (v0.26.1, v0.27.0): both published a Linux CUDA host built from
+  a warm target that mixed two layouts of sppark's `stream_t` and segfaulted on its first GPU step; every check on
+  the GPU-less release box passed. Release builds are now clean, and step 4b requires the real-GPU gate (§3.2).
 - **Blackwell workstation cards JIT on first prove.** The release CUDA host has no sm_120 SASS, so an RTX PRO 6000
   spends about 10 minutes compiling PTX on its first prove on a fresh machine (§3.2). It is not a hang.
 
