@@ -547,6 +547,11 @@ that it was the staged zip's `host.exe` on that card is the maintainer's word, m
    PowerShell 5.1, `& host.exe … *> log` with `$ErrorActionPreference = "Stop"` dies at the prover's first stderr
    line (empty log, `$LASTEXITCODE` -1). `scripts/test-release-gpu-gate-windows.sh` runs the script under 5.1 where
    one exists (WSL) with a fake `host.exe` that writes to stderr, and checks its shape everywhere.
+   **The segment size** follows the card's memory, from the app's table (`tools/win-gui/supervisor.py`
+   `_SEG_PO2_FOR_VRAM`; the test checks the two are equal): the host's default, 21, peaks near 22 GB and ran out of
+   memory on a 4 GB GTX 1050 Ti in the v0.27.1 gate, where 18 proved block 170 in 297 s. `-SegPo2 N` or an
+   `HAZYNC_SEG_PO2` already set overrides it; the report records `seg_po2` and where it came from. The script warns
+   below 3 GB free on the drive: that gate's first runs also stopped at 1.4 GB free ("not enough space on the disk").
 3. Bring `gate-windows.json`, `out\block_170.rcpt`, `prove.log` and the zip back and record it:
    ```bash
    scripts/release-gpu-gate.sh record-windows --source hazync-coord:/root/<release checkout>/dist \
