@@ -115,8 +115,8 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Rust toolchain
         run: rustup update --no-self-update stable && rustc --version
-      - name: libzync (coin log, counting trie, facts, wire)
-        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness
+      - name: libzync (coin log, counting trie, facts, wire; the hints, liveness and utreexo zyncAPPs' derivations, features hints, liveness, utreexo)
+        run: cargo test --manifest-path libzync/Cargo.toml --release --features std,hints,liveness,utreexo
       - name: swiftsync-verify (the libzync verifier)
         run: cargo test --manifest-path swiftsync-verify/Cargo.toml --release
       - name: swiftsync-verify-ffi (its C ABI)
@@ -1455,6 +1455,31 @@ jobs:
         run: ./scripts/test-release-ci-gate.sh
       - name: CI gate POSITIVE CONTROL (reduced to one green job — must FAIL)
         run: ./scripts/test-release-ci-gate.sh --control
+      - name: release.sh will not publish a CUDA host that has not proved real blocks on real GPUs (v0.26.1, v0.27.0)
+        # Both published a Linux CUDA host that segfaulted on its first GPU step; every check on the GPU-less release
+        # box read bytes. Step 4b requires the real-GPU gate's markers for exactly the staged files.
+        run: ./scripts/test-release-gpu-gate.sh
+      - name: GPU gate POSITIVE CONTROL (step 4b's refusal made non-fatal — must FAIL)
+        run: ./scripts/test-release-gpu-gate.sh --control
+      - name: The GPU gate terminates every pod it rents, on every path, and marks nothing it did not verify
+        run: python3 scripts/test_release_gpu_gate.py
+      - name: GPU gate lifecycle POSITIVE CONTROL (pods no longer terminated — must FAIL)
+        run: python3 scripts/test_release_gpu_gate.py --control
+      - name: A vendored header change rebuilds every -sys crate compiled against it, even on a warm target
+        # The root cause of the v0.26.1 crash: vendored sppark's build.rs watched nothing, so a warm target linked
+        # two layouts of stream_t. Real cargo, no nvcc.
+        run: ./scripts/test-build-rerun.sh
+      - name: Header-watch POSITIVE CONTROL (both fixes cut out — must FAIL)
+        run: ./scripts/test-build-rerun.sh --control
+      - name: Every Linux release binary runs on glibc 2.34, the hosts' floor (v0.23.0-v0.27.0 verifiers needed 2.39)
+        run: ./scripts/test-glibc-floor.sh
+      - name: glibc floor POSITIVE CONTROL (version comparison cut out — must FAIL)
+        run: ./scripts/test-glibc-floor.sh --control
+      - name: The Windows GPU-gate script survives a prover that writes to stderr (PowerShell 5.1 NativeCommandError)
+        # On Linux CI only the script's shape is checked; under WSL the test also runs it in Windows PowerShell 5.1.
+        run: ./scripts/test-release-gpu-gate-windows.sh
+      - name: Windows gate script POSITIVE CONTROL (the old redirect put back — must FAIL)
+        run: ./scripts/test-release-gpu-gate-windows.sh --control
       - name: The release signature is bound to the tag and cannot be laundered (review 11-12, release #2)
         run: ./scripts/test-release-sign.sh
       - name: Signing POSITIVE CONTROL (image check, binding and re-sign guard cut out — must FAIL)
@@ -2125,8 +2150,8 @@ jobs:
           path: elf/zyncapp-headers.bin
       - name: Assert the built ids == the published ids (reproduce/LIBZYNC_IDS)
         run: |
-          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' > built.txt
-          grep -E '^(libzync-product|zyncapp-headers|zyncapp-hints) ' reproduce/LIBZYNC_IDS > pinned.txt
+          docker run --rm hazync-libzync-repro | grep -E '^(libzync-product|zyncapp-[a-z-]+) ' > built.txt
+          grep -E '^(libzync-product|zyncapp-[a-z-]+) ' reproduce/LIBZYNC_IDS > pinned.txt
           echo "built:"; cat built.txt; echo "published:"; cat pinned.txt
           if [ ! -s built.txt ] || ! diff pinned.txt built.txt; then
             echo "::error::libzync image ids drifted from reproduce/LIBZYNC_IDS: reproducibility broken"
@@ -2285,7 +2310,9 @@ jobs:
         with: { name: libzync-hosts, path: hosts }
       - name: Bitcoin Core 28.0 (release binary, sha256 pinned) and its source (test_framework, pinned commit)
         run: |
-          curl -fsSLO https://bitcoincore.org/bin/bitcoin-core-28.0/bitcoin-28.0-x86_64-linux-gnu.tar.gz
+          # bitcoincore.org refused connections now and then (curl exit 7), failing the whole job: retry any error,
+          # six times 20 s apart. The sha256 line below still decides what is accepted.
+          curl -fsSLO --retry 6 --retry-delay 20 --retry-all-errors https://bitcoincore.org/bin/bitcoin-core-28.0/bitcoin-28.0-x86_64-linux-gnu.tar.gz
           echo "7fe294b02b25b51acb8e8e0a0eb5af6bbafa7cd0c5b0e5fcbb61263104a82fbc  bitcoin-28.0-x86_64-linux-gnu.tar.gz" | sha256sum -c
           tar xzf bitcoin-28.0-x86_64-linux-gnu.tar.gz
           git clone -q --depth 1 -b v28.0 https://github.com/bitcoin/bitcoin.git core-src

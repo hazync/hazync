@@ -34,7 +34,7 @@ fn build_cpu_kernels() {
         .deps(glob_paths("kernels/cxx/*.h"))
         .deps(glob_paths("kernels/cxx/*.cpp.inc"))
         .deps(glob_paths("kernels/cxx/*.h.inc"))
-        .include(env::var("DEP_RISC0_SYS_CXX_ROOT").unwrap())
+        .include(watch_dep("DEP_RISC0_SYS_CXX_ROOT"))
         .compile("risc0_rv32im_cpu");
 }
 
@@ -108,9 +108,9 @@ fn build_cuda_kernels() {
     build
         .flag("-Xptxas")
         .flag("-O3")
-        .include(env::var("DEP_RISC0_SYS_CUDA_ROOT").unwrap())
-        .include(env::var("DEP_RISC0_SYS_CXX_ROOT").unwrap())
-        .include(env::var("DEP_SPPARK_ROOT").unwrap());
+        .include(watch_dep("DEP_RISC0_SYS_CUDA_ROOT"))
+        .include(watch_dep("DEP_RISC0_SYS_CXX_ROOT"))
+        .include(watch_dep("DEP_SPPARK_ROOT"));
     if env::var_os("NVCC_PREPEND_FLAGS").is_none() && env::var_os("NVCC_APPEND_FLAGS").is_none() {
         build.flag("-arch=native");
     }
@@ -123,4 +123,16 @@ fn rerun_if_changed<P: AsRef<Path>>(path: P) {
 
 fn glob_paths(pattern: &str) -> Vec<PathBuf> {
     glob::glob(pattern).unwrap().map(|x| x.unwrap()).collect()
+}
+
+// HAZYNC_RERUN_ON_HEADERS — every include directory a `links` dependency hands this script (DEP_*_ROOT) is
+// watched, so a header change there re-runs this script and recompiles its kernels even on a warm target.
+// ⛔ Without it this script watched only its own kernels/, and the v0.26.1/v0.27.0 Linux CUDA host linked
+// objects compiled against two layouts of sppark's stream_t (gpu_t.cuh, #727) and segfaulted on its first
+// GPU step. cargo scans a watched directory recursively by mtime; an absolute path outside the package is
+// allowed. scripts/test-build-rerun.sh checks no build.rs here reads a DEP_* path any other way.
+fn watch_dep(var: &str) -> String {
+    let p = env::var(var).unwrap();
+    println!("cargo:rerun-if-changed={p}");
+    p
 }

@@ -1,7 +1,8 @@
 # Reorg handling for the libzync board (design)
 
 > **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15), P3 too (§16), P4 and P6 on
-> 18.11.2026 (§17); P5 (followers) is not built. I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
+> 18.11.2026 (§17), P5 (followers) the same day (§18). All six are released in v0.27.0 (20.11.2026), with automatic
+> rewinds off (`HAZYNC_REORG_AUTO` unset; §17 says what turning them on requires). I wrote it from the repo at `797b777e` (main) and a read-only survey of `hazync-proof` the same day.
 > **MEASURED** numbers come from that survey or the files named next to them. **ESTIMATE** numbers are labelled. The
 > user's decisions on the open questions are in §14; what building P1 and P2 corrected in this page is in §15.
 
@@ -690,7 +691,7 @@ leaves the stores as they are and fails the run (no rebuild loop). Cost: a prep 
 low; the in-memory follower stops scaling near ~140,000 anyway (ZAPP_FOLLOWER §1). New test knobs (`ZAPP_OWNER`,
 `ZAPP_RESTART`, `ZAPP_ACTIVE`, `ZAPP_SETTLE_S`) keep the defaults the unit uses.
 
-**The website** (`hazync/hazync-web`, branch `web/reorg-banner`, not deployed): a banner on every page from
+**The website** (`hazync/hazync-web`, hazync-web #61, deployed 20.11.2026): a banner on every page from
 `/api/meta.reorg` while the board is `rewinding` and for an hour after `done`; the feed renders `kind: reorg` rows (not
 as folds); a block page lists its orphaned proofs, each checkable. `tools/reorg-banner-test.mjs` (+ control) and
 `explorer-recent-test.mjs`.

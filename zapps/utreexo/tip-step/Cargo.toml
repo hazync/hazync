@@ -1,0 +1,13 @@
+[package]
+name = "zapp-utreexo-tip-step"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native tests of the utreexo tip step's block rules (the guest's step.rs); test only, part of no image"
+
+[dependencies]
+libzync = { path = "../../../libzync", default-features = false, features = ["utreexo"] }
+rustreexo = "=0.7.0"
+sha2 = { version = "0.10", features = ["compress"] }
+
+[workspace]

@@ -1,0 +1,40 @@
+# cargo-fuzz targets for the deposit zAPP (docs/libzync/ZAPP_TESTING.md §3.4, §4.7). Own workspace (the empty
+# [workspace] below), so it is never a member of zapps/deposit's and never touches its Cargo.lock; this crate's own
+# Cargo.lock started as a copy of the parent's, so it resolves the same versions (CI's cargo audit reads it too).
+# Run (nightly, cargo-fuzz): cargo fuzz run <target> fuzz/corpus/<target> -- -rss_limit_mb=1024
+# Replay the committed corpus on stable: cargo test --release --manifest-path fuzz/Cargo.toml
+[package]
+name = "zapp-deposit-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+zapp-deposit = { path = ".." }
+zapp-headers = { path = "../../headers" }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+libzync = { path = "../../../libzync", default-features = false }
+serde_json = "1"
+
+[[bin]]
+name = "deposit_bundle"
+path = "fuzz_targets/deposit_bundle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "deposit_tx"
+path = "fuzz_targets/deposit_tx.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

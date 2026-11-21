@@ -49,11 +49,11 @@ work, only the next window.
 
 ## The host binary
 
-Every piece that runs a host needs the **v2 host**, `hazync-host-x86_64-linux-gnu` from release v0.24.0 (or a build
+Every piece that runs a host needs the **v2 host**, `hazync-host-x86_64-linux-gnu` from the latest release (v0.26.0 or later; or a build
 from `reproduce/libzync.Dockerfile`). Check it before anything else:
 
 ```sh
-host method-id     # must print 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c (v0.26.0)
+host method-id     # must print 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c (v0.26.0 to v0.27.0)
 ```
 
 A laptop build of the same source prints another id ([`libzync/LIBZYNC.md`](libzync/LIBZYNC.md) §8), and a

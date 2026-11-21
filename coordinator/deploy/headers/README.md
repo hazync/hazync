@@ -22,7 +22,7 @@ Do not let the run grow unbounded: prove a fresh base on a GPU (`run_headers_pod
 `--set-base` as the run grows. How far a run can grow before 24G is not enough has not been measured.
 
 A run is published only after `zapp-headers --expect <tip>:<the node's hash>` (the header-chain zAPP's CLI, zapps/headers) prints
-`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`5bd8011d`, image `2db34e12`).
+`SWIFTSYNC_VERIFY_OK` over base + run. It proves only with the published ELF (`0401a2d7`, image `de54b94f`, the MMR image of v0.27.0).
 
 ## Block inclusion (the MMR)
 
@@ -55,7 +55,7 @@ install -d /opt/hazync-headers/bin /var/lib/hazync-headers
 install -m755 hazync-headers-follow /opt/hazync-headers/bin/
 # zyncapp + zapp-headers (zapps/headers) from this commit (release builds), and the container-built ELF:
 install -m755 zyncapp zapp-headers /opt/hazync-headers/bin/
-install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 5bd8011d…
+install -m644 zyncapp-headers.bin /opt/hazync-headers/bin/      # sha256 0401a2d7…
 ssh-keygen -t ed25519 -N '' -C hazync-headers-publish -f /root/.ssh/hazync_headers_publish
 #   web box, /root/.ssh/authorized_keys:
 #   command="/usr/bin/rrsync -wo /var/www/hazync-headers",restrict ssh-ed25519 AAAA… hazync-headers-publish
@@ -65,7 +65,17 @@ cp hazync-headers-follow.service hazync-headers-follow.timer /etc/systemd/system
 systemctl daemon-reload && systemctl enable --now hazync-headers-follow.timer
 ```
 
-## Upgrading the image (risc0 3.1.0, done 2026-11-12)
+## Upgrading the image
+
+**To the MMR image (v0.27.0): `2db34e12` → `de54b94f`.** Same steps as below, with v0.27.0's files: `hazync-headers-follow`
+(its `WANT_ELF` is now `0401a2d7…`), `zyncapp` and `zapp-headers` built from the release commit, the container-built
+`zyncapp-headers.bin` (sha256 `0401a2d7…`, `reproduce/LIBZYNC_IDS`), and the MMR base `headers_0_tip.rcpt`
+(`experimental/libzync-bench/headers/`, sha256 `b44e4a74…`, genesis..975,278) with
+`--set-base headers_0_tip.rcpt 975278 <hash of 975,278>`. A `2db34e12` base has no MMR peaks, so it is not carried over.
+Done on hazync-proof on 20.11.2026: the first run proved and verified 975,279..976,707 (1,429 headers) in 809 s, with a
+9.1 GB memory peak, and published it.
+
+**risc0 3.1.0 (done 2026-11-12): `4d04d6bf` → `2db34e12`.**
 
 The headers image moved from `4d04d6bf` to `2db34e12`. The installed base (proved by `4d04d6bf`) no longer
 verifies, so every timer run fails until a base of the new image is installed. Re-run the four `install`

@@ -1,0 +1,25 @@
+The Block check on hazync.org/headers, live, 2026-11-20 (after hazync-web #55 and the headers-api deploy).
+
+WHAT
+  hazync.org serving: hazync-verify.wasm sha256 0c8cf026... (v0.27.0 release asset), zapp-headers.wasm bc0fa13a...,
+  receipts base_0_975278 (b44e4a74...) + run_975279_976707, the path service hazync-headers-api behind
+  /headers-api/ (ready, tip 976707, 976,708 MMR leaves, mmr_root 1f5d027f6a01220390e5318d3dc434dd597974b5d6c04d624f0deddfbafa3715).
+  Read with headless Chromium (chrome-headless-shell, Playwright build 1248) from a laptop: the page loaded, verified
+  in the browser, asked mempool.space for the hash at the proof's tip, and the page text was read after 60 s.
+
+MEASURED (page text, verbatim)
+  https://hazync.org/headers/?h=170&hash=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee
+    OK: a valid header chain from genesis, with at least Bitcoin Core's minimum chain work, ending on the block
+    mempool.space has at height 976,707
+    Block 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee is block 170 of the proven chain from
+    genesis (tip 976,707, work 000000000000000000000000000000000000000159f434b9e695ca9e9ceacfb0).
+  https://hazync.org/headers/?txid=f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
+    OK: (the same chain line)
+    Transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block
+    00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, which is block 170 of the proven chain from
+    genesis (tip 976,707, work 000000000000000000000000000000000000000159f434b9e695ca9e9ceacfb0).
+
+ALSO
+  :8902 is not reachable from outside (a laptop's request timed out); the web box reaches it (nftables, one rule).
+  Refusals are tested in coordinator/deploy/headers-api/test/test_api.sh (48 checks, with the real verifier:
+  a path at another height and the coinbase's answer under the asked txid both FAIL).

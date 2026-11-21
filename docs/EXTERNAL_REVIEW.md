@@ -1,6 +1,6 @@
 # What still needs outside eyes
 
-> This page describes **Hazync v2** (the libzync engine), the images published in release v0.24.0. The guide
+> This page describes **Hazync v2** (the libzync engine), the images published since release v0.24.0 (the current ones in §1 below). The guide
 > written for Hazync v1 (the CORE guest, its accumulator, field backend and ghostd adoption) is kept in
 > [`history/EXTERNAL_REVIEW.md`](history/EXTERNAL_REVIEW.md).
 
@@ -33,7 +33,7 @@ include a real GPU proof of mainnet blocks 1..200 under the published image:
 
 ```sh
 cargo build --release --manifest-path swiftsync-verify/Cargo.toml
-python3 swiftsync-verify/vectors/run_vectors.py swiftsync-verify/target/release/swiftsync-verify   # 13/13
+python3 swiftsync-verify/vectors/run_vectors.py swiftsync-verify/target/release/swiftsync-verify   # 16/16
 swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --mempool \
     swiftsync-verify/vectors/mainnet_1_200_????????.rcpt
 ```
@@ -61,7 +61,7 @@ docker run --rm hazync-libzync-repro      # prints the ids and ELF hashes
 ```
 
 Compare with [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS) (mainnet `46666b6f…`; signet
-`01a80f17…`; headers zyncAPP `de54b94f…`, `2db34e12…` up to v0.26.0) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
+`01a80f17…`; headers zyncAPP `de54b94f…` since v0.27.0, `2db34e12…` up to v0.26.1) and with the ids built into the verifier (`IMAGES` in `swiftsync-verify/src/lib.rs`; a
 unit test checks the two agree). The id depends on absolute build paths, so a laptop build differs by design: only
 the container's output counts. Also worth a look: what the container pins (base image digest, `provision-vps.sh`,
 `scripts/libzync-base.sh`, the patches) and what it does not.
@@ -139,16 +139,17 @@ particular that a range proved from a wrong `prev` can never join onto the genes
 
 A bug here accepts a proof nobody should.
 
-- `swiftsync-verify/src/lib.rs` (`ChainState`, `verify`, `genesis_anchor`), `main.rs`, `headers.rs` (the header-chain
-  zyncAPP), `zync_path.rs`
+- `swiftsync-verify/src/lib.rs` (`ChainState`, `verify`, `genesis_anchor`), `main.rs`, `zync_path.rs`; the
+  header-chain zyncAPP is its own module, `zapps/headers`, and so is every other zyncAPP
+  ([`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md) §9)
 - the browser build `swiftsync-verify-wasm/` (shipped as `hazync-verify.wasm`) and the C library
   `swiftsync-verify-ffi/`
-- `swiftsync-verify/vectors/` (`manifest.json`: 13 cases, plus reference values a second implementation should
+- `swiftsync-verify/vectors/` (`manifest.json`: 16 cases, plus reference values a second implementation should
   reproduce)
 
 Check each step of [`libzync/SWIFTSYNC_PROOFS.md`](libzync/SWIFTSYNC_PROOFS.md) §5 against the code, and that the three
-builds give the same answers. The browser verifier's bytes are reproducible only with the same Rust toolchain as the
-release (a known follow-up).
+builds give the same answers. The browser verifier's bytes are reproducible: `swiftsync-verify-wasm/build.sh` builds
+in a pinned, published container at a fixed path ([`../swiftsync-verify-wasm/README.md`](../swiftsync-verify-wasm/README.md)).
 
 ### 9. The coordinator under a hostile-coordinator model
 

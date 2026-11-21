@@ -1,9 +1,12 @@
 # zyncAPPs: building on the core proof
 
-Status (2026-11-12): two zyncAPPs are built in `prover/zyncapps` (ROADMAP B5, K1). `headers` (the header chain from
-genesis) is **published and proved**: image `2db34e12…` (risc0 3.1.0, `reproduce/LIBZYNC_IDS`), genesis..975,278 in
-one receipt (59.4 min on one RTX PRO 6000), kept at the tip by `hazync-headers-follow`, checked in the browser at
-hazync.org `/headers/`. `coin` (version 2: a coin, given by its fields, which the guest hashes to its leaf and commits,
+Status (release v0.27.0, 20.11.2026): eight zyncAPPs are released (§9). Four have guests of their own in
+`prover/zyncapps`, each image published in `reproduce/LIBZYNC_IDS`: `headers`, `hints`, `utreexo` and `utreexo-tip`;
+`assume`, `liveness`, `statement` and `deposit` are checks on a core proof and have no guest. `headers` (the header chain
+from genesis, ROADMAP K1) is **published and proved**: image `de54b94f…` (risc0 3.1.0; with an MMR of every block hash,
+released in v0.27.0; v0.24.0 to v0.26.1 shipped `2db34e12…`), genesis..975,278 in one receipt (99.5 min on one RTX PRO
+6000, RELEASE_NOTES_v0.27.0), kept at the tip by `hazync-headers-follow`, checked in the browser at hazync.org
+`/headers/`. `coin` (version 2: a coin, given by its fields, which the guest hashes to its leaf and commits,
 unspent or spent at the core tip, the core receipt verified in the zkVM) is built and tested on laptop images
 (`3f503000`, risc0 3.0.5); no `coin` id is published. hazync.org `/zapp/` (Coin check) does not use that guest: it
 checks counting-trie balance and history facts (§2, §8) against the fixed mainnet 1..200 core proof in the browser.
@@ -188,3 +191,5 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 | assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
 | Coin liveness (LIVENESS_ZAPP.md) | `zapps/liveness` | `zapp-liveness` (also `prove`, `serve`) | `zapp-liveness.js` (`verifyLiveness`) | `zapps/liveness/ffi` (`zapp_liveness_verify`, `zapp_liveness.h`) |
 | Balance statement (STATEMENT_ZAPP.md) | `zapps/statement` | `zapp-statement` (also `draft`, `message`, `sign`, `add-sig`, `test-key`) | `zapp-statement.js` (`verifyStatement`) | none |
+| Deposit proof (DEPOSIT_ZAPP.md) | `zapps/deposit` (on `zapps/headers`) | `zapp-deposit` (also `build`, `mmr-path`) | `zapp-deposit.js` (`verifyDeposit`) | none |
+| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`; base and tip receipts) | `zapp-utreexo.js` (`verify`, `imageId`, `tipImageId`) | none |

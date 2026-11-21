@@ -124,6 +124,13 @@ impl KernelBuild {
         for dep in self.deps.iter() {
             rerun_if_changed(dep);
         }
+        // HAZYNC_RERUN_ON_HEADERS: every include directory, for EVERY kernel type. compile_cuda already
+        // watched its own; the C++ path did not, so a header change under an include dir (a vendored
+        // crate's DEP_*_ROOT) left the CPU kernels compiled against the old header on a warm target --
+        // the same class of fault that put two layouts of sppark's stream_t into the v0.26.1 CUDA host.
+        for inc_dir in self.inc_dirs.iter() {
+            rerun_if_changed(inc_dir);
+        }
         match &self.kernel_type {
             KernelType::Cpp => self.compile_cpp(output),
             KernelType::Cuda => self.compile_cuda(output),

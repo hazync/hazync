@@ -1,6 +1,7 @@
 # libzync: coin liveness
 
-Status (15.11.2026): built and tested on branch `feat/zapp-liveness`. Verifier and host code only: no guest changes,
+Status: built and tested 15.11.2026, independently reviewed the same day (no soundness break found) and released in
+v0.27.0 (#741, 20.11.2026). Verifier and host code only: no guest changes,
 so no image id moves. The privacy variant (§8) is an experiment, measured in execute mode only.
 
 ## 1. What it answers

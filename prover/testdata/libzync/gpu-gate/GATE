@@ -1,0 +1,4 @@
+# The release GPU gate's blocks (scripts/release_gpu_gate.py, docs/BUILD_AND_RELEASE.md "The real-GPU gate").
+# <height> <block hash, display order> <leaf bundle> <anchor: prep's S(h-1)> <prep's S(h)>
+170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee leaf_170.bin state_169.json state_170.json
+200000 000000000000034a7dedef4a161fa058a2d67a173a90155f3a2fe6fc132e0ebf leaf_200000.bin state_199999.json state_200000.json

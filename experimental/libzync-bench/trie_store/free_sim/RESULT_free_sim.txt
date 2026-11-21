@@ -1,0 +1,34 @@
+# free_sim, 16.11.2026, laptop, libzync at origin/main 797b777e
+$ free_sim 3000000 3000,12000,48000,192000 0.5
+size_of Node = 80
+warm coins=3000000 addrs=1501409 nodes=9205304
+U_int=3000 rep=0 nodes=9209897 addrs=1502191 frees/update=24.76 fresh/update=12.25 held/update=12.51 held_share=0.505 log2U=11.55 log2addrs=20.52
+U_int=3000 rep=1 nodes=9214487 addrs=1502944 frees/update=24.71 fresh/update=12.26 held/update=12.45 held_share=0.504 log2U=11.55 log2addrs=20.52
+U_int=3000 rep=2 nodes=9219042 addrs=1503728 frees/update=24.76 fresh/update=12.23 held/update=12.53 held_share=0.506 log2U=11.55 log2addrs=20.52
+U_int=12000 rep=0 nodes=9237307 addrs=1506710 frees/update=24.76 fresh/update=14.22 held/update=10.54 held_share=0.426 log2U=13.55 log2addrs=20.52
+U_int=12000 rep=1 nodes=9255802 addrs=1509726 frees/update=24.77 fresh/update=14.23 held/update=10.54 held_share=0.426 log2U=13.55 log2addrs=20.53
+U_int=12000 rep=2 nodes=9273802 addrs=1512656 frees/update=24.78 fresh/update=14.22 held/update=10.56 held_share=0.426 log2U=13.55 log2addrs=20.53
+U_int=48000 rep=0 nodes=9347323 addrs=1524596 frees/update=24.79 fresh/update=16.31 held/update=8.48 held_share=0.342 log2U=15.55 log2addrs=20.54
+U_int=48000 rep=1 nodes=9420943 addrs=1536760 frees/update=24.81 fresh/update=16.29 held/update=8.52 held_share=0.343 log2U=15.55 log2addrs=20.55
+U_int=48000 rep=2 nodes=9494493 addrs=1548663 frees/update=24.83 fresh/update=16.32 held/update=8.52 held_share=0.343 log2U=15.55 log2addrs=20.56
+U_int=192000 rep=0 nodes=9788718 addrs=1596719 frees/update=24.85 fresh/update=18.46 held/update=6.39 held_share=0.257 log2U=17.55 log2addrs=20.61
+U_int=192000 rep=1 nodes=10083979 addrs=1644930 frees/update=24.90 fresh/update=18.45 held/update=6.44 held_share=0.259 log2U=17.55 log2addrs=20.65
+U_int=192000 rep=2 nodes=10377895 addrs=1692900 frees/update=24.92 fresh/update=18.44 held/update=6.48 held_share=0.260 log2U=17.55 log2addrs=20.69
+$ free_sim 3000000 3000,48000 0.8
+size_of Node = 80
+warm coins=3000000 addrs=599968 nodes=8154335
+U_int=3000 rep=0 nodes=8158470 addrs=600276 frees/update=25.34 fresh/update=12.20 held/update=13.14 held_share=0.519 log2U=11.55 log2addrs=19.20
+U_int=3000 rep=1 nodes=8162511 addrs=600556 frees/update=25.25 fresh/update=12.22 held/update=13.03 held_share=0.516 log2U=11.55 log2addrs=19.20
+U_int=3000 rep=2 nodes=8166569 addrs=600845 frees/update=25.27 fresh/update=12.23 held/update=13.04 held_share=0.516 log2U=11.55 log2addrs=19.20
+U_int=48000 rep=0 nodes=8231580 addrs=605553 frees/update=25.30 fresh/update=16.46 held/update=8.84 held_share=0.349 log2U=15.55 log2addrs=19.21
+U_int=48000 rep=1 nodes=8296810 addrs=610320 frees/update=25.31 fresh/update=16.46 held/update=8.85 held_share=0.350 log2U=15.55 log2addrs=19.22
+U_int=48000 rep=2 nodes=8362059 addrs=615186 frees/update=25.31 fresh/update=16.47 held/update=8.84 held_share=0.349 log2U=15.55 log2addrs=19.23
+$ free_sim 1000000 3000,48000 0.5
+size_of Node = 80
+warm coins=1000000 addrs=500717 nodes=3067802
+U_int=3000 rep=0 nodes=3072274 addrs=501492 frees/update=23.12 fresh/update=12.18 held/update=10.94 held_share=0.473 log2U=11.55 log2addrs=18.94
+U_int=3000 rep=1 nodes=3076941 addrs=502233 frees/update=23.21 fresh/update=12.27 held/update=10.94 held_share=0.471 log2U=11.55 log2addrs=18.94
+U_int=3000 rep=2 nodes=3081542 addrs=503016 frees/update=23.14 fresh/update=12.22 held/update=10.92 held_share=0.472 log2U=11.55 log2addrs=18.94
+U_int=48000 rep=0 nodes=3155533 addrs=515043 frees/update=23.21 fresh/update=16.41 held/update=6.80 held_share=0.293 log2U=15.55 log2addrs=18.97
+U_int=48000 rep=1 nodes=3228801 addrs=526926 frees/update=23.26 fresh/update=16.41 held/update=6.85 held_share=0.294 log2U=15.55 log2addrs=19.01
+U_int=48000 rep=2 nodes=3302291 addrs=538961 frees/update=23.29 fresh/update=16.41 held/update=6.88 held_share=0.296 log2U=15.55 log2addrs=19.04

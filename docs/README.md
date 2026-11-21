@@ -2,8 +2,10 @@
 
 Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **Hazync v2** is the libzync engine (`libzync/`, the guest in
-`prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images (v0.26.0) mainnet `46666b6f`
-(a new chain from genesis whose block leaves commit each block's undo data, [`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `2db34e12` (`de54b94f` after v0.26.0, with the MMR: [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS)). The
+`prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images mainnet `46666b6f` (v0.26.0,
+unchanged in v0.27.0: a new chain from genesis whose block leaves commit each block's undo data,
+[`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `de54b94f` (v0.27.0, with an MMR
+of every block hash; `2db34e12` before), with the other zyncAPPs' images in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). The
 public board has run it since 2026-11-12, from genesis.
 
 **Hazync v1**, the original per-signature CORE guest (`37987b85`, last release v0.22.1), is documented in
@@ -17,7 +19,9 @@ of the past and are not kept current.
 | [`../README.md`](../README.md) | what Hazync is and where it stands |
 | [`EXPLAINER.md`](EXPLAINER.md) | Hazync v2 in plain words |
 | [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | prove blocks on your GPU (Linux, Windows natively or via WSL2), verify a proof |
-| [`RELEASE_NOTES_v0.26.1.md`](RELEASE_NOTES_v0.26.1.md) | the current release: the Windows CPU prover, Pascal cards, coordinator fixes; image unchanged |
+| [`RELEASE_NOTES_v0.27.1.md`](RELEASE_NOTES_v0.27.1.md) | the current release: the Linux GPU prover fixed (a clean build), every release proved on real GPUs first, Linux verifiers on glibc 2.34; images unchanged |
+| [`RELEASE_NOTES_v0.27.0.md`](RELEASE_NOTES_v0.27.0.md) | six zyncAPPs, the header-chain MMR, reorg handling P1–P6, a stricter verifier, the self-updating Windows app; image unchanged |
+| [`RELEASE_NOTES_v0.26.1.md`](RELEASE_NOTES_v0.26.1.md) | the Windows CPU prover, Pascal cards, coordinator fixes; image unchanged |
 | [`RELEASE_NOTES_v0.26.0.md`](RELEASE_NOTES_v0.26.0.md) | undo data in every block's proof, image `46666b6f`; the board proves again from genesis |
 | [`RELEASE_NOTES_v0.25.0.md`](RELEASE_NOTES_v0.25.0.md) | the Windows installer; images unchanged |
 | [`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) | RISC Zero 3.1.0, the new image ids, the header chain in one proof |
@@ -35,6 +39,10 @@ of the past and are not kept current.
 | [`libzync/UTREEXO_FORMAT.md`](libzync/UTREEXO_FORMAT.md) | the byte-exact coin leaf and the forest hashing (the name is historical) |
 | [`libzync/HANDOVER.md`](libzync/HANDOVER.md) | the block forest, and how a new image continues a chain |
 | [`libzync/ZYNCAPPS.md`](libzync/ZYNCAPPS.md) | zyncAPPs: separate guests that answer one question from a core proof |
+| [`libzync/ZAPP_TESTING.md`](libzync/ZAPP_TESTING.md) | how the zyncAPPs were tested before v0.27.0: fuzzing, mutants, the regtest chain |
+| [`libzync/HINTS_ZAPP.md`](libzync/HINTS_ZAPP.md), [`libzync/ASSUME_ZAPPS.md`](libzync/ASSUME_ZAPPS.md), [`libzync/LIVENESS_ZAPP.md`](libzync/LIVENESS_ZAPP.md), [`libzync/STATEMENT_ZAPP.md`](libzync/STATEMENT_ZAPP.md), [`libzync/DEPOSIT_ZAPP.md`](libzync/DEPOSIT_ZAPP.md), [`libzync/UTREEXO_ZAPP.md`](libzync/UTREEXO_ZAPP.md) | the zyncAPPs released in v0.27.0: SwiftSync hints, assumevalid / assumeutxo, coin liveness, balance statement, deposit proof, Utreexo roots |
+| [`libzync/UNDO.md`](libzync/UNDO.md) | the per-block undo-data commitment (v0.26.0 images) |
+| [`libzync/REORG.md`](libzync/REORG.md), [`libzync/ZAPP_FOLLOWER.md`](libzync/ZAPP_FOLLOWER.md) | reorg handling for the board (P1–P6, released in v0.27.0, automatic rewinds off) and the zAPP follower |
 | [`libzync/PROOF_BUNDLE.md`](libzync/PROOF_BUNDLE.md) | the proof bundle format |
 | [`libzync/ROADMAP.md`](libzync/ROADMAP.md) | everything built, measured and still open, in order |
 
@@ -56,8 +64,10 @@ of the past and are not kept current.
 | [`OPERATIONS.md`](OPERATIONS.md) | the operator's manual: §0 the live Hazync v2 board, §3 board workers (both boards); the rest is the Hazync v1 fleet's reference (topology, multi-card fleets, tip runs) |
 | [`BUILD_AND_RELEASE.md`](BUILD_AND_RELEASE.md) | builds, image ids and reproducibility, cutting a release |
 | [`../coordinator/deploy/RUNBOOK.md`](../coordinator/deploy/RUNBOOK.md) | the public board's own box, day to day |
+| [`libzync/PREP_MEMORY.md`](libzync/PREP_MEMORY.md) | where prep's memory goes on the board box, and the settings that keep a from-genesis run inside it |
 | [`../coordinator/deploy/libzync/SWITCH.md`](../coordinator/deploy/libzync/SWITCH.md) | how the board moved from Hazync v1 to v2 on 2026-11-12 |
 | [`../coordinator/deploy/headers/README.md`](../coordinator/deploy/headers/README.md) | the header-chain follower that keeps the header proof at the tip |
+| [`../coordinator/deploy/headers-api/README.md`](../coordinator/deploy/headers-api/README.md) | the untrusted path service behind the website's block and transaction check |
 | [`../prover/README.md`](../prover/README.md) | the prover: layout, build, host commands |
 | [`../swiftsync-verify/README.md`](../swiftsync-verify/README.md) | the standalone verifier: verdicts, options, test vectors |
 | [`../tools/win-gui/README.md`](../tools/win-gui/README.md) | the Windows GUI for the prover |

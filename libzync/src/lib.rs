@@ -17,6 +17,10 @@ pub mod undo;
 /// #[path]-includes the file itself.
 #[cfg(feature = "hints")]
 pub mod hints;
+// the Utreexo roots zyncAPP's derivation: its host and its checker only (feature `utreexo`), never the core verifier
+// (compiled in, it moved the core .wasm: 996f1ed6 to db8310b3, 16.11.2026)
+#[cfg(feature = "utreexo")]
+pub mod utreexo_roots;
 pub mod ttree;
 pub mod trie_model;
 pub mod trie_store;
