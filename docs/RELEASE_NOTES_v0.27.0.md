@@ -1,3 +1,7 @@
+> [!WARNING]
+> **Do not use v0.27.0. Use [v0.27.1](https://github.com/hazync/hazync/releases/tag/v0.27.1) instead.**
+> Its Linux CUDA host (`hazync-host-x86_64-linux-gnu-cuda`) stops on its first GPU step, and its Linux verifiers need glibc 2.39, so they do not start on Ubuntu 22.04 or Debian 12. v0.27.1 fixes both, with the same images (`46666b6f`): nothing needs re-proving. The notes below are kept as they were.
+
 **zyncAPPs on top of the chain proof, and the board learns to survive a reorg.** v0.27.0 adds six zyncAPPs, extends the header-chain one, adds safe
 reorg handling for the board, a stricter verifier and a Windows app that updates itself. The mainnet core image stays
 **`46666b6f`**: the board keeps its chain and nobody re-proves. RISC Zero stays at 3.1.0.
