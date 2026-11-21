@@ -277,13 +277,20 @@ pub fn parse_tx(b: &[u8], o: &mut usize) -> Option<TxView> {
         outputs.push((value, spk));
     }
     if seg {
+        let mut any = false;
         for _ in 0..nin {
             // a witness stack's item count: each item takes at least one byte (its length)
             let k = len_varint(b, o)?;
+            any |= k > 0;
             for _ in 0..k {
                 let l = len_varint(b, o)?;
                 rd(b, o, l)?;
             }
+        }
+        // Core's UnserializeTransaction: a witness section whose every stack is empty is "Superfluous witness record";
+        // such a transaction is only ever serialised without the marker, so this form is not one Core reads
+        if !any {
+            return None;
         }
     }
     st.extend_from_slice(rd(b, o, 4)?);
@@ -523,6 +530,7 @@ mod tests {
         assert_eq!(one(&[0xfd, 0xfc, 0x00]), None);
         assert_eq!(one(&[0xfe, 0xff, 0xff, 0x00, 0x00]), None);
         assert_eq!(one(&[0xff, 1, 0, 0, 0, 0, 0, 0, 0]), None);
+        assert_eq!(one(&[0xff, 0, 0, 0, 2, 0, 0, 0, 0]), None, "MAX_SIZE in the 9-byte form");
         // too large (above MAX_SIZE), including every 9-byte form
         assert_eq!(one(&[0xfe, 0x01, 0x00, 0x00, 0x02]), None);
         assert_eq!(one(&[0xff, 3, 0, 0, 0, 1, 0, 0, 0]), None, "2^32 + 3");
@@ -579,15 +587,22 @@ mod tests {
         assert_eq!(shown, "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16");
         assert_eq!(t.outputs.len(), 2);
         assert_eq!(t.outputs[0].0, 1_000_000_000);
-        // the same tx in witness form (one empty witness stack): same txid
+        // the same tx in witness form (one witness stack of one item, 02 aa bb): same txid
         let mut w = raw[..4].to_vec();
         w.extend_from_slice(&[0, 1]);
         w.extend_from_slice(&raw[4..raw.len() - 4]);
-        w.push(0);
+        w.extend_from_slice(&[0x01, 0x02, 0xaa, 0xbb]);
         w.extend_from_slice(&raw[raw.len() - 4..]);
         let mut o = 0;
         let tw = parse_tx(&w, &mut o).unwrap();
         assert_eq!((o, txid(&tw)), (w.len(), txid(&t)));
+        // the witness form with every stack empty: Core refuses it ("Superfluous witness record")
+        let mut e = raw[..4].to_vec();
+        e.extend_from_slice(&[0, 1]);
+        e.extend_from_slice(&raw[4..raw.len() - 4]);
+        e.push(0);
+        e.extend_from_slice(&raw[raw.len() - 4..]);
+        assert!(parse_tx(&e, &mut 0).is_none(), "a witness section with every stack empty");
         // branch round trip
         let ids: alloc::vec::Vec<H> = (0..5u64).map(h).collect();
         let mut header = [0u8; 80];
