@@ -6,7 +6,8 @@
 //! against the current roots by the batch proof (an untrusted host gives both; a wrong leaf or proof does not open).
 //!
 //! Shared by the tip guest (`main.rs`) and the host (`zyncapp`, #[path]-included), so the host runs the same code
-//! natively before proving. The includer provides `crate::utreexo_roots` (libzync/src/utreexo_roots.rs: the leaf hash).
+//! natively before proving. The includer provides `crate::utreexo_roots` (libzync/src/utreexo_roots.rs: the leaf hash)
+//! and `crate::facts` (libzync/src/facts.rs: the compact-size reader).
 //! Not part of any other image: editing this file moves the utreexo TIP image only (never the base image 27bea7da,
 //! never the core).
 
@@ -61,22 +62,17 @@ pub fn roots_of(s: &Stump) -> Vec<H> {
 }
 
 // ---------------------------------------------------------------------------------------------------------------
-// Block parsing (the same rules as utreexo_roots.rs's walk, copied so neither image moves the other).
+// Block parsing (the same rules as utreexo_roots.rs's walk, copied so neither image moves the other; the compact
+// sizes are read by libzync/src/facts.rs's strict reader, which every zyncAPP image includes).
 
+/// A compact size as Core reads it (facts::varint: the shortest form, at most MAX_SIZE).
 fn varint(b: &[u8], o: &mut usize) -> Result<u64, &'static str> {
-    let f = *b.get(*o).ok_or("truncated")?;
-    *o += 1;
-    let w = match f {
-        0xfd => 2,
-        0xfe => 4,
-        0xff => 8,
-        _ => return Ok(f as u64),
-    };
-    let s = b.get(*o..*o + w).ok_or("truncated")?;
-    *o += w;
-    let mut x = [0u8; 8];
-    x[..w].copy_from_slice(s);
-    Ok(u64::from_le_bytes(x))
+    crate::facts::varint(b, o).ok_or("a compact size cut short or not as Core reads it (shortest form, at most MAX_SIZE)")
+}
+
+/// A compact size that counts bytes still to come (facts::len_varint: also within the bytes left, as a usize).
+fn len_varint(b: &[u8], o: &mut usize) -> Result<usize, &'static str> {
+    crate::facts::len_varint(b, o).ok_or("a length cut short, not as Core reads it, or past the end")
 }
 
 fn take<'a>(b: &'a [u8], o: &mut usize, n: usize) -> Result<&'a [u8], &'static str> {
@@ -104,7 +100,7 @@ fn parse_tx<'a>(b: &'a [u8], o: &mut usize) -> Result<Tx<'a>, &'static str> {
     for _ in 0..nin {
         let t: H = take(b, o, 32)?.try_into().unwrap();
         let v = u32::from_le_bytes(take(b, o, 4)?.try_into().unwrap());
-        let l = varint(b, o)? as usize;
+        let l = len_varint(b, o)?;
         take(b, o, l)?;
         take(b, o, 4)?;
         inputs.push((t, v));
@@ -116,7 +112,7 @@ fn parse_tx<'a>(b: &'a [u8], o: &mut usize) -> Result<Tx<'a>, &'static str> {
     let mut outputs = Vec::with_capacity(nout as usize);
     for _ in 0..nout {
         let v = u64::from_le_bytes(take(b, o, 8)?.try_into().unwrap());
-        let l = varint(b, o)? as usize;
+        let l = len_varint(b, o)?;
         outputs.push((v, take(b, o, l)?));
     }
     take(b, o, 4)?;
@@ -375,4 +371,36 @@ pub fn link_header(header: &[u8], prev: &H) -> Result<H, &'static str> {
         return Err("the link from block H does not reach the core tip (a header does not follow the previous)");
     }
     Ok(dsha(header))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Compact sizes as Core reads them (facts::varint and facts::len_varint; review 21.11.2026): block 170's payment with
+    /// a non-canonical count or length, a length past the end, and a size above MAX_SIZE, each refused by name.
+    #[test]
+    fn compact_sizes_are_cores() {
+        let hexs = "0100000001c997a5e56e104102fa209c6a852dd90660a20b2d9c352423edce25857fcd3704000000004847304402204e45e16932b8af514961a1d3a1a25fdf3f4f7732e9d624c6c61548ab5fb8cd410220181522ec8eca07de4860a4acdd12909d831cc56cbbac4622082221a8768d1d0901ffffffff0200ca9a3b00000000434104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac00286bee0000000043410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac00000000";
+        let raw: Vec<u8> = (0..hexs.len()).step_by(2).map(|i| u8::from_str_radix(&hexs[i..i + 2], 16).unwrap()).collect();
+        let mut o = 0;
+        assert!(parse_tx(&raw, &mut o).is_ok());
+        assert_eq!(o, raw.len());
+        let with = |at: usize, rep: &[u8]| { let mut v = raw[..at].to_vec(); v.extend_from_slice(rep); v.extend_from_slice(&raw[at + 1..]); v };
+        const C: &str = "a compact size cut short or not as Core reads it (shortest form, at most MAX_SIZE)";
+        const L: &str = "a length cut short, not as Core reads it, or past the end";
+        assert_eq!(raw[4], 0x01);
+        assert_eq!(parse_tx(&with(4, &[0xfd, 0x01, 0x00]), &mut 0).err(), Some(C), "a non-canonical input count");
+        assert_eq!(raw[41], 0x48);
+        assert_eq!(parse_tx(&with(41, &[0xfd, 0x48, 0x00]), &mut 0).err(), Some(L), "a non-canonical scriptSig length");
+        let nout = 4 + 1 + 32 + 4 + 1 + 0x48 + 4;
+        assert_eq!(raw[nout], 0x02);
+        assert_eq!(parse_tx(&with(nout, &[0xfd, 0x02, 0x00]), &mut 0).err(), Some(C), "a non-canonical output count");
+        let last = raw.len() - 4 - 0x43 - 1;
+        assert_eq!(raw[last], 0x43);
+        assert_eq!(parse_tx(&with(last, &[0x48]), &mut 0).err(), Some(L), "a scriptPubKey length past the end");
+        assert_eq!(parse_tx(&with(last, &[0xfe, 0x00, 0x00, 0x00, 0x02]), &mut 0).err(), Some(L), "MAX_SIZE, past the end");
+        assert_eq!(parse_tx(&with(last, &[0xfe, 0x01, 0x00, 0x00, 0x02]), &mut 0).err(), Some(L), "above MAX_SIZE");
+        assert_eq!(parse_tx(&with(last, &[0xff, 0x43, 0, 0, 0, 1, 0, 0, 0]), &mut 0).err(), Some(L), "2^32 + 0x43: as usize on wasm32 read 0x43");
+    }
 }

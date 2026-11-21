@@ -59,14 +59,48 @@ fn a_legacy_input_starting_01_is_not_segwit() {
     assert_eq!((t[4], t[5]), (0x01, 0x01));
     let (h, inc) = block_with(&t, dsha(&t));
     assert!(verify_tx_in_header(&h, &inc).is_ok(), "{:?}", verify_tx_in_header(&h, &inc));
-    // and the same with a segwit witness added (marker, flag, one empty witness stack): the txid is the stripped form
+    // and the same with a segwit witness added (marker, flag, one stack of one 2-byte item): the txid is the stripped form
     let mut w = t[..4].to_vec();
     w.extend([0x00, 0x01]);
     w.extend(&t[4..t.len() - 4]);
-    w.push(0);
+    w.extend([0x01, 0x02, 0xaa, 0xbb]);
     w.extend(&t[t.len() - 4..]);
     let (h, inc) = block_with(&w, dsha(&t));
     assert!(verify_tx_in_header(&h, &inc).is_ok(), "{:?}", verify_tx_in_header(&h, &inc));
+    // the marker with every witness stack empty: Core refuses it ("Superfluous witness record"), and so does the parser
+    let mut e = t[..4].to_vec();
+    e.extend([0x00, 0x01]);
+    e.extend(&t[4..t.len() - 4]);
+    e.push(0);
+    e.extend(&t[t.len() - 4..]);
+    let (h, inc) = block_with(&e, dsha(&t));
+    let err = verify_tx_in_header(&h, &inc).unwrap_err();
+    assert!(err.contains("a witness section with every stack empty"), "{err}");
+}
+
+/// Compact sizes as Core reads them (libzync::facts::varint; review 21.11.2026): a count or length in a longer form
+/// than its value needs, and a length past the end, are refused by name.
+#[test]
+fn compact_sizes_are_cores() {
+    let t = legacy(7);
+    let ok = |raw: &[u8]| { let (h, inc) = block_with(raw, dsha(raw)); verify_tx_in_header(&h, &inc) };
+    assert!(ok(&t).is_ok(), "{:?}", ok(&t));
+    let with = |at: usize, rep: &[u8]| { let mut v = t[..at].to_vec(); v.extend_from_slice(rep); v.extend_from_slice(&t[at + 1..]); v };
+    // (the 5-byte forms keep each transaction off 64 bytes, which is refused before parsing)
+    const C: &str = "a compact size not as Core reads it";
+    assert_eq!(t[4], 1);
+    let e = ok(&with(4, &[0xfe, 0x01, 0x00, 0x00, 0x00])).unwrap_err();
+    assert!(e.contains(C), "a non-canonical input count: {e}");
+    assert_eq!(t[41], 1);
+    let e = ok(&with(41, &[0xfe, 0x01, 0x00, 0x00, 0x00])).unwrap_err();
+    assert!(e.contains(C), "a non-canonical scriptSig length: {e}");
+    let spk = t.len() - 4 - 2;
+    assert_eq!(t[spk], 1);
+    let e = ok(&with(spk, &[0xfe, 0x01, 0x00, 0x00, 0x00])).unwrap_err();
+    assert!(e.contains(C), "a scriptPubKey length in the 5-byte form: {e}");
+    // a scriptPubKey length past the end (5 bytes are left: the 1-byte script and the lock time; 7 asked)
+    let e = ok(&with(spk, &[0x07])).unwrap_err();
+    assert!(e.contains("a length past the end of the transaction"), "{e}");
 }
 
 /// The parser's own refusals, by name: six bytes 01000000 0001 are a transaction with no inputs (not a segwit marker

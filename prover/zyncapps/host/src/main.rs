@@ -45,6 +45,10 @@ mod utreexo_tip_host;
 mod utreexo_roots {
     pub use libzync::utreexo_roots::*;
 }
+/// The compact-size reader, under the name the shared tip step uses for it.
+mod facts {
+    pub use libzync::facts::*;
+}
 #[path = "../../methods/utreexo-tip/src/step.rs"]
 mod utreexo_tip_step;
 use zyncapp_methods::{ZYNCAPP_HINTS_ELF, ZYNCAPP_HINTS_ID, ZYNCAPP_UTREEXO_TIP_ELF, ZYNCAPP_UTREEXO_TIP_ID, ZYNCAPP_UTREEXO_ELF, ZYNCAPP_UTREEXO_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};

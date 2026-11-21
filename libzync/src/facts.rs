@@ -207,7 +207,8 @@ const MAX_SIZE: u64 = 0x0200_0000;
 /// any other with "non-canonical ReadCompactSize()") and at most MAX_SIZE ("ReadCompactSize(): size too large").
 /// Refusing the other encodings keeps one byte string per transaction: the stripped form re-encodes the input and
 /// output counts, so a non-canonical count would otherwise give the txid of DIFFERENT bytes.
-fn varint(b: &[u8], o: &mut usize) -> Option<u64> {
+/// The one strict reader: hints.rs, utreexo_roots.rs, the utreexo tip step and zapps/headers read compact sizes with it.
+pub fn varint(b: &[u8], o: &mut usize) -> Option<u64> {
     let f = rd(b, o, 1)?[0];
     let n = match f {
         0xfd => { let n = u16::from_le_bytes(rd(b, o, 2)?.try_into().ok()?) as u64; if n < 0xfd { return None; } n }
@@ -220,7 +221,7 @@ fn varint(b: &[u8], o: &mut usize) -> Option<u64> {
 
 /// A compact size that counts BYTES still to come (a script or a witness item): a varint that also fits in the bytes
 /// left, as a usize. `as usize` alone truncated it on a 32-bit target (wasm32): 2^32 + 3 read as 3.
-fn len_varint(b: &[u8], o: &mut usize) -> Option<usize> {
+pub fn len_varint(b: &[u8], o: &mut usize) -> Option<usize> {
     let n = varint(b, o)?;
     let left = b.len().checked_sub(*o)?;
     usize::try_from(n).ok().filter(|n| *n <= left)
