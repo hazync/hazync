@@ -40,7 +40,7 @@ Core's rules one by one.
 
 A proof names the exact program that produced it. The published Hazync v2 images, built on RISC Zero 3.1.0
 (the core unchanged since release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0); the newest release
-is always [releases/latest](https://github.com/hazync/hazync/releases/latest), v0.27.0 on 20.11.2026), are
+is always [releases/latest](https://github.com/hazync/hazync/releases/latest), v0.27.1 on 21.11.2026), are
 
 ```
 mainnet  46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c
