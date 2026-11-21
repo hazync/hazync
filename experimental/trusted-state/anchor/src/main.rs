@@ -1,7 +1,7 @@
 //! ts-anchor: EXPERIMENTAL Trusted State proof of concept (docs/libzync/TRUSTED_STATE.md). Not a release tool.
 //!
 //!   ts-anchor build  --network <regtest|mainnet> --snapshot <utxo.dat> --side <prefix> (--expect <H>:<block>:<hash3> | --no-expect) --out <prefix>
-//!   ts-anchor join   --anchor <A.json> --main <state.json | receipt.rcpt --image <hex>> [--tip <state.json> [--tip-image <hex>]]
+//!   ts-anchor join   --anchor <A.json> --main <state.json | receipt.rcpt --image <hex>> [--tip <state.json> --tip-image <hex>]
 //!   ts-anchor compare <a.json> <b.json>
 //!   ts-anchor facts  --state <tip.json> --trie <tip.trie> --scenarios <scenarios.json> --who <NAME> [--history <spk hex>]... [--undo-from <h>]
 //!   ts-anchor synth  --coins <N> --height <H> --base <block display hash> --out <utxo.dat>
@@ -37,10 +37,14 @@ fn sha256(b: &[u8]) -> [u8; 32] { Sha256::digest(b).into() }
 fn dsha(b: &[u8]) -> [u8; 32] { sha256(&sha256(b)) }
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
 fn unhex(s: &str) -> Vec<u8> { (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex")).collect() }
-/// An image id's hex (as risc0 prints a Digest) as the [u32; 8] a ChainState's self_id holds: little-endian words.
+/// An image id's hex (as risc0 prints a Digest): exactly 64 hex digits, else a clean error (not a slice panic).
+fn image_bytes(img: &str) -> [u8; 32] {
+    if img.len() != 64 || !img.bytes().all(|c| c.is_ascii_hexdigit()) { die(format!("image {img:?}: not 64 hex digits")); }
+    unhex(img).try_into().unwrap()
+}
+/// An image id as the [u32; 8] a ChainState's self_id holds: little-endian words.
 fn image_words(img: &str) -> [u32; 8] {
-    let b = unhex(img);
-    if b.len() != 32 { die(format!("image {img}: 64 hex digits")); }
+    let b = image_bytes(img);
     std::array::from_fn(|k| u32::from_le_bytes(b[4 * k..4 * k + 4].try_into().unwrap()))
 }
 /// S1 (the core aggregate's `self_id`): a receipt of the core image only means "every step ran this image" when its
@@ -372,7 +376,7 @@ fn join(a: &[String]) {
         let img = need(a, "--image");
         let bytes = std::fs::read(&main_p).unwrap_or_else(|e| die(format!("{main_p}: {e}")));
         let r = swiftsync_verify::decode_receipt(&bytes).unwrap_or_else(|e| die(e));
-        let d: [u8; 32] = unhex(&img).try_into().unwrap_or_else(|_| die("--image: 64 hex digits"));
+        let d: [u8; 32] = image_bytes(&img);
         r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{main_p}: the receipt does not verify against image {img}: {e}")));
         println!("main: {main_p}: receipt VERIFIED against image {img} (a real proof; risc0 3.1.0 verifier, dev mode disabled)");
         swiftsync_verify::decode_journal::<ChainState>(&r.journal).unwrap_or_else(|e| die(e))
@@ -401,14 +405,11 @@ fn join(a: &[String]) {
         let l = tip.anchor_id == link_digest(&anchor);
         println!("anchored tip {t}: height {} anchor_id {} {}", tip.height, hex(&tip.anchor_id), if l { "= this anchor's link digest" } else { "!= this anchor's link digest" });
         ok &= l;
-        match arg(a, "--tip-image") {
-            Some(img) => {
-                let s = self_id_is(&tip, &img);
-                println!("anchored tip: self_id {} {}", hex(&wbytes(&tip.self_id)), if s { "= --tip-image" } else { "!= --tip-image: recursed against another image" });
-                ok &= s;
-            }
-            None => println!("anchored tip: self_id {} NOT checked (no --tip-image)", hex(&wbytes(&tip.self_id))),
-        }
+        // required with --tip, as in join-receipt: a tip whose self_id is unchecked says nothing about its blocks
+        let img = need(a, "--tip-image");
+        let s = self_id_is(&tip, &img);
+        println!("anchored tip: self_id {} {}", hex(&wbytes(&tip.self_id)), if s { "= --tip-image" } else { "!= --tip-image: recursed against another image" });
+        ok &= s;
     }
     println!("{}", if ok { "JOIN_OK: the anchored state is the main lineage's state at H in every field a later block's verdict reads; the assumption is discharged" }
                    else { "JOIN_FAIL" });
@@ -885,7 +886,7 @@ fn scan_plan(a: &[String]) {
 fn receipt_state(p: &str, img: &str) -> ChainState {
     let bytes = std::fs::read(p).unwrap_or_else(|e| die(format!("{p}: {e}")));
     let r = swiftsync_verify::decode_receipt(&bytes).unwrap_or_else(|e| die(e));
-    let d: [u8; 32] = unhex(img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
+    let d: [u8; 32] = image_bytes(img);
     r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
     swiftsync_verify::decode_journal::<ChainState>(&r.journal).unwrap_or_else(|e| die(e))
 }
@@ -901,7 +902,7 @@ fn join_inputs(a: &[String]) {
     let out = need(a, "--out");
     std::fs::create_dir_all(&out).unwrap();
     let r = swiftsync_verify::decode_receipt(&std::fs::read(&p).unwrap()).unwrap_or_else(|e| die(e));
-    let d: [u8; 32] = unhex(&img).try_into().unwrap_or_else(|_| die("image: 64 hex digits"));
+    let d: [u8; 32] = image_bytes(&img);
     r.verify(risc0_zkvm::sha::Digest::from(d)).unwrap_or_else(|e| die(format!("{p}: does not verify against {img}: {e}")));
     let main: ChainState = swiftsync_verify::decode_journal(&r.journal).unwrap_or_else(|e| die(e));
     if !self_id_is(&main, &img) { die(format!("{p}: its self_id {} is not --main-image {img} (recursed against another image)", hex(&wbytes(&main.self_id)))); }

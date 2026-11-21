@@ -115,6 +115,9 @@ new verdict between OK and DEMO. Not built here.
 **The join rule** (`ts-anchor join`): given the anchor A (its JSON), a receipt R_H of the main lineage at H that
 verifies under a published image with the network's genesis `anchor_id`, and an anchored tip proof R_T:
 
+0. each proof's `self_id` is the image it verifies under (R_H's = the main image, R_T's = the tip image): the core
+   verifies its previous state under the `self_id` it is given, so without this a real-image receipt can carry a
+   state a rogue image committed (§11.3 step 2; `--image` / `--tip-image`);
 1. `R_T.anchor_id == link_digest(A)` (the anchored proof rests on exactly A);
 2. equal in A and R_H: `kind`, `version`, `tip_hash`, `height`, `utxo_value`, `cum_work`, `prev_nbits`, `prev_time`,
    `epoch_start`, `recent_times`, `max_time`, `live_set`, `live_hash`, `profile`, `block_leaves` (every field a later
@@ -157,7 +160,8 @@ each two or more times) gave the same ANCHOR_ID.
 ### 5.2 Join check (question 2): anchored state vs a REAL from-genesis proof at the same H
 
 `ts-anchor join --main <receipt> --image <id>`: the receipt is verified first (risc0 3.1.0 verifier, dev mode compiled
-out), then decoded.
+out), then decoded, and its `self_id` must be `<id>` (§4 rule 0; added 21.11.2026, after the runs in this table; the
+real `block_104.rcpt` passes it, re-checked 21.11.2026).
 
 | H | main lineage receipt | receipt verifies | genesis anchor | all 15 JOIN fields equal (incl. `live_hash`, `utxo_value`, `cum_work`, time context) | lineage fields that differ |
 |---|---|---|---|---|---|
@@ -891,8 +895,16 @@ join-inputs --forge-main-self-id`, entering as a dev-mode claim under the real `
 journal with `self_id` changed (`--forge-tip-self-id`). Each is refused by the real join image and by the controls
 build without a cut, and joined by the controls build with only `CUT_SELF` cut (21.11.2026), so the refusal comes from
 that check. `ts-anchor`'s native `join`, `join-inputs` and `join-receipt` make the same check (`--image` /
-`--main-image` and `--tip-image`). The six image ids and the genesis anchor the join is given must be pinned by the
+`--main-image` and `--tip-image`). The five image ids plus the genesis anchor the join is given (six pins) must be pinned by the
 verifier (§11.3, "What the verifier pins"); no pin file exists yet, and that is a release step.
+
+What has no negative test: the native main-lineage `self_id` checks (`ts-anchor join` with a receipt, `join-inputs`,
+`join-receipt`) only refuse a REAL receipt whose `self_id` is not its image, and making one needs a proved core
+receipt run with a rogue `self_id`; `ts-anchor` refuses dev-mode receipts, so I have not built one. (`join` on a
+state file with the wrong `--image`, and the tip checks, are tested in `join_controls.sh`.) The one-shot ingest
+guest's mode and empty-root asserts (§12.3) have no committed control either: it has no controls build, and I checked
+them by hand only (a mode-0 witness and a non-zero root are each refused by its own assert, 21.11.2026); the chunk
+guest's identical mode check is driven both ways in `chunk_controls.sh`.
 
 ### 13.4 Projection at 1.6e8 coins (PROJECTED, not a measurement)
 
@@ -931,7 +943,7 @@ more: 1.188 (MEASURED at 10 M, above), the pieces 1.041. At the padded rate, wit
 3.29e6 card-seconds ≈ **913 card-hours, ≈ $2,273** at $2.49/hr (PROJECTED; 919 card-hours if every part padded at
 1.188), and the largest chunk ≈ 3.5 h on one card. This assumes proving time is proportional to padded cycles across
 guests, which I have not measured. §12.5's proving-time paragraph has the same bias: its ≈ 500 card-hours per 10^8
-coins becomes ≈ 550 (≈ $1,375) at the chunks' ratio, and its ≈ 3 h per chunk ≈ 3.4 h (PROJECTED).
+coins becomes ≈ 550 (≈ $1,370) at the chunks' ratio, and its ≈ 3 h per chunk ≈ 3.4 h (PROJECTED).
 
 **What this projection does not know.** Mainnet's N and K (the live coins and the BIP30 entries at 935,000) are not
 known offline (§12.5); 1.6e8 and 800,000 are this synthetic set's, not mainnet's. Mainnet's script mix is not P2WPKH

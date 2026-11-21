@@ -60,20 +60,40 @@ ctl "main@105 joined with the ingest at 104"                            $((MATCH
 ctl "main@H not genesis-anchored (dev-mode claim)"                       $GEN Jgen final.in.split.rcpt
 ctl "the verifier pins another chunk image"                              $TAIL J final.in.split.rcpt "TS_CHUNK_IMAGE=$(printf '%064d' 7)"
 ctl "the verifier expects an inline tree, the ingest is split"           $TAIL J final.in.split.rcpt TS_BIP30_IMAGE=0
-# (main@104's own state: its self_id is main_image, not tip_image, so the self_id check refuses it as well)
-ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK|SELF)) Jlow final.in.split.rcpt
+# main@104's own state as the "tip": its self_id is main_image, so it is told tip_image = main_image (the self_id check
+# then holds and the two checks cut here are the only ones it fails); each left on alone still refuses it
+ctl "\"tip\" at H itself, genesis-anchored"                              $((SHAPE|LINK)) Jlow final.in.split.rcpt "TS_TIP_IMAGE=$MAIN_IMAGE"
+want "\"tip\" at H itself: controls, cut $SHAPE only (link on)" refused "$(join "$IHC" $SHAPE Jlow IC/final.in.split.rcpt "TS_TIP_IMAGE=$MAIN_IMAGE")"
+want "\"tip\" at H itself: controls, cut $LINK only (shape on)"  refused "$(join "$IHC" $LINK Jlow IC/final.in.split.rcpt "TS_TIP_IMAGE=$MAIN_IMAGE")"
 # S1: the REAL core image run with self_id = a rogue image commits that self_id; its receipt verifies under the real id
 ctl "main@H recursed against another image (self_id != main_image)"     $SELF Jsm final.in.split.rcpt
 ctl "anchored tip recursed against another image (self_id != tip_image)" $SELF Jst final.in.split.rcpt
 # not a cut check: the anchored tip's claim is under another image than the one the guest is told (env::verify)
-want "tip claimed under another image: real join image" refused "$(join "$IH" 0 J I/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
-want "tip claimed under another image: controls, all cuts" refused "$(join "$IHC" $ALL J IC/final.in.split.rcpt TS_TIP_CLAIM_IMAGE=$MAIN_IMAGE)"
+# (refused by env::verify itself: no receipt resolves the claim the guest asks for; any other failure is a FAIL)
+unresolved() {  # unresolved <label> <host> <cut>
+  local o; o=$(env TS_CUT="$3" TS_TIP_CLAIM_IMAGE="$MAIN_IMAGE" "$2" join J "$4" 2>&1)
+  if grep -aq "no receipt found to resolve assumption" <<< "$o"; then echo "PASS $1: refused (no receipt found to resolve assumption)"
+  else echo "FAIL $1: wanted 'no receipt found to resolve assumption', got '$(grep -a "panicked\|JOINED" <<< "$o" | tail -1 | cut -c1-110)'"; bad=$((bad+1)); fi
+}
+unresolved "tip claimed under another image: real join image"     "$IH" 0 I/final.in.split.rcpt
+unresolved "tip claimed under another image: controls, all cuts"  "$IHC" $ALL IC/final.in.split.rcpt
 # the controls build's result lines say so (an id it prints must never be pinned); the real build's do not
-labelled() { env TS_CUT=0 "$1" join J "$2" 2>/dev/null | grep -a "^JOINED" | grep -ac "CONTROLS BUILD"; }
-[ "$(labelled "$IHC" IC/final.in.split.rcpt)" = 1 ] && echo "PASS controls build labels its JOINED line" \
-  || { echo "FAIL controls build: JOINED line not labelled CONTROLS"; bad=$((bad+1)); }
-[ "$(labelled "$IH" I/final.in.split.rcpt)" = 0 ] && echo "PASS real build's JOINED line is not labelled CONTROLS" \
-  || { echo "FAIL real build: JOINED line labelled CONTROLS"; bad=$((bad+1)); }
+lab() {  # lab <controls|real> <line regex> <cmd...>: the result lines must exist; all labelled (controls) or none (real)
+  local kind=$1 re=$2; shift 2
+  local l; l=$(env TS_CUT=0 "$@" 2>/dev/null | grep -a "$re")
+  local n; n=$(grep -ac . <<< "$l"); local t; t=$(grep -ac "CONTROLS BUILD" <<< "$l")
+  if [ -z "$l" ]; then echo "FAIL $kind: no '$re' line from $*"; bad=$((bad+1))
+  elif { [ "$kind" = controls ] && [ "$t" = "$n" ]; } || { [ "$kind" = real ] && [ "$t" = 0 ]; }; then echo "PASS $kind build's '$re' line(s): $t of $n labelled CONTROLS"
+  else echo "FAIL $kind build's '$re' line(s): $t of $n labelled CONTROLS"; bad=$((bad+1)); fi
+}
+rm -rf L; mkdir -p L/c L/r; cp IC/final.in L/c/; cp I/final.in L/r/   # the combine writes next to its final.in
+for k in controls:IHC:IC:c real:IH:I:r; do
+  IFS=: read -r kind hv src dd <<< "$k"; hb=${!hv}
+  lab "$kind" "^JOINED"         "$hb" join J "$src/final.in.split.rcpt"
+  lab "$kind" "^CHUNK "         "$hb" chunk "$src/chunk_0.in" "L/$dd/chunk_0.rcpt"
+  lab "$kind" "^BIP30 "         "$hb" bip30 "$src/piece_0.in" "L/$dd/piece_0.rcpt"
+  lab "$kind" "^COMBINE image\|^ *BIP30 from" "$hb" combine "L/$dd/final.in" - "$src"/chunk_{0,1,2}.rcpt --bip30 "$src"/piece_{0,1,2}.rcpt
+done
 # the dev-mode substitution of main@H (main.journal.fake) is said on stdout, and on the JOINED line
 o=$("$IHC" join Jgen IC/final.in.split.rcpt 2>/dev/null)   # refused (cut 0); the substitution is said first
 if grep -aq "^CONTROL: main@H is a DEV-MODE CLAIM" <<< "$o"; then echo "PASS main.journal.fake substitution on stdout"

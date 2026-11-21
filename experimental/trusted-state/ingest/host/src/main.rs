@@ -128,7 +128,7 @@ fn combine_cmd(fin: &str, expected: &str, args: &[String]) {
         }
     };
     let tsx = text.lines().find(|l| l.contains("TSX ")).unwrap_or("").to_string();
-    if !preceipts.is_empty() { println!("  BIP30 from {} pieces (bip30 image {})", preceipts.len(), hex_id(&TS_BIP30_ID)); }
+    if !preceipts.is_empty() { println!("  BIP30 from {} pieces (bip30 image {}){}", preceipts.len(), hex_id(&TS_BIP30_ID), ctl_tag()); }
     println!("COMBINE image {} of {} chunks (chunk image {}): user {} total(padded) {} segments {} ({:.1} s){}", hex_id(&TS_COMBINE_ID), receipts.len(),
              hex_id(&TS_CHUNK_ID), info.stats.user_cycles, info.stats.total_cycles, info.stats.segments, t0.elapsed().as_secs_f64(), ctl_tag());
     println!("  {}", tsx.trim());
