@@ -1,3 +1,7 @@
+> [!WARNING]
+> **Do not use v0.26.1. Use [v0.27.1](https://github.com/hazync/hazync/releases/tag/v0.27.1) instead.**
+> Its Linux CUDA host (`hazync-host-x86_64-linux-gnu-cuda`) stops on its first GPU step, and its Linux verifiers need glibc 2.39, so they do not start on Ubuntu 22.04 or Debian 12. v0.27.1 fixes both, with the same mainnet image (`46666b6f`): nothing needs re-proving. The notes below are kept as they were.
+
 **The Windows app proves on more machines: older NVIDIA cards, and any PC's processor.** v0.26.1 is a host, app and
 coordinator release. The image does not change: mainnet stays **`46666b6f`**, and the board carries on from where it is.
 
