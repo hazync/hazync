@@ -15,8 +15,10 @@ BOUNDS=1; RANGE=2; ORDER=4; TILE=8; ECHAIN=16; ECOUNT=32; RCHAIN=64
 python3 "$Z/experimental/trusted-state/side_inputs.py" "$G/blocks/main" 104 side > /dev/null
 rm -rf A S1 S2 X; env -u RISC0_DEV_MODE "$TS" chunk-plan --network regtest --snapshot "$G/oracle/utxo_104.dat" --side side --chunks 3 --out A | head -1
 for f in A/chunk_*.in; do "$IH" chunk "$f" "${f%.in}.rcpt" > "${f%.in}.log" 2>&1 || { echo "chunk $f failed"; exit 1; }; done
-cp A/chunk_*.rcpt . 2>/dev/null
+# the controls build's images have their own ids (another target directory), so it gets its own chunk receipts
+for f in A/chunk_*.in; do "$IHC" chunk "$f" "${f%.in}.c.rcpt" > /dev/null 2>&1 || { echo "controls chunk $f failed"; exit 1; }; done
 C=(A/chunk_0.rcpt A/chunk_1.rcpt A/chunk_2.rcpt)
+CC=(A/chunk_0.c.rcpt A/chunk_1.c.rcpt A/chunk_2.c.rcpt)
 "$TS" bip30-plan --final A/final.in --depth 4 --pieces 3 --out S1
 "$TS" bip30-plan --final A/final.in --depth 8 --pieces 5 --out S2
 mkdir -p X
@@ -72,14 +74,14 @@ E=A/expected.journal
 want "inline tree (§12 combine)"                 "ok MATCH" "$(combine "$IH" 0 $E "${C[@]}")"
 want "split d=4, 3 pieces"                       "ok MATCH" "$(combine "$IH" 0 $E "${C[@]}" --bip30 S1/piece_{0,1,2}.rcpt)"
 want "split d=8, 5 pieces"                       "ok MATCH" "$(combine "$IH" 0 $E "${C[@]}" --bip30 S2/piece_{0,1,2,3,4}.rcpt)"
-want "controls build, no cut, split d=4"         "ok MATCH" "$(combine "$IHC" 0 $E "${C[@]}" --bip30 S1/piece_{0,1,2}.c.rcpt)"
+want "controls build, no cut, split d=4"         "ok MATCH" "$(combine "$IHC" 0 $E "${CC[@]}" --bip30 S1/piece_{0,1,2}.c.rcpt)"
 # combine-level: honest pieces, wrong sets
 for c in "dropped piece|0 2|$((TILE|ECHAIN|ECOUNT|RCHAIN))" "reordered pieces|1 0 2|$((TILE|ECHAIN|RCHAIN))" "repeated piece|0 1 1 2|$((TILE|ECHAIN|ECOUNT|RCHAIN))"; do
   IFS='|' read -r label idx cut <<< "$c"
   r=(); rc=(); for i in $idx; do r+=(S1/piece_$i.rcpt); rc+=(S1/piece_$i.c.rcpt); done
   want "$label: real images"            "refused" "$(combine "$IH" 0 $E "${C[@]}" --bip30 "${r[@]}")"
-  want "$label: controls, no cut"       "refused" "$(combine "$IHC" 0 $E "${C[@]}" --bip30 "${rc[@]}")"
-  want "$label: controls, cut $cut"     "ok MISMATCH" "$(combine "$IHC" "$cut" $E "${C[@]}" --bip30 "${rc[@]}")"
+  want "$label: controls, no cut"       "refused" "$(combine "$IHC" 0 $E "${CC[@]}" --bip30 "${rc[@]}")"
+  want "$label: controls, cut $cut"     "ok MISMATCH" "$(combine "$IHC" "$cut" $E "${CC[@]}" --bip30 "${rc[@]}")"
 done
 # a piece of the depth-8 split in a depth-4 set
 want "mixed depths: real images"         "refused" "$(combine "$IH" 0 $E "${C[@]}" --bip30 S1/piece_0.rcpt S2/piece_1.rcpt S1/piece_2.rcpt)"
@@ -100,7 +102,7 @@ pc() {  # pc <label> <cut at the piece> <cut at the combine> <want under the cut
     fi
     rcc+=(X/c$i.rcpt)
   done
-  want "$label: controls, cut piece $pcut / combine $ccut" "$wcut" "$(combine "$IHC" "$ccut" $E "${C[@]}" --bip30 "${rcc[@]}")"
+  want "$label: controls, cut piece $pcut / combine $ccut" "$wcut" "$(combine "$IHC" "$ccut" $E "${CC[@]}" --bip30 "${rcc[@]}")"
 }
 pc "entry outside its piece's range"    $RANGE  0                  "ok MISMATCH" 0=X/range_0.in 1=X/range_1.in
 pc "entries out of order in a piece"    $ORDER  $ECHAIN            "ok MISMATCH" 1=X/swap_1.in

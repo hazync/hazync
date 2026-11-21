@@ -245,8 +245,16 @@ fn unhex_id(s: &str) -> [u32; 8] {
 fn join_cmd(a: &[String]) {
     let (dir, ing_p) = (&a[0], &a[1]);
     let rd = |f: &str| std::fs::read(format!("{dir}/{f}")).unwrap_or_else(|e| panic!("{dir}/{f}: {e}"));
-    let main_r: risc0_zkvm::Receipt = bincode::deserialize(&rd("main.rcpt")).unwrap();
     let main_image = unhex_id(String::from_utf8(rd("main_image")).unwrap().trim());
+    let fake = |img: [u32; 8], j: Vec<u8>| {
+        let c = risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(img), j.clone());
+        risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(c)), j)
+    };
+    // a control's main@H (ts-anchor join-inputs --forge-main-anchor): a dev-mode claim instead of the real receipt
+    let main_r: risc0_zkvm::Receipt = match std::fs::read(format!("{dir}/main.journal.fake")) {
+        Ok(j) => { eprintln!("CONTROL: main@H is a dev-mode claim ({dir}/main.journal.fake)"); fake(main_image, j) }
+        Err(_) => bincode::deserialize(&rd("main.rcpt")).unwrap(),
+    };
     let genesis: Vec<u8> = { let g = String::from_utf8(rd("genesis")).unwrap(); (0..64).step_by(2).map(|i| u8::from_str_radix(&g.trim()[i..i + 2], 16).unwrap()).collect() };
     let genesis: [u8; 32] = genesis.try_into().unwrap();
     let jt = rd("tip.journal");
@@ -262,8 +270,8 @@ fn join_cmd(a: &[String]) {
     let bip30_image = env_id("TS_BIP30_IMAGE", bip30_default);
     let ingest_image = env_id("TS_INGEST_IMAGE", TS_COMBINE_ID);
     // the anchored tip: a dev-mode claim (what a dev-mode run of the core image on the anchor yields)
-    let tip_claim = risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(tip_image), jt.clone());
-    let tip_r = risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(tip_claim)), jt.clone());
+    // TS_TIP_CLAIM_IMAGE (a control): the claim made under another image than the one the guest is told
+    let tip_r = fake(env_id("TS_TIP_CLAIM_IMAGE", tip_image), jt.clone());
     let mut log: Vec<u8> = Vec::new();
     let t0 = std::time::Instant::now();
     let r = {

@@ -739,20 +739,21 @@ fn bip30_plan(a: &[String]) {
 /// §12.1, §12.4, §13.1, §13.2); the trie terms are a log-linear FIT of measured points, extrapolated beyond 10^7.
 mod rates {
     /// snapshot phase (parse, hash_serialized_3, leaf, ECMH, coin log, trie key) per coin, by Core's script type, at
-    /// the script's own size; `RAW_PER_BYTE` for a raw script beyond 22 bytes
-    pub const SNAP_P2PKH: f64 = 0.0;
-    pub const SNAP_P2SH: f64 = 0.0;
-    pub const SNAP_P2PK33: f64 = 0.0;
-    pub const SNAP_P2PK65: f64 = 0.0;
-    pub const SNAP_RAW22: f64 = 0.0;
-    pub const RAW_PER_BYTE: f64 = 0.0;
+    /// the script's own size; `RAW_PER_BYTE` for a raw script beyond 22 bytes. One 100,000-coin chunk per type
+    /// (`synth --script`), executor, laptop, 21.11.2026 (§13.2)
+    pub const SNAP_P2PKH: f64 = 7_326.1;
+    pub const SNAP_P2SH: f64 = 7_239.7;
+    pub const SNAP_P2PK33: f64 = 7_386.9;
+    pub const SNAP_P2PK65: f64 = 9_227.6;
+    pub const SNAP_RAW22: f64 = 7_167.6;
+    pub const RAW_PER_BYTE: f64 = 21.1; // (raw100 8,814.5 - raw22 7,167.6) / 78
     /// trie insert + witness read per coin into a trie of n coins: A + B * log2(n), fitted (§13.2)
     pub const TRIE_A: f64 = 0.0;
     pub const TRIE_B: f64 = 0.0;
     /// per chunk: reading and hashing the header times, per header (§12.4: 20,310,690 at 935,001 headers)
     pub const CHUNK_PER_HEADER: f64 = 20_310_690.0 / 935_001.0;
-    /// per chunk: everything else fixed (read, commit), from the chunk logs
-    pub const CHUNK_FIXED: f64 = 0.0;
+    /// per chunk: the rest of the input read (S_in, ~111 regtest header times included) and the commit: ~1.05 M
+    pub const CHUNK_FIXED: f64 = 1_055_000.0;
     /// combine per header: header link + times (~2.2 k) and block-forest leaf (~2.5 k), §6
     pub const COMBINE_PER_HEADER: f64 = 4_700.0;
     /// a BIP30 piece, per entry (§13.1)
@@ -889,6 +890,21 @@ fn join_inputs(a: &[String]) {
     std::fs::write(format!("{out}/main_image"), &img).unwrap();
     std::fs::write(format!("{out}/genesis"), nw.genesis_anchor).unwrap();
     std::fs::write(format!("{out}/tip.journal"), &jt).unwrap();
+    // --forge-main-anchor (a negative control): main@H's journal with its anchor_id changed, for a dev-mode claim
+    let _ = std::fs::remove_file(format!("{out}/main.journal.fake"));
+    if a.iter().any(|x| x == "--forge-main-anchor") {
+        let mut m = main.clone();
+        m.anchor_id[0] ^= 1;
+        std::fs::write(format!("{out}/main.journal.fake"), wbytes(&risc0_zkvm::serde::to_vec(&m).unwrap())).unwrap();
+        println!("CONTROL: main.journal.fake = main@H with anchor_id {}", hex(&m.anchor_id));
+    }
+    // --forge-tip-anchor: the anchored tip's journal with its anchor_id changed (a lineage on another anchor)
+    if a.iter().any(|x| x == "--forge-tip-anchor") {
+        let mut t = tip.clone();
+        t.anchor_id[0] ^= 1;
+        std::fs::write(format!("{out}/tip.journal"), wbytes(&risc0_zkvm::serde::to_vec(&t).unwrap())).unwrap();
+        println!("CONTROL: tip.journal = the anchored tip with anchor_id {}", hex(&t.anchor_id));
+    }
     println!("JOIN_INPUTS main@{} (verified, {img}) + anchored tip {} (anchor_id {}) -> {out}; join_state.rs round trip OK on both",
              main.height, tip.height, &hex(&tip.anchor_id)[..16]);
 }
