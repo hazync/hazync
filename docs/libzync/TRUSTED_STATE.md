@@ -979,3 +979,132 @@ only: at the measured per-type rates an all-P2PK65 set would cost 2,060 more per
 extrapolated 4 doublings beyond the largest measured trie (§13.2's caution). The recursion cost of resolving 272
 receipts in the combine is not measured. Against §12.5's earlier projection of ≈ 11.5 k cycles per coin, this model
 gives 11.8 k per coin at 1.6e8.
+
+## 14. Real proofs, the recursion cost, the host's disk stores and a verifier prototype (fifth PoC step, 22.11.2026)
+
+Branch `feat/trusted-state` merged with origin/main (#779, #783, #785, #787; no conflict, merge `7827a2c0`); the three
+control scripts pass on the merged tree (`CHUNK_CONTROLS` `CONTROLS_OK`, `BIP30_CONTROLS_OK`, `JOIN_CONTROLS_OK`,
+22.11.2026). Still no core guest file changed: `git diff origin/main...HEAD` touches `experimental/trusted-state/`, this
+file and the four host files only (`prover/host/Cargo.toml`, `src/lz.rs`, `src/main.rs`, `src/trusted_state.rs`), so the
+core images are unchanged (mainnet `46666b6f`). Labels as in §13: **MEASURED** (a run named here) or **PROJECTED**
+(arithmetic on measured rates).
+
+### 14.1 Real proofs of the chunked ingest and the join: the recursion cost
+
+<!-- 14.1 is filled in below once the CPU runs finish -->
+
+### 14.2 The host at mainnet scale: the anchor written into the host's disk stores (§8.7)
+
+**What changed.** `ts-anchor build --coinlog-dir <d> --trie-dir <d>` writes the anchor's coin log and counting trie
+straight into the stores the host already runs on (`HAZYNC_COINLOG_DIR`: the coin-log nodes and `index.bin`;
+`HAZYNC_TRIE_DIR`: the trie arena), in the host's own formats (`libzync::host::DiskNodes` / `DiskIndex`,
+`libzync::trie_store::TrieStore::open_dir`). `<out>.coinlog` is then the host's disk-mode state file (`LZDISK02`: height
+H, leaf count, roots; what `cl_save` writes and `cl_load` checks) and `<out>.trie` its disk marker. With a disk trie (and
+no `--ingest`) the inserts are applied in batches of 2^20 (the trie root is a function of the set; `chunk-plan` already
+applies per chunk and matches the one-shot root), and only coinbase and tracked txid groups are kept (the REPEATABLE
+check runs in the pass). The host needed **no change** to read these stores: `cl_init_at_start` / `trie_init_at_start`
+already open a disk-mode anchor and check it against the anchor's `utxo_roots` / `utxo_leaves` and `trie_root`, height
+and block. A run advances the stores in place, so an anchor's stores serve one run (copy them to keep the anchor).
+
+**`HAZYNC_TS_SMT_SEED` with a resume** (it refused one before). A resume rebuilds the BIP30 tree at the last receipt k;
+the main lineage replays it from block files 1..k, which a Trusted State run does not have. Now the run writes
+`state_<h>.smt` (the tree's entries) beside each receipt, before the coin log and trie saves (the last two kept, as
+theirs), and a resume loads `state_<k>.smt` and requires its root to be **block_k.rcpt's `smt_root`**, which the guest
+proved. That is sound for the same reason the main lineage's replay is: the file is trusted for nothing, the proved
+root decides, and block k+1's guest checks its BIP30 witness against that same root. All of it is behind the
+`trusted-state` feature; a default host refuses `HAZYNC_TS_SMT_SEED` (checked: "needs a host built with --features
+trusted-state") and its resume and save paths are the same code as before (`ts_run` is the constant `false`).
+
+**Controls** (`experimental/trusted-state/disk_controls.sh`, regtest anchored at 104, blocks 105..112, dev mode,
+laptop host with the prebuilt regtest guest `eb2cd424` and `--features trusted-state`; `DISK_CONTROLS_OK`, MEASURED
+22.11.2026):
+
+| check | result |
+|---|---|
+| the disk-store anchor's `.json` and `.smt` vs the in-memory build | byte-identical, ANCHOR_ID `8fce9ea6…` both |
+| the anchored lineage 105..112 from the disk stores | `state_112.json` byte-identical to the in-memory run's |
+| a run stopped after 108, resumed with `HAZYNC_RESUME=1` (in memory; and on disk) | "resuming after block 108", `state_112.json` = the unbroken run's, both |
+| resume with one value of `state_108.smt` changed | refused: "its N entries do not hash to block_108.rcpt's smt_root" |
+| resume with `state_108.smt` missing | refused (the file is required) |
+
+**At 10^6 and 3×10^6 coins** (MEASURED, laptop, WSL2; `ts-anchor synth --coinbase-every 10` on the regtest headers to
+110, so 50,000 / 150,000 BIP30 entries; peak RSS sampled from `/proc/<pid>/status` every 0.3 s and split into
+anonymous and file-backed memory; the disk rows are the final code, which flushes the disk trie after every batch):
+
+| | 10^6 in memory | 10^6 disk stores | 3×10^6 disk stores |
+|---|---|---|---|
+| `ts-anchor build`: ANCHOR_ID | `25fdd21b…7af1` | `25fdd21b…7af1` (`.json` and `.smt` byte-identical to in memory) | `8ab4378e…2a52` |
+| `ts-anchor build`: peak RSS, anonymous | **3,164,500 kB** | **684,732 kB** | **1,212,540 kB** |
+| `ts-anchor build`: peak RSS, file-backed (the mapped trie arena; the kernel can drop it) | 3,908 kB | 1,850,012 kB | 2,643,556 kB |
+| `ts-anchor build`: wall (native, one thread) | 29.9 s | 37.0 s | 110.6 s |
+| on disk | `.coinlog` 32.0 MB, `.trie` 139.8 MB | coin-log store 115 MB, trie arena 2.0 GB (`du`) | 424 MB, 2.7 GB |
+| host, block 111 as a base step on the anchor, dev mode: peak RSS, anonymous | 1,347,020 kB | 1,117,012 kB | not run |
+| host: `state_111.json` | — | byte-identical to the in-memory run's | — |
+
+Block 111 is `coinbase_only_block.py` of the harness's block 111 (every transaction dropped, the coinbase paying the
+subsidy alone, its witness commitment, merkle root and nonce redone): a valid block that spends nothing, so it can be
+proved on a synthetic anchor whose coins are not the chain's.
+
+Before the per-batch flush the disk build kept every trie slot an insert replaced in memory until its one final flush:
+2,043,792 kB anonymous and a 6.2 GB arena at 3×10^6 (MEASURED); with it, 1,212,540 kB and 2.7 GB, the same ANCHOR_ID.
+
+What this shows and what it does not:
+- The in-memory build's 3.2 GB per 10^6 coins is gone: the anchor's coin log and trie live in the host's stores, and
+  the host opens them as it opens its own (same `state_111`, 0.23 GB less anonymous memory at 10^6; the host's
+  remaining ~1.1 GB is the executor, not the stores).
+- **The disk build's anonymous memory still grows**: 684,732 → 1,212,540 kB from 10^6 to 3×10^6, about 0.26 GB per
+  10^6 coins (MEASURED slope). A trie-only run (coin log in memory) grows the same way (853,368 → 1,332,884 kB), so it
+  is not the coin-log store; the trie arena's in-memory free list (the replaced slots of a batch, reused by the next)
+  and the batch itself are the candidates, NOT profiled. PROJECTED, if that slope held: ~42 GB anonymous at 1.6e8
+  coins, against ~506 GB for the in-memory build (3.16 GB × 160). So the build fits a large box but is not yet
+  constant-memory; finding the growing structure is open.
+- PROJECTED (not run): the trie arena grew 2.0 → 2.7 GB from 10^6 to 3×10^6 (0.35 GB per 10^6 at the margin, 0.9 on
+  average), so ~56-144 GB at 1.6e8 coins; the coin-log store 115 → 424 MB (~155 MB per 10^6), ~25 GB.
+
+### 14.3 Verifier support, as a prototype (§8.1)
+
+**Where it lives.** The checks §8.1 needs are in `swiftsync-verify` (the core verifier library, its CLI, C ABI and
+`.wasm`) and are reached by every zAPP through `zapps/corecheck::verify_core`. Both are shared with main, and a change to
+either moves the core verifier's and the zAPPs' WASM shas. They do not need to change: `swiftsync_verify::verify` already
+takes `anchor: Option<ChainState>` and, with an anchor, runs every check (receipt, image, `self_id`, profile, time, block
+forest shape, lineage, `anchor_id == link_digest(A)`, work, checkpoint) and returns DEMO; `anchor_id()` and the `Image`
+fields are public. So the prototype is a separate crate that wraps them unmodified:
+`experimental/trusted-state/verify` (`ts-verify`, own workspace). The zAPP side would be the same wrapper over
+`verify_core`'s report, in each zAPP's own module; not built.
+
+**What it adds.** A pinned table `ANCHORS: (network, H, block, hash_serialized_3, anchor_id, source)` and a verdict
+`TS_VERIFY_ANCHORED` (exit 3) between `TS_VERIFY_OK` (0, a genesis-anchored proof, exactly swiftsync-verify's OK) and
+`TS_VERIFY_DEMO` (2). ANCHORED requires: swiftsync-verify's checks all pass with the given A; a pin exists for
+(network, A.height); A's tip is the pinned block; `link_digest(A)` is the pinned anchor_id (not PENDING); the proof's
+tip is above H; and the work and checkpoint an OK would need. It prints §4's label with H, the block, the
+`hash_serialized_3`, T and the image. Entries:
+
+| network | H | block | hash_serialized_3 | anchor_id | status |
+|---|---|---|---|---|---|
+| mainnet | 965,000 | `00000000000000000001595977e6000ce56129f5c9b4073e31ccc30b90b97da9` | `4a8d794337118c0c615b574f817c7306c687584a537184b8d233df42bf477ec2` | **PENDING** (`None`) | the snapshot is not taken (§9); to be filled only from `ts-anchor build` on Core's dumptxoutset at 965,000, reproduced by a second party, and not before the ingest receipt of that snapshot exists (§11.1). A unit test fails if it is filled |
+| regtest | 104 | `6abf594e…2fb8` | `97aa0565…9015` | `8fce9ea6…f71e` | TEST ENTRY (the zAPP harness chain), not a network pin |
+
+The regtest image (`eb2cd424`, genesis anchor `99509fc5…cf63`, profile 0x79) is carried by the prototype as
+`zapps/corecheck` carries it under its `regtest-test` feature; a unit test recomputes the genesis anchor.
+
+**Controls** (`experimental/trusted-state/verify_controls.sh`, MEASURED 22.11.2026, `VERIFY_CONTROLS_OK`), on REAL
+receipts: main@104 (`block_104.rcpt`, GPU, 16.11) and the anchored lineage's block 105, proved for real on CPU on
+hazync-coord as a base step on the anchor at 104 (§14.1; core image `eb2cd424`, the CI regtest guest embedded
+prebuilt, host `--features trusted-state`):
+
+| input | verdict |
+|---|---|
+| main@104, no anchor | `TS_VERIFY_OK` (exit 0) |
+| anchored block 105 + anchor_104.json | **`TS_VERIFY_ANCHORED`** (exit 3) |
+| anchored block 105, no anchor | FAIL: `anchor_id is genesis` |
+| anchored block 105 + the anchor with `max_time` + 1 | FAIL: `anchor_id is the GIVEN anchor` (the link digest moves) |
+| anchored block 105 with one seal byte flipped | FAIL: `receipt verifies against image eb2cd424…` |
+| main@104 + anchor_104.json | FAIL (a genesis proof is not on A) |
+| the real build with the controls hook set | FAIL: the hook needs the controls build |
+| controls build (`--features controls`), pin unchanged | ANCHORED |
+| controls build, the regtest pin replaced by PENDING | DEMO: "the regtest anchor at 104 is PENDING" |
+| controls build, another anchor_id pinned | DEMO: "the anchor's link digest 8fce9ea6… is not the pinned anchor_id" |
+
+Not built (still §8.1): the joined statement after the join receipt; history facts relabelled "since H" (the
+prototype checks no fact; its label says history starts at H); coin and tx facts below H on the 0x02 block-forest
+leaves; the zAPP-side wrappers. The pin is trusted: it is only as good as the reproducible build behind it.
