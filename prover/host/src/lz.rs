@@ -1002,9 +1002,12 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     #[cfg(feature = "trusted-state")]
     let ts_seed: Option<Smt> = std::env::var("HAZYNC_TS_SMT_SEED").ok().map(|p| {
         assert!(handover.is_none() && leaf.is_none() && anchor_path != "genesis", "HAZYNC_TS_SMT_SEED: a run from a Trusted State anchor only");
-        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_TS_SMT_SEED: no resume (the PoC replays nothing)");
-        crate::trusted_state::smt_seed(&p, &prev)
+        crate::trusted_state::smt_seed(&p, &prev.smt_root, "the anchor's")
     });
+    #[cfg(feature = "trusted-state")]
+    let ts_run = ts_seed.is_some();
+    #[cfg(not(feature = "trusted-state"))]
+    let ts_run = false;
     #[cfg(not(feature = "trusted-state"))]
     let ts_seed: Option<Smt> = {
         assert!(std::env::var_os("HAZYNC_TS_SMT_SEED").is_none(), "HAZYNC_TS_SMT_SEED needs a host built with --features trusted-state");
@@ -1058,7 +1061,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists())
             && (!methods::TRIE || std::path::Path::new(&format!("{out}/state_{k}.trie")).exists() || disk_trie_h == Some(*k as u64));
         if let Some(k) = (lo..=hi).rev().find(done) {
-            assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
+            assert!(replay || ts_run, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
             let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
             let r: Receipt = crate::verify::decode_receipt(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
             r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
@@ -1069,6 +1072,12 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             let aid = if handover_pending { prev.anchor_id }
                       else { crate::link_digest(&prev) };
             assert!(st.anchor_id == aid, "block_{k}.rcpt was proved from another anchor (anchor_id {}, this run's {})", hex(&st.anchor_id), hex(&aid));
+            // A Trusted State run has no block files below lo to replay: its tree at k is the state_<k>.smt it wrote
+            // next to the receipt, accepted only if it hashes to the receipt's (proved) smt_root.
+            #[cfg(feature = "trusted-state")]
+            let t = if ts_run { crate::trusted_state::smt_seed(&format!("{out}/state_{k}.smt"), &st.smt_root, &format!("block_{k}.rcpt's")) }
+                    else { let (t, _) = lz_smt_replay(dir, k); t };
+            #[cfg(not(feature = "trusted-state"))]
             let (t, _) = lz_smt_replay(dir, k);
             assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");
             // The coin log at k: the file the run left next to the receipt, checked against the receipt's own roots.
@@ -1235,6 +1244,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         assert_eq!(st.height, h);
         write_atomic(&format!("{out}/block_{h}.rcpt"), &bincode::serialize(&r).unwrap());
         write_atomic(&format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap().as_bytes());
+        // EXPERIMENTAL Trusted State: the BIP30 tree at h beside the receipt (before the coin log and trie saves, so a
+        // resume that finds those at h finds this too), the last two kept as theirs
+        #[cfg(feature = "trusted-state")]
+        if ts_run {
+            assert_eq!(smt.root(), st.smt_root, "block {h}: the host's BIP30 tree is not the receipt's");
+            crate::trusted_state::smt_save(&format!("{out}/state_{h}.smt"), &smt);
+            if h >= first + 2 && std::env::var("HAZYNC_COINLOG_SAVE_EACH").as_deref() != Ok("1") {
+                let _ = std::fs::remove_file(format!("{out}/state_{}.smt", h - 2));
+            }
+        }
         // a leaf has no stores to advance (the guest checked its witnesses against S(h-1))
         if methods::COINLOG && leaf.is_none() {
             let flips = cl_commit(&cl_lists.0, &cl_lists.1, &st);

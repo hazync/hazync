@@ -9,11 +9,12 @@
 //! `HAZYNC_TS_SMT_SEED=<anchor>.smt` the tree is built from the anchor's own entry list instead and must hash to the
 //! anchor's smt_root, so the anchor (and its anchor_id) is used exactly as built.
 
-use crate::{ChainState, Smt};
+use crate::Smt;
 
-/// The BIP30 tree of a Trusted State anchor from its `.smt` list (`<txid internal hex> <value>` per line), checked
-/// against the anchor's smt_root.
-pub(crate) fn smt_seed(path: &str, prev: &ChainState) -> Smt {
+/// A BIP30 tree from an entry list (`<txid internal hex> <value>` per line), required to hash to `root`: the anchor's
+/// `.smt` (`root` = the anchor's smt_root) or, on a resume (HAZYNC_RESUME=1), the `state_<k>.smt` the run wrote beside
+/// block k's receipt (`root` = that receipt's smt_root, which the guest proved; so the file is trusted for nothing).
+pub(crate) fn smt_seed(path: &str, root: &[u8; 32], whose: &str) -> Smt {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("HAZYNC_TS_SMT_SEED {path}: {e}"));
     let mut t = Smt::new();
     let mut n = 0usize;
@@ -27,7 +28,14 @@ pub(crate) fn smt_seed(path: &str, prev: &ChainState) -> Smt {
         t.insert(k, v);
         n += 1;
     }
-    assert_eq!(t.root(), prev.smt_root, "{path}: its {n} entries do not hash to the anchor's smt_root");
-    eprintln!("TRUSTED STATE (experimental): BIP30 tree seeded from {path}: {n} entries, root = the anchor's smt_root");
+    assert_eq!(&t.root(), root, "{path}: its {n} entries do not hash to {whose} smt_root");
+    eprintln!("TRUSTED STATE (experimental): BIP30 tree from {path}: {n} entries, root = {whose} smt_root");
     t
+}
+
+/// The tree's entries in `smt_seed`'s format, written atomically (a resume must never read a short file).
+pub(crate) fn smt_save(path: &str, t: &Smt) {
+    let mut s = String::with_capacity(t.len() * 76);
+    for (k, v) in t.entries() { s += &crate::hex(&k); s.push(' '); s += &v.to_string(); s.push('\n'); }
+    crate::lz::write_atomic(path, s.as_bytes());
 }

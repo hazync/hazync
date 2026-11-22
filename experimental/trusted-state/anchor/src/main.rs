@@ -1,6 +1,7 @@
 //! ts-anchor: EXPERIMENTAL Trusted State proof of concept (docs/libzync/TRUSTED_STATE.md). Not a release tool.
 //!
 //!   ts-anchor build  --network <regtest|mainnet> --snapshot <utxo.dat> --side <prefix> (--expect <H>:<block>:<hash3> | --no-expect) --out <prefix>
+//!                    [--coinlog-dir <dir>] [--trie-dir <dir>]   (the host's disk stores, HAZYNC_COINLOG_DIR / HAZYNC_TRIE_DIR; §14.2)
 //!   ts-anchor join   --anchor <A.json> --main <state.json | receipt.rcpt --image <hex>> [--tip <state.json> --tip-image <hex>]
 //!   ts-anchor compare <a.json> <b.json>
 //!   ts-anchor facts  --state <tip.json> --trie <tip.trie> --scenarios <scenarios.json> --who <NAME> [--history <spk hex>]... [--undo-from <h>]
@@ -164,7 +165,33 @@ fn build(a: &[String]) {
 
     // ---- one pass over the snapshot: coin log, ECMH, hash_serialized_3, value, trie inserts, BIP30 groups
     let t0 = Instant::now();
-    let mut log = libzync::coinlog_forest::Store::with_nodes(Default::default());
+    // --coinlog-dir / --trie-dir (TRUSTED_STATE.md §14.2): the coin log and the trie are written straight into the
+    // host's disk stores (HAZYNC_COINLOG_DIR's nodes + index.bin, HAZYNC_TRIE_DIR's arena), in the formats the host
+    // opens, so neither is held in memory here or in the host; `<out>.coinlog` is then the host's disk-mode state file
+    // (LZDISK02: height, leaf count, roots) and `<out>.trie` its disk marker. Each directory must be new or empty.
+    let fresh = |d: &str, what: &str| {
+        let p = std::path::Path::new(d);
+        if p.exists() && std::fs::read_dir(p).map(|mut r| r.next().is_some()).unwrap_or(true) { die(format!("{what} {d}: not empty (a fresh directory only)")); }
+        std::fs::create_dir_all(p).unwrap_or_else(|e| die(format!("{d}: {e}")));
+    };
+    let cl_dir = arg(a, "--coinlog-dir");
+    let trie_dir = arg(a, "--trie-dir");
+    if let Some(d) = &cl_dir { fresh(d, "--coinlog-dir"); }
+    if let Some(d) = &trie_dir { fresh(d, "--trie-dir"); }
+    let mut log = libzync::coinlog_forest::NodeStore::with_nodes(match &cl_dir {
+        Some(d) => libzync::host::AnyNodes::Disk(libzync::host::DiskNodes::open(std::path::Path::new(d)).unwrap_or_else(|e| die(format!("{d}: {e}")))),
+        None => libzync::host::AnyNodes::Mem(Default::default()),
+    });
+    let mut cl_index = cl_dir.as_ref().map(|d| libzync::host::DiskIndex::open(&std::path::Path::new(d).join("index.bin")).unwrap_or_else(|e| die(format!("{d}/index.bin: {e}"))));
+    // the trie, in memory or in the disk arena; with a disk trie and no --ingest the inserts are applied in batches of
+    // TRIE_BATCH (the root is a function of the set: chunk-plan applies per chunk and matches the one-shot root)
+    let mut trie = match &trie_dir {
+        Some(d) => TrieStore::open_dir(std::path::Path::new(d), true).unwrap_or_else(|e| die(format!("{d}: {e}"))),
+        None => TrieStore::new(true),
+    };
+    const TRIE_BATCH: usize = 1 << 20;
+    let stream = trie_dir.is_some() && arg(a, "--ingest").is_none();
+    let t_trie_acc = std::cell::Cell::new(0f64);
     let mut ecmh = za::Ecmh::default();
     let mut h3 = za::HashSerialized3::default();
     let mut value = 0u64;
@@ -195,13 +222,26 @@ fn build(a: &[String]) {
                 if t { trk_ord.extend_from_slice(&c.txid); trk_ord.extend_from_slice(&c.vout.to_le_bytes()); }
             }
             log.push(leaf);
+            if let Some(ix) = cl_index.as_mut() { ix.insert(leaf, log.len() - 1); }
             ecmh.add_leaf(&leaf)?;
             h3.add(c);
             value = value.checked_add(c.value).ok_or("value overflows")?;
             ins.push((libzync::trie_fact::coin_key(&c.script_pubkey, &c.txid, c.vout), None, c.value));
+            if stream && ins.len() >= TRIE_BATCH {
+                let t = Instant::now();
+                trie.apply(&Vec::new(), &ins).map_err(|e| format!("trie: {e:?} (two coins with one trie key?)"))?;
+                ins.clear();
+                t_trie_acc.set(t_trie_acc.get() + t.elapsed().as_secs_f64());
+            }
             match groups.last_mut() {
                 Some(g) if g.txid == c.txid => { g.n += 1; g.coinbase |= c.coinbase; g.tracked |= t; }
-                _ => groups.push(Group { txid: c.txid, n: 1, coinbase: c.coinbase, tracked: t }),
+                _ => {
+                    // streaming: a closed group that is neither coinbase nor tracked is only needed for the REPEATABLE
+                    // check, done here against the (short) list instead of a set of every txid
+                    if stream { if let Some(g) = groups.last() { if !(g.coinbase || g.tracked) { groups.pop(); } } }
+                    if stream && repeatable.contains(&c.txid) { return Err(format!("repeatable txid {} has live coins in the snapshot", display(&c.txid))); }
+                    groups.push(Group { txid: c.txid, n: 1, coinbase: c.coinbase, tracked: t })
+                }
             }
             coins += 1;
             Ok(())
@@ -230,6 +270,7 @@ fn build(a: &[String]) {
         let m = hc.mtp_before(h).unwrap_or_else(|e| die(e));
         let leaf = za::coin_leaf(&c, false, m);
         log.push(leaf);
+        if let Some(ix) = cl_index.as_mut() { ix.insert(leaf, log.len() - 1); }
         ins.push((libzync::trie_fact::coin_key(&c.script_pubkey, &c.txid, 0), None, v));
         println!("FORGED extra coin {}:0 value={v} height={h} mtp={m} leaf={} at log position {} (NOT in the snapshot, NOT in live_hash)",
                  display(&c.txid), hex(&leaf), log.len() - 1);
@@ -237,11 +278,12 @@ fn build(a: &[String]) {
 
     // ---- the counting trie: every live coin inserted, nothing spent (no history before H)
     let t1 = Instant::now();
-    let mut trie = TrieStore::new(true);
     let troot = trie.apply(&Vec::new(), &ins).unwrap_or_else(|e| die(format!("trie: {e:?} (two coins with one trie key?)")));
+    if stream { ins = Vec::new(); }
     trie.height = h_tip as u64;
     trie.hash = tip_hash;
-    let t_trie = t1.elapsed().as_secs_f64();
+    if trie_dir.is_some() { trie.flush().unwrap_or_else(|e| die(format!("trie flush: {e}"))); }
+    let t_trie = t1.elapsed().as_secs_f64() + t_trie_acc.get();
 
     // ---- the BIP30 tree: every live coinbase and every tracked transaction with its live count; REPEATABLE slots
     let t2 = Instant::now();
@@ -253,6 +295,7 @@ fn build(a: &[String]) {
         smt_lines += &format!("{} {}\n", hex(&g.txid), g.n);
         n_cb += g.coinbase as usize;
     }
+    // (streaming: groups holds the coinbase and tracked ones only; the REPEATABLE check ran in the pass)
     let live_txids: HashSet<[u8; 32]> = groups.iter().map(|g| g.txid).collect();
     for r in &repeatable {
         if live_txids.contains(r) { die(format!("repeatable txid {} has live coins in the snapshot", display(r))); }
@@ -291,11 +334,27 @@ fn build(a: &[String]) {
 
     // ---- write the anchor
     std::fs::write(format!("{out}.json"), serde_json::to_string(&cs).unwrap()).unwrap();
-    let mut b = Vec::with_capacity(8 + 32 * log.len() as usize);
-    b.extend_from_slice(&log.len().to_le_bytes());
-    for i in 0..log.len() { b.extend_from_slice(&log.leaf(i)); }
+    let mut b = Vec::new();
+    if let libzync::host::AnyNodes::Disk(d) = &log.nodes {
+        // the host's disk-mode state file (lz.rs cl_save / cl_load: CL_DISK_MAGIC2, height, leaf count, raw roots)
+        d.sync().unwrap_or_else(|e| die(format!("coin log sync: {e}")));
+        cl_index.as_ref().unwrap().sync().unwrap_or_else(|e| die(format!("index sync: {e}")));
+        b.extend_from_slice(b"LZDISK02");
+        b.extend_from_slice(&(h_tip as u64).to_le_bytes());
+        b.extend_from_slice(&log.len().to_le_bytes());
+        for r in log.roots() { b.extend_from_slice(&r.unwrap_or([0; 32])); b.push(r.is_some() as u8); }
+    } else {
+        b.reserve(8 + 32 * log.len() as usize);
+        b.extend_from_slice(&log.len().to_le_bytes());
+        for i in 0..log.len() { b.extend_from_slice(&log.leaf(i)); }
+    }
     std::fs::write(format!("{out}.coinlog"), &b).unwrap();
-    std::fs::write(format!("{out}.trie"), trie.to_bytes()).unwrap();
+    let trie_bytes = match &trie_dir {
+        // the host's disk marker (trie.rs trie_save); the host opens HAZYNC_TRIE_DIR itself and checks height, block, root
+        Some(d) => format!("HZTRIE-DISK {d} height {} root {}\n", trie.height, trie.root().iter().map(|w| format!("{w:08x}")).collect::<String>()).into_bytes(),
+        None => trie.to_bytes(),
+    };
+    std::fs::write(format!("{out}.trie"), &trie_bytes).unwrap();
     std::fs::write(format!("{out}.smt"), &smt_lines).unwrap();
     let (lx, _) = za::live_hash_hex(&live_hash);
     println!("ANCHOR {} H={h_tip} block={} hash_serialized_3={hash3}{}", nw.name, display(&tip_hash),
@@ -306,7 +365,8 @@ fn build(a: &[String]) {
              cs.block_leaves, work.to_str_radix(16));
     println!("  native time: snapshot pass {t_pass:.3} s (coin log, ECMH 1 thread, hash3, trie keys), trie {t_trie:.3} s, BIP30 tree {t_smt:.3} s, total {:.3} s",
              t_all.elapsed().as_secs_f64());
-    println!("  files: {out}.json .coinlog ({} B) .trie ({} B) .smt", b.len(), trie.to_bytes().len());
+    println!("  files: {out}.json .coinlog ({} B) .trie ({} B) .smt{}{}", b.len(), trie_bytes.len(),
+             cl_dir.as_ref().map(|d| format!("; coin log store {d}")).unwrap_or_default(), trie_dir.as_ref().map(|d| format!("; trie store {d}")).unwrap_or_default());
     println!("ANCHOR_ID {}", hex(&anchor_id));
     let _ = meta;
 }

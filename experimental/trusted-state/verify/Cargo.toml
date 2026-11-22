@@ -1,0 +1,19 @@
+# EXPERIMENTAL (docs/libzync/TRUSTED_STATE.md §8.1, §14.3): a prototype verifier with a pinned Trusted State anchor table
+# and an ANCHORED verdict between OK and DEMO. Its own workspace; it WRAPS swiftsync-verify (the shared library, used
+# as it is, not modified), so no shared crate, verifier or WASM sha moves.
+[package]
+name = "ts-verify"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+# disable-dev-mode as swiftsync-verify: RISC0_DEV_MODE can never make this accept a fake receipt
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde_json = "1"
+
+[profile.release]
+debug = 0
+
+[workspace]
