@@ -1,0 +1,28 @@
+  libzync: inputs 0..2466: 2503 pubkey hints, 2855 signature hints
+R0VM[118220471] liftx: hits=2502 misses=0
+R0VM[162570290] batch: deferred=2694 (schnorr=0) distinct_keys=2387 fallback=161 window=10 ok=true transcript=671767 prep=9122939 msm=34550422 finish_cycles=44345211
+  chunk   0 [0..2466) executed: 163632184 cycles
+  chunk   0 padded 195035136 (93 segments)
+  libzync: inputs 2466..5192: 1909 pubkey hints, 3015 signature hints
+R0VM[98471262] liftx: hits=1907 misses=0
+R0VM[140004793] batch: deferred=3010 (schnorr=0) distinct_keys=1920 fallback=5 window=10 ok=true transcript=750512 prep=8391959 msm=32386423 finish_cycles=41528977
+  chunk   1 [2466..5192) executed: 141306083 cycles
+  chunk   1 padded 169869312 (81 segments)
+  libzync: ECMH COLLECT (no bundle)
+  coinlog SYNTH: log size 408569221 (k = 1.64), 4897 spends, 39282 siblings
+  trie: 4897 marks, 4113 inserts, witness 1358147 words; trie update executed: 77681978 cycles, padded 92274688 (44 segments)
+  coinlog: 4897 spends of earlier coins, 3818 appends
+  libzync: 594380 bytes of ECMH hints, no hints file
+R0VM[67210203] swiftsync: adds=3818 subs=4897 collect=false acc_x_top_word=30fc73cf
+R0VM[72057120] undo: block 481824 inputs 5192 hash 7684d12f7ca2654812eb5974e5976e7ecf198ffe6eda577e725fd44d86f8a8af
+=== AGGREGATE, EXECUTE ONLY (no proving) ===
+  block validation cycles  72243189
+  block validation padded  85983232 (41 segments)
+  journal sha256           389c855f87d9885d2b19bb00e017c73fa38657152f41647fd9c0b0dd1e8fbf45
+  segments at po2 21        ~35
+  executed in              13.0s
+
+  Scale: chunk 9 is 948,436,992 cycles and proved in ~915 s on a B200, so this much
+  block-validation work is roughly 70 s of segment proving. Whatever the FULL
+  aggregate cost beyond that (measured: >3,300 s) is the assumption resolutions.
+TIMED wall_s=74.5 user_s=84.7 sys_s=0.5 maxrss_kb=697972 rc=0 load1=46.9 load1_end=46.9

@@ -1,0 +1,30 @@
+  libzync: inputs 0..2466: 2503 pubkey hints, signatures COLLECT (no bundle entry)
+  libzync: inputs 2466..5192: 1909 pubkey hints, signatures COLLECT (no bundle entry)
+  libzync: inputs 0..2466: 2503 pubkey hints, 2855 signature hints
+WARNING: proving in dev mode. This will not generate valid, secure proofs.
+R0VM[118220471] liftx: hits=2502 misses=0
+R0VM[162570290] batch: deferred=2694 (schnorr=0) distinct_keys=2387 fallback=161 window=10 ok=true transcript=671767 prep=9122939 msm=34550422 finish_cycles=44345211
+WARNING: Proving in dev mode does not generate a valid receipt. Receipts generated from this process are invalid and should never be used in production.
+LZ_STATS chunk h=481824 segments=93 total_cycles=195035136 user_cycles=163632184
+  libzync: inputs 2466..5192: 1909 pubkey hints, 3015 signature hints
+WARNING: proving in dev mode. This will not generate valid, secure proofs.
+R0VM[98471262] liftx: hits=1907 misses=0
+R0VM[140004793] batch: deferred=3010 (schnorr=0) distinct_keys=1920 fallback=5 window=10 ok=true transcript=750512 prep=8391959 msm=32386423 finish_cycles=41528977
+WARNING: Proving in dev mode does not generate a valid receipt. Receipts generated from this process are invalid and should never be used in production.
+LZ_STATS chunk h=481824 segments=81 total_cycles=169869312 user_cycles=141306083
+  libzync: ECMH COLLECT (no bundle)
+  undo: block 481824 inputs 5192 hash 7684d12f7ca2654812eb5974e5976e7ecf198ffe6eda577e725fd44d86f8a8af (guest == host)
+WARNING: proving in dev mode. This will not generate valid, secure proofs.
+WARNING: Proving in dev mode does not generate a valid receipt. Receipts generated from this process are invalid and should never be used in production.
+LZ_STATS trie h=481824 segments=45 total_cycles=93323264 user_cycles=78542423
+  block 481824: trie update proved: 4897 marks, 4113 inserts, witness 1390329 words
+  libzync: 594380 bytes of ECMH hints, no hints file
+WARNING: proving in dev mode. This will not generate valid, secure proofs.
+R0VM[67519840] swiftsync: adds=3818 subs=4897 collect=false acc_x_top_word=0b824422
+R0VM[72367459] undo: block 481824 inputs 5192 hash 7684d12f7ca2654812eb5974e5976e7ecf198ffe6eda577e725fd44d86f8a8af
+WARNING: Proving in dev mode does not generate a valid receipt. Receipts generated from this process are invalid and should never be used in production.
+LZ_STATS aggregate h=481824 segments=42 total_cycles=86245376 user_cycles=72559358
+  block 481824: 2 chunks, proved in 117.4 s (base on anchor), forest 601695192 live_set 1  [117 s total]
+LZ_PROVE_RANGE_DONE 481824..=481824 in 117 s; final receipt o481824/block_481824.rcpt (DEV MODE: fake receipts, not proofs; the times are execution, not proving)
+TIMED wall_s=117.6 user_s=162.4 sys_s=1.1 maxrss_kb=1155712 rc=0 load1=47.0 load1_end=46.5
+STATE_MATCH (fields 23; differing: anchor_id; height 481824 utxo_leaves 601695192)

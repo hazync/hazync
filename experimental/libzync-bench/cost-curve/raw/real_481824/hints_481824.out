@@ -1,0 +1,8 @@
+  libzync: inputs 0..2466: 2503 pubkey hints, signatures COLLECT (no bundle entry)
+  libzync: inputs 2466..5192: 1909 pubkey hints, signatures COLLECT (no bundle entry)
+  libzync: ECMH COLLECT (no bundle)
+libzync-hints: block 481824 2 chunks on 16 threads -> b481824.lzb
+  batch: 5870 verifies, 5704 valid, 166 left to libsecp
+  ecmh: 8715 operations, 594380 bytes
+  time: chunks 33.3 s, batch hints 0.3 s, aggregate + ecmh 17.4 s, total 51.0 s
+TIMED wall_s=51.1 user_s=83.9 sys_s=0.7 maxrss_kb=705116 rc=0 load1=46.5 load1_end=46.9

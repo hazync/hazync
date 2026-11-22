@@ -256,6 +256,7 @@ but at ~24 s each their fixed cost is ~1,150 card-hours of the total. 175k-425k 
 1. **Real-state trie cycles above 400,000:** run the same `run_a.sh` on prep's leaves at 481,824, 550,000, 650,000,
    709,632, 800,000, 900,000, 962,000 and 967,600-974,000 as prep reaches them. Execute-only on a CPU is enough; the
    cycles convert with R4.
+   481,824 is done (22.11.2026): [`RESULT_481824_real_state.md`](RESULT_481824_real_state.md), model error +0.26% on the block.
 2. **More samples per era** for the ±20% term: CPU-only, about 3 min per block on hazync-coord.
 3. **The published v0.27.0 CUDA asset is broken** (see §5). The rate here is for the clean build; v0.27.1 should be
    checked to have the same host hash, or re-timed.
