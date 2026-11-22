@@ -31,6 +31,20 @@ TIP_FILE
 # SPACING: how often a bridge checkpoint is archived. The coordinator has a block device
 # and the tip-bridge box does not, so how much history each can afford to keep differs.
 SPACING
+# HAZYNC_DISK_FLOOR_GB: the free-space floor hazync-check-disk alarms under (added 22.11.2026).
+# The repo's 500 GB is sized for hazync-proof: a 3.9 TB /srv/bulk volume and ~55 days of a
+# tip-following bridge at ~9 GB/day. hazync-coord has ONE 2 TB disk, /srv/bulk there is an empty
+# directory on /, and bitcoind's txindex node alone is 916 GB, so 500 GB free is a quarter of the
+# disk. The check failed 618 hourly runs in a row there (about 27.10-22.11.2026, one ntfy page each) and
+# got muted, which is the failure every check here exists to avoid. The bridge on that box is
+# retired (20.11.2026); what writes there now is bitcoind and release/zAPP builds, which can take
+# ~60 GB in a day. hazync-coord sets 200 in a box-local drop-in:
+#   /etc/systemd/system/hazync-check-disk.service.d/floor.conf
+#     [Service]
+#     Environment=HAZYNC_DISK_FLOOR_GB=200
+# ⚠ ONLY the floor. HAZYNC_DISK_PATHS stays the repo's `/srv/bulk /` on both boxes (see the note
+# above); on hazync-coord both paths resolve to /, which is checked twice and is harmless.
+HAZYNC_DISK_FLOOR_GB
 
 # ── MemoryHigh / MemoryMax are PER BOX, and treating them as drift is how this was nearly broken ──
 # ⛔ The widened check reported hazync-proof's MemoryHigh=48G against the repo's 53G as drift, and
