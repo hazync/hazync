@@ -476,7 +476,7 @@ Because the guest checks every proof, the source is never trusted.
 
 The production host replaces only the part that yields, per block, the spent coins' data and the batch proof. Its
 output is the format the guest already reads (step.rs `put_spent`, `encode_proof`), so **neither the guest nor any
-image changed** (core `46666b6f`, utreexo base `27bea7da`, tip `ab6f7a26`).
+image changed** (core `46666b6f`, utreexo base `27bea7da`, tip `ab6f7a26` then; since 21.11.2026 base `00b2d1e8`, tip `5ef26dfe`, strict compact sizes).
 
 **Untrusted, as the guest code shows.** The guest (`utreexo-tip/src/main.rs`, `step.rs`) takes the blocks only as
 bytes bound to the previous statement's block by hash, to their Merkle roots and through the link headers to the core
