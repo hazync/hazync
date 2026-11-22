@@ -23,11 +23,17 @@
 //!       <out receipt> [--signet] [--execute] [--prof N] [--elf <tip guest>] [--base-id <hex>] [--cache <file>] [--ref <log>]
 //!       [--headers <file>]   (the link H+1..T as "<height> <header hex>" lines; default: from the block files)
 //!       [--cache-out <file>] (where the replay's state at H is saved; default: over --cache)
+//!       [--source forest|native] (the witness source, default forest: the production source, UTREEXO_ZAPP.md §10.5.1)
+//!       [--cache-required] (a --cache that is unusable, or not at or below the previous height, exits 4 instead of a
+//!       replay from genesis)
 //!       One STEP of the tip mode (UTREEXO_ZAPP.md §10): from the roots the previous receipt proves (a base receipt of
 //!       utreexo-prove, or an earlier step) to the roots after H, block by block as Floresta does (rustreexo
 //!       Stump::modify with batch proofs from a native MemForest), linked by headers H+1..T to the core tip. A
 //!       .journal file (written by --execute) instead of a receipt: execute only, an unresolved assumption. --cache: the
-//!       native replay's state (MemForest and live coins) at the previous height, read if it matches, written at H.
+//!       witness source's state at the previous height (forest: HZUFOR01, the compact forest + block hashes; native:
+//!       HZUTIP01, MemForest + live coins), read if it matches, written at H.
+//!       UTREEXO_TIP_SOURCE_LIE=node|store (execute only, --source forest): the source lies and skips its own checks;
+//!       the guest must refuse (exit 3), as for UTREEXO_TIP_TAMPER.
 //!   zyncapp core-info <core receipt | state_<T>.json>     the core statement's height, tip hash and image (unchecked)
 //!   zyncapp utreexo-count <block_<h>.json ...>   per block: Utreexo adds, leaf SHA-512 blocks, inputs (cost model)
 //!   zyncapp id
@@ -51,6 +57,11 @@ mod facts {
 }
 #[path = "../../methods/utreexo-tip/src/step.rs"]
 mod utreexo_tip_step;
+/// The name the witness source's files (also #[path]-included by zapps/utreexo/tip-step) use for step.rs.
+use utreexo_tip_step as step;
+/// The tip mode's production witness source (UTREEXO_ZAPP.md §10.5.1): the compact forest and the source.
+mod utreexo_forest;
+mod utreexo_witness;
 use zyncapp_methods::{ZYNCAPP_HINTS_ELF, ZYNCAPP_HINTS_ID, ZYNCAPP_UTREEXO_TIP_ELF, ZYNCAPP_UTREEXO_TIP_ID, ZYNCAPP_UTREEXO_ELF, ZYNCAPP_UTREEXO_ID, ZYNCAPP_COIN_ELF, ZYNCAPP_COIN_ID, ZYNCAPP_ZEROCONF_ELF, ZYNCAPP_ZEROCONF_ID, ZYNCAPP_HASHBENCH_ELF, ZYNCAPP_TRIEBENCH_ELF, ZYNCAPP_HEADERS_ELF, ZYNCAPP_HEADERS_ID};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -917,8 +928,7 @@ fn load_core(path: &str, execute: bool) -> (ChainStateJ, Vec<u8>, Option<Receipt
 }
 
 fn utreexo_tip_prove(a: &[String]) {
-    use utreexo_tip_host::{Native, TipFrame};
-    use utreexo_tip_step as step;
+    use utreexo_tip_host::{Source, TipFrame};
     let (dir, prev_path, core_path, out) = (&a[1], &a[2], &a[4], &a[5]);
     let stop: u32 = a[3].parse().unwrap_or_else(|_| die("H?"));
     let signet = a.iter().any(|x| x == "--signet");
@@ -937,6 +947,19 @@ fn utreexo_tip_prove(a: &[String]) {
     };
     let tc = std::env::var("UTREEXO_TIP_TAMPER").ok();
     if tc.is_some() && !execute { die("UTREEXO_TIP_TAMPER is an execute-only negative test"); }
+    let forest = match flag(a, "--source").map(|x| x.as_str()) {
+        None | Some("forest") => true,
+        Some("native") => false,
+        Some(x) => die(&format!("--source {x}: forest or native")),
+    };
+    let lie = match std::env::var("UTREEXO_TIP_SOURCE_LIE").ok().as_deref() {
+        None => None,
+        Some("node") => Some(utreexo_witness::Lie::Node),
+        Some("store") => Some(utreexo_witness::Lie::Store),
+        Some(x) => die(&format!("UTREEXO_TIP_SOURCE_LIE={x}: node or store")),
+    };
+    if lie.is_some() && (!execute || !forest || tc.is_some()) { die("UTREEXO_TIP_SOURCE_LIE is an execute-only negative test of --source forest, alone"); }
+    let neg: Option<String> = tc.clone().or_else(|| lie.map(|l| format!("source_lie_{l:?}").to_lowercase()));
 
     // the previous statement: a base (kind 'ZU' 1) or a step ('ZU' 2), from a receipt or (execute only) a journal file
     let (pj, prev_receipt): (Vec<u8>, Option<Receipt>) = if prev_path.ends_with(".journal") {
@@ -971,26 +994,56 @@ fn utreexo_tip_prove(a: &[String]) {
     // the native replay to the previous height (or the cache of one), then the step's blocks
     let t0 = std::time::Instant::now();
     let cache = flag(a, "--cache");
-    let mut nat = match cache.map(|c| Native::load(c)) {
-        Some(Ok(n)) if n.height == p_height && n.last == p_hash => { println!("UTREEXO_TIP_CACHE hit at {p_height}"); n }
-        Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not the previous step's {p_height}: replaying from genesis", n.height, utreexo_tip_host::disp(&n.last)); Native::genesis(signet) }
-        Some(Err(e)) => { println!("UTREEXO_TIP_CACHE unusable ({e}): replaying from genesis"); Native::genesis(signet) }
-        None => Native::genesis(signet),
+    let cache_required = a.iter().any(|x| x == "--cache-required");
+    if cache_required && cache.is_none() { die("--cache-required needs --cache"); }
+    let mut nat = match cache.map(|c| Source::load(forest, c)) {
+        // the cache of exactly P, or of a height BELOW P from which the source replays forward over the block files: each
+        // replayed block must follow the cache's block by hash (parse_block), and the result must be the previous
+        // statement's block, leaf count and roots (checked below), so a cache of another branch cannot get through
+        Some(Ok(n)) if n.height() == p_height && n.last() == p_hash => { println!("UTREEXO_TIP_CACHE hit at {p_height} ({}, {:.1} s)", n.name(), t0.elapsed().as_secs_f64()); n }
+        Some(Ok(n)) if n.height() < p_height => { println!("UTREEXO_TIP_CACHE below at {} {} ({}): replaying {}..{p_height}", n.height(), utreexo_tip_host::disp(&n.last()), n.name(), n.height() + 1); n }
+        // --cache-required (the follower, review round 2 #2): a cache that cannot be used is EXIT 4, never a silent replay
+        // from genesis (whose bodies a pruned follower does not have); the follower moves it aside and tries an older one
+        Some(Ok(n)) if cache_required => { println!("UTREEXO_TIP_CACHE_REFUSED at {} {}: not at or below the previous step's {p_height} (or another block at it)", n.height(), utreexo_tip_host::disp(&n.last())); std::process::exit(4) }
+        Some(Err(e)) if cache_required => { println!("UTREEXO_TIP_CACHE_REFUSED unusable ({e})"); std::process::exit(4) }
+        Some(Ok(n)) => { println!("UTREEXO_TIP_CACHE at {} {}, not at or below the previous step's {p_height}: replaying from genesis", n.height(), utreexo_tip_host::disp(&n.last())); Source::genesis(forest, signet) }
+        Some(Err(e)) => { println!("UTREEXO_TIP_CACHE unusable ({e}): replaying from genesis"); Source::genesis(forest, signet) }
+        None => Source::genesis(forest, signet),
     };
-    while nat.height < p_height {
-        let b = utreexo_host::read_block(dir, nat.height + 1);
-        nat.block(&b.stripped).unwrap_or_else(|e| die(&format!("native replay: {e}")));
+    let replay_from = nat.height();
+    while nat.height() < p_height {
+        let b = utreexo_host::read_block(dir, nat.height() + 1);
+        nat.block(&b).unwrap_or_else(|e| die(&format!("native replay: {e}")));
     }
-    if nat.last != p_hash { die(&format!("block {p_height} of the block files is {}, the previous statement's is {}", utreexo_tip_host::disp(&nat.last), disp(&p_hash))); }
-    if nat.stump.leaves != p_leaves || nat.roots() != p_roots {
+    if nat.height() > replay_from { println!("UTREEXO_TIP_REPLAY {}..{p_height} ({}) in {:.1} s", replay_from + 1, nat.name(), t0.elapsed().as_secs_f64()); }
+    if !nat.forest_agrees() { die("the source's forest and its Stump disagree at the previous height: not proving"); }
+    if nat.last() != p_hash { die(&format!("block {p_height} of the block files is {}, the previous statement's is {}", utreexo_tip_host::disp(&nat.last()), disp(&p_hash))); }
+    if nat.leaves() != p_leaves || nat.roots() != p_roots {
         die(&format!("the native accumulator after {p_height} (leaves {}, roots {}) is not the previous statement's (leaves {p_leaves}, roots {})",
-                     nat.stump.leaves, roots_str(&nat.roots()), roots_str(&p_roots)));
+                     nat.leaves(), roots_str(&nat.roots()), roots_str(&p_roots)));
     }
-    nat.counts = Default::default();
+    if let (Some(l), Source::Forest(f)) = (lie, &mut nat) {
+        f.set_lie(l);
+        println!("UTREEXO_TIP_SOURCE_LIE {l:?}: the source lies from block {} on and skips its own checks", p_height + 1);
+    }
+    *nat.counts() = Default::default();
     let mut fr: Vec<TipFrame> = Vec::new();
+    let tw = std::time::Instant::now();
+    let mut read_s = 0f64;
     for h in p_height + 1..=stop {
+        let tr = std::time::Instant::now();
         let b = utreexo_host::read_block(dir, h);
-        fr.push(nat.block(&b.stripped).unwrap_or_else(|e| die(&format!("native step: {e}"))));
+        read_s += tr.elapsed().as_secs_f64();
+        fr.push(nat.block(&b).unwrap_or_else(|e| die(&format!("native step: {e}"))));
+    }
+    {
+        // the witness of this step: its size, the time the source took (block files read excluded), the forest's size
+        let (sb, qb): (usize, usize) = (fr.iter().map(|f| f.spent.len()).sum(), fr.iter().map(|f| f.proof.len()).sum());
+        let digest = sha256(&utreexo_tip_host::frame_words(&fr).iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>());
+        let c = nat.counts().clone();
+        let fs = nat.forest_stats().map(|(n, l, b)| format!(" forest_nodes={n} forest_leaves={l} forest_heap_bytes={b}")).unwrap_or_default();
+        println!("UTREEXO_TIP_WITNESS source={} blocks={} dels={} spent_bytes={sb} proof_bytes={qb} proof_hashes={} frames_sha256={} source_seconds={:.3} read_seconds={read_s:.3}{fs}",
+                 nat.name(), stop - p_height, c.dels, c.proof_hashes, hex(&digest), tw.elapsed().as_secs_f64() - read_s);
     }
     // the link H+1..T: from a headers file ("<height> <80-byte header hex>" per line, as the follower writes it with
     // getblockheader; only the headers are needed), else from the block files
@@ -1009,19 +1062,22 @@ fn utreexo_tip_prove(a: &[String]) {
         }
         None => (stop + 1..=cs.height).map(|h| utreexo_host::read_block(dir, h).header).collect(),
     };
-    let mut tip = nat.last;
+    let mut tip = nat.last();
     for l in &link { tip = step::link_header(l, &tip).unwrap_or_else(|e| die(e)); }
     if tip != cs.tip_hash { die(&format!("the block files' block {} is {}, the core tip is {}", cs.height, utreexo_tip_host::disp(&tip), disp(&cs.tip_hash))); }
-    let c = &nat.counts;
+    let c = nat.counts().clone();
     println!("UTREEXO_TIP_NATIVE from={p_height} H={stop} T={} block={} leaves={} roots={} blocks={} adds={} dels={} proof_hashes={} forest_agrees={} ({:.1} s)",
-             cs.height, utreexo_tip_host::disp(&nat.last), nat.stump.leaves, roots_str(&nat.roots()), c.blocks, c.adds, c.dels, c.proof_hashes,
+             cs.height, utreexo_tip_host::disp(&nat.last()), nat.leaves(), roots_str(&nat.roots()), c.blocks, c.adds, c.dels, c.proof_hashes,
              nat.forest_agrees(), t0.elapsed().as_secs_f64());
+    // the forest the next step starts from must be the accumulator the guest will commit (review F2): a forest that
+    // drifted from the Stump would give proofs that fail later, or a cache that is wrong
+    if lie.is_none() && !nat.forest_agrees() { die("the source's forest and its Stump disagree after the step: not proving, nothing saved"); }
     if let Some(rf) = flag(a, "--ref") {
         let log = std::fs::read_to_string(rf).unwrap_or_else(|e| die(&format!("--ref: {e}")));
         let key = format!("UTREEXO_REF height={stop} ");
         let line = log.lines().find(|l| l.starts_with(&key)).unwrap_or_else(|| die(&format!("--ref: no line for height {stop}")));
         let get = |k: &str| line.split_whitespace().find_map(|w| w.strip_prefix(k)).unwrap_or("").to_string();
-        if get("leaves=") != nat.stump.leaves.to_string() || get("roots=") != roots_str(&nat.roots()) || get("block=") != utreexo_tip_host::disp(&nat.last) {
+        if get("leaves=") != nat.leaves().to_string() || get("roots=") != roots_str(&nat.roots()) || get("block=") != utreexo_tip_host::disp(&nat.last()) {
             die(&format!("NOT Floresta's: ref {line}"));
         }
         println!("UTREEXO_REF_MATCH H={stop}: leaves and roots byte-identical to Floresta's update_acc");
@@ -1037,6 +1093,20 @@ fn utreexo_tip_prove(a: &[String]) {
     }
     let prev_kind_in = if tc.as_deref() == Some("prev_kind") { 3 - prev_kind } else { prev_kind };
 
+    // F3: the source's state at H is saved BEFORE proving, to <cache-out>.pending (renamed into place only after the
+    // guest's statement is checked), and the source is dropped, so the forest (~21 GB at the tip, ESTIMATE) is not held
+    // through the proof. What the statement check needs is kept: the block, the leaf count and the roots
+    let (n_roots, n_leaves, n_last, n_name) = (nat.roots(), nat.leaves(), nat.last(), nat.name());
+    let cache_target = flag(a, "--cache-out").or(cache).cloned();
+    let pending = cache_target.as_ref().map(|c| format!("{c}.pending"));
+    if let Some(pp) = &pending {
+        if lie.is_none() {
+            let ts = std::time::Instant::now();
+            let n = nat.save(pp).unwrap_or_else(|e| die(&format!("--cache-out: {e}")));
+            println!("UTREEXO_TIP_CACHE_SAVED {n_name} at {stop}: {n} bytes in {:.1} s (pending until the statement is checked)", ts.elapsed().as_secs_f64());
+        }
+    }
+    drop(nat);
     let words = utreexo_tip_host::frame_words(&fr);
     let link_w: Vec<u32> = link.iter().flat_map(|l| l.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap()))).collect();
     let mut b = ExecutorEnv::builder();
@@ -1057,7 +1127,7 @@ fn utreexo_tip_prove(a: &[String]) {
     let t1 = std::time::Instant::now();
     let jb = if execute {
         let res = risc0_zkvm::default_executor().execute(env, &elf);
-        if let Some(c) = &tc {
+        if let Some(c) = &neg {
             match res {
                 Err(e) => { println!("UTREEXO_TIP_GUEST_REFUSED {c}: {}", e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
                 Ok(_) => { println!("UTREEXO_TIP_GUEST_ACCEPTED {c} (a negative test that passed: a BUG)"); std::process::exit(1) }
@@ -1076,12 +1146,15 @@ fn utreexo_tip_prove(a: &[String]) {
         r.journal.bytes.clone()
     };
     let z: TipStatement = risc0_zkvm::serde::from_slice(&jwords(&jb)).unwrap_or_else(|e| die(&format!("journal: {e}")));
-    if z.roots != nat.roots() || z.leaves != nat.stump.leaves || z.block_hash != nat.last || z.height != stop || z.from != p_height {
+    if z.roots != n_roots || z.leaves != n_leaves || z.block_hash != n_last || z.height != stop || z.from != p_height {
         die("the guest's statement is not the native replay's");
     }
-    // --cache-out: where the state at H is written (default: over --cache). A follower writes it aside and renames it
-    // over its cache only once the step is accepted, so a failed run never leaves a cache for the wrong height
-    if let Some(c) = flag(a, "--cache-out").or(cache) { nat.save(c).unwrap_or_else(|e| die(&format!("--cache-out: {e}"))); }
+    // --cache-out: where the state at H goes (default: over --cache). A follower writes it aside and renames it over its
+    // cache only once the step is accepted, so a failed run never leaves a cache for the wrong height
+    if let (Some(c), Some(pp)) = (&cache_target, &pending) {
+        std::fs::rename(pp, c).unwrap_or_else(|e| die(&format!("--cache-out {c}: {e}")));
+        println!("UTREEXO_TIP_CACHE_SAVED {n_name} at {stop}: {c}");
+    }
     println!("UTREEXO_TIP_JOURNAL height={} block={} leaves={} steps={} base_height={} from={} roots={} core={} core_height={}{}", z.height, disp(&z.block_hash),
              z.leaves, z.steps, z.base_height, z.from, roots_str(&z.roots), id_hex(&z.core_id), z.core_height,
              if core_receipt.is_none() || prev_receipt.is_none() { " [unresolved assumptions: execute only]" } else { "" });

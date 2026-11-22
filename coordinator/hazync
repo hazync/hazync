@@ -264,7 +264,12 @@ def post(path, body):
         return json.load(_open(req, timeout=180))        # submit triggers verification — allow time
     except urllib.error.HTTPError as e:                  # coordinator returns JSON {"error": ...} with a 4xx/5xx
         try: return json.loads(e.read().decode())
-        except Exception: raise SystemExit(f"coordinator error {e.code}: {e.reason}")
+        except Exception:
+            # a proxy's HTML page for a 502/503/504 on a SUBMIT (the coordinator restarting, or its 503 rewritten):
+            # retryable like the coordinator's own 503 `retry` (review round 3, LOW 5); elsewhere, as before
+            if path == "/api/submit" and e.code in (502, 503, 504):
+                return {"error": f"coordinator error {e.code}: {e.reason}", "retry": True}
+            raise SystemExit(f"coordinator error {e.code}: {e.reason}")
 
 def get(path):
     return _open(urllib.request.Request(COORD + path, headers={"User-Agent": UA}), timeout=60).read()
@@ -1200,9 +1205,18 @@ def _post_receipt(rng, receipt, sk, pub, handle):
     an `ok` now, including "already proven": another prover landing a block first is a benign race and
     was never a failure.
     """
-    res = post("/api/submit", {"range": rng, "pubkey": pub, "handle": handle,
-                               "sig": sk.sign(receipt).hex(),
-                               "receipt": base64.b64encode(receipt).decode()})
+    body = {"range": rng, "pubkey": pub, "handle": handle, "sig": sk.sign(receipt).hex(),
+            "receipt": base64.b64encode(receipt).decode()}
+    # 503 {"retry": true}: the board could not read the state this proof is checked against just then (prep writing it,
+    # or a reorg moving it; REORG.md §19): nothing was counted, so it is sent again a few times (HAZYNC_SUBMIT_RETRIES)
+    tries = _submit_retries()
+    for k in range(tries + 1):
+        res = post("/api/submit", body)
+        if not res.get("retry") or k == tries:
+            break
+        wait = min(30 * (k + 1), 120)
+        print(f"  the coordinator could not check range {rng} just now ({str(res.get('error'))[:100]}): again in {wait} s", flush=True)
+        time.sleep(wait)
     if res.get("ok"):
         print(f"\u2713 range {rng}: the coordinator re-verified your proof and put it on the board as '{handle}'.")
         return True, ""
@@ -1210,7 +1224,48 @@ def _post_receipt(rng, receipt, sk, pub, handle):
     if "already proven" in err:
         print(f"\u2713 range {rng} was already proved by someone else \u2014 nothing to do.")
         return True, ""
+    if res.get("reorged"):
+        # the chain moved under this block (a reorg): the proof is of a block the board no longer proves. Not this
+        # worker's fault, and nothing was counted against it: the next claim is the new chain's block
+        print(f"\u2713 range {rng}: the chain reorganised under it, so the board no longer needs this proof \u2014 nothing to do.")
+        return True, ""
+    if res.get("retry"):
+        return False, UNSENT + err
     return False, err
+
+
+# A receipt the coordinator could not check (503 `retry` every time): NOT rejected. It stays in RCPTDIR and its id in
+# RCPTDIR/.unsent/, and the next `hazync run` sends it again before it claims (a tip block's proof is expensive; review
+# round 3, LOW 5).
+UNSENT = "UNSENT: "
+UNSENT_DIR = RCPTDIR / ".unsent"
+
+
+def _submit_retries():
+    """HAZYNC_SUBMIT_RETRIES, clamped to 0..20 (a negative or unreadable value: the default 5)."""
+    try:
+        return min(max(0, int(os.environ.get("HAZYNC_SUBMIT_RETRIES", "5"))), 20)
+    except ValueError:
+        return 5
+
+
+def resend_unsent(sk, pub, handle, limit=10):
+    """Send again the receipts a coordinator could not check last time. Returns (sent, still unsent)."""
+    sent, left = 0, 0
+    if not UNSENT_DIR.is_dir():
+        return sent, left
+    for m in sorted(UNSENT_DIR.iterdir())[:limit]:
+        rng, f = m.name, RCPTDIR / f"{m.name}.bin"
+        if not f.exists():
+            m.unlink(missing_ok=True); continue
+        ok, err = _post_receipt(rng, f.read_bytes(), sk, pub, handle)
+        if err.startswith(UNSENT):
+            left += 1; continue
+        m.unlink(missing_ok=True)
+        sent += ok
+        if not ok:
+            print(f"✗ the earlier proof of {rng} was rejected: {err[:200]}")
+    return sent, left
 
 def cmd_submit(args):
     # Warn HERE, not only at startup: this is the moment work gets attributed, and it is the path a
@@ -1230,6 +1285,12 @@ def cmd_submit(args):
     ok, err = _post_receipt(rng, receipt, sk, pub, handle)
     if ok:
         sys.exit(0)
+    if err.startswith(UNSENT):
+        UNSENT_DIR.mkdir(parents=True, exist_ok=True)
+        (UNSENT_DIR / rng).write_text(str(int(time.time())))
+        print(f"… the coordinator could not check the proof of {rng} after {_submit_retries() + 1} tries ({err[len(UNSENT):][:160]}): "
+              f"NOT rejected; it is kept and sent again by the next `hazync run`.")
+        sys.exit(EX_TEMPFAIL)
     print("✗ submit rejected:", err)
     # A guest-id mismatch is not a bad block, it is a worker that can never land anything (#99). Left
     # as a plain exit 1 the loop sleeps 3s and claims the next block forever: three GPUs once ran flat
@@ -1725,6 +1786,15 @@ def cmd_release(args):
     sys.exit(0 if ok else 1)
 
 
+def claim_body(sk, pub, handle, nonce, ts):
+    """The signed claim. HAZYNC_TIP=1: this box can prove a mainnet tip block in reasonable time, so a board with
+    TIP_CLAIM_FIRST offers tip blocks first (REORG.md §19); unset: the backfill first, as always."""
+    body = {"pubkey": pub, "handle": handle, "nonce": nonce, "ts": ts, "sig": sk.sign(f"claim:{nonce}:{ts}".encode()).hex()}
+    if os.environ.get("HAZYNC_TIP") == "1":
+        body["tip"] = True
+    return body
+
+
 def cmd_run(args):
     # FREE-RUNNING (#37). There is no claim, no lease, no heartbeat and nothing to hand back: proving
     # is unallocated, so a worker that dies mid-block leaves no state behind. That removes the entire
@@ -1791,6 +1861,10 @@ def cmd_run(args):
         # exactly. The objections that removed claims (#37) were objections to WIDE claims: at width 1
         # a failure costs seconds, not a 67-minute range.
         sk, pub, handle = identity()
+        # proofs the coordinator could not check last time go first (round 3, LOW 5)
+        _sent, _left = resend_unsent(sk, pub, handle)
+        if _sent or _left:
+            print(f"earlier proofs sent again: {_sent} accepted, {_left} still waiting for the coordinator", flush=True)
         # #725: stop handlers go in BEFORE the claim, deferred: a stop that lands while the claim is in flight waits
         # for its answer, so the block it was given can be handed back rather than orphaned.
         _old = _install_stop_handlers()
@@ -1802,8 +1876,7 @@ def cmd_run(args):
         # #310: the claim is signed with this key over "claim:<nonce>:<ts>", so nobody else can claim under it. Its
         # retries below reuse this body; they land within seconds, well inside the coordinator's clock window.
         nonce, ts = os.urandom(16).hex(), int(time.time())
-        body = {"pubkey": pub, "handle": handle, "nonce": nonce, "ts": ts,
-                "sig": sk.sign(f"claim:{nonce}:{ts}".encode()).hex()}
+        body = claim_body(sk, pub, handle, nonce, ts)
         try:
             for k in range(3):
                 try:

@@ -8,4 +8,6 @@ Type=oneshot
 Environment=LEAVES=/srv/bulk/libzync-board/leaves
 Environment=COORD=http://127.0.0.1:8899
 Environment=MARGIN=1000
+# D1 (REORG.md §19): the tip run's bundles, deleted once proven and 6 blocks deep (the handover height from /api/meta)
+Environment=TIP_LEAVES=/srv/bulk/libzync-prep/leaves
 ExecStart=/usr/local/sbin/hazync-lz-prune-leaves --apply

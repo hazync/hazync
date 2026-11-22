@@ -1,0 +1,24 @@
+# Integrity check: the utreexo follower keeps up (its published block reaches min(node tip - 6, the core proof's height))
+# and its forest stays below FOREST_HEAP_WARN_BYTES (README.md here). NOT DEPLOYED; install with the follower.
+# hazync-run-check pushes once, hourly while it lasts, and on recovery; OnFailure= only fires if that push fails.
+[Unit]
+Description=Hazync utreexo follower: the published proof keeps up and the forest fits its memory
+After=bitcoind.service
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=oneshot
+# root: it reads the node's RPC cookie
+Environment=UTREEXO_DIR=/var/lib/hazync-utreexo
+Environment=ZYNCAPP=/opt/hazync-utreexo/bin/zyncapp
+Environment=CORE=/var/lib/hazync-lz/spine/spine.bin
+Environment=UTREEXO_STALL_SECS=21600
+# half of hazync-utreexo-follow.service's MemoryMax=24G; change both together
+Environment=FOREST_HEAP_WARN_BYTES=12884901888
+Environment=CHECK_FAILS_BEFORE_ALERT=2
+StateDirectory=hazync-checks
+ExecStart=/usr/local/sbin/hazync-run-check check-utreexo-follow /usr/local/sbin/hazync-check-utreexo-follow
+Nice=15
+NoNewPrivileges=true
+PrivateTmp=true
+TimeoutStartSec=300

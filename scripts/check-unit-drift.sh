@@ -28,12 +28,18 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 HOST="${1:-}"
 [ -n "$HOST" ] || { echo "usage: $0 <ssh-host>   e.g. $0 hazync-proof   (or localhost, on the box)" >&2; exit 2; }
 DROPINS_DIR=coordinator/deploy/dropins
-# Unit files live in three places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
-# coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/. Reading only the first made
+# Unit files live in several places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
+# coordinator/deploy/libzync/, the header-chain follower's in headers/, the utreexo follower's in utreexo/. Reading only the first made
 # every setting of a v2 unit "appear NOWHERE in the repo" (2026-11-12: the switch's units failed this check).
+# ⛔ EVERY DIRECTORY, NOT A LIST OF THEM. The list was three directories; coordinator/deploy/headers-api/ (the MMR
+# path service) and coordinator/deploy/watchdog/ came later and were never added, so every setting of
+# hazync-headers-api "appeared NOWHERE in the repo" against a unit file declaring each one (measured 21.11.2026).
+# test-check-unit-drift.sh 9 resolves every *.service in the repo through this function and refuses a unit name
+# that two directories both declare (which one wins would then be an accident of glob order).
 repo_unit() {
     local d
-    for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do
+    for d in coordinator/deploy coordinator/deploy/*/; do
+        d=${d%/}
         [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }
     done
     return 0
@@ -149,6 +155,19 @@ cant() { echo "COULD NOT CHECK $*"; cannot=1; }
 # check that reports noise gets muted, and a muted check is worse than none.
 GUARDED="MemoryHigh MemoryMax MemorySwapMax TasksMax LimitNOFILE Restart RestartSec ProtectSystem ProtectHome PrivateTmp NoNewPrivileges"
 export GUARDED
+
+# One `Environment=` line per input -> one KEY=value per output line, split the way the box side's
+# `xargs -n1` splits the effective value (see "ONE Environment= LINE MAY HOLD SEVERAL ASSIGNMENTS" below).
+split_declared_env() {
+    local line split
+    while IFS= read -r line; do
+        if split=$(printf '%s\n' "${line#Environment=}" | xargs -n1 2>/dev/null) && [ -n "$split" ]; then
+            printf '%s\n' "$split"
+        else
+            printf '%s\n' "$line" | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/'
+        fi
+    done
+}
 
 for u in $UNITS; do
     echo
@@ -345,10 +364,17 @@ for u in $UNITS; do
     # against a repo that declared exactly that path. HAZYNC_DISK_PATHS had been in
     # unit-drift-allow.txt since 09-20 for the same reason -- an allow-list entry standing in for a
     # parse bug, which quietly exempted a real key from the comparison. It is removed in this commit.
+    # ⛔⛔ ONE Environment= LINE MAY HOLD SEVERAL ASSIGNMENTS, AND THE BOX SIDE SPLITS THEM.
+    # `Environment=LZ_ROOT=/x LZ_WINDOW=1500 LZ_JOBS=4` is three variables to systemd, and the probe's
+    # `xargs -n1` prints them as three ENV lines. Kept as one line here, LZ_WINDOW and LZ_JOBS matched
+    # nothing and were reported "set on the box and appears NOWHERE in the repo" -- measured 19-21.11.2026,
+    # every night after #754 wrote libzync-fetch.service that way, against a repo declaring both.
+    # So each declared line goes through the SAME xargs -n1 as the box side (which also removes a
+    # surrounding quote pair). A line xargs cannot parse (an unbalanced inner quote) keeps the
+    # one-line treatment below, which is what the box side then reports for it as well.
     declared=$( { repo_unit "$u"
                   declared_dropin_bodies "$u"; } \
-                | grep -E '^Environment=' | sed -e 's/^Environment=//' -e 's/^"\(.*\)"$/\1/' \
-                | sort -u )
+                | grep -E '^Environment=' | split_declared_env | sort -u )
     while read -r _ kv; do
         [ -n "${kv:-}" ] || continue
         k="${kv%%=*}"
