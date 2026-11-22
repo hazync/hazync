@@ -22,6 +22,7 @@ use swiftsync_verify as sv;
 /// One pinned Trusted State anchor. `anchor_id_hex` is the anchor's link digest (what the guest commits as
 /// `anchor_id` after the base step on it); `None` = PENDING: the anchor is chosen but its id is not known yet, and
 /// a proof on it can never be ANCHORED.
+#[derive(Clone, Copy)]
 pub struct TrustedAnchor {
     pub network: &'static str,
     pub height: u32,
@@ -72,7 +73,18 @@ pub static REGTEST: sv::Image = sv::Image {
 };
 
 pub fn pinned(network: &str, height: u32) -> Option<&'static TrustedAnchor> {
-    ANCHORS.iter().find(|a| a.network == network && a.height == height)
+    let p = ANCHORS.iter().find(|a| a.network == network && a.height == height)?;
+    // CONTROLS BUILD only (`--features controls`, verify_controls.sh): TS_VERIFY_REGTEST_PIN=<hex>|pending replaces the
+    // regtest TEST ENTRY's anchor_id, so the pinned-id and PENDING checks are each shown to bite on a real receipt. A
+    // real build has no such hook and refuses the variable.
+    #[cfg(feature = "controls")]
+    if let (Ok(v), "regtest") = (std::env::var("TS_VERIFY_REGTEST_PIN"), network) {
+        let id: Option<&'static str> = if v == "pending" { None } else { Some(Box::leak(v.into_boxed_str())) };
+        return Some(Box::leak(Box::new(TrustedAnchor { anchor_id_hex: id, source: "CONTROLS BUILD: a replaced regtest pin", ..*p })));
+    }
+    #[cfg(not(feature = "controls"))]
+    assert!(std::env::var_os("TS_VERIFY_REGTEST_PIN").is_none(), "TS_VERIFY_REGTEST_PIN needs the controls build (--features controls)");
+    Some(p)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -167,6 +179,7 @@ fn main() {
     let bytes = std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt}: {e}"));
     let (v, lines) = ts_verify(&bytes, image, anchor, now);
     for l in lines { println!("{l}"); }
+    if cfg!(feature = "controls") { println!("  <<< CONTROLS BUILD (--features controls): its pins can be replaced; never verify anything with it >>>"); }
     std::process::exit(v.exit_code());
 }
 

@@ -13,6 +13,11 @@ swiftsync-verify = { path = "../../../swiftsync-verify" }
 risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 serde_json = "1"
 
+[features]
+# the negative-control build (verify_controls.sh): the regtest TEST ENTRY's pin can be replaced (TS_VERIFY_REGTEST_PIN).
+# Build it into its own target directory; never use it to verify anything.
+controls = []
+
 [profile.release]
 debug = 0
 
