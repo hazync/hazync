@@ -1055,6 +1055,10 @@ chunks and pieces stay independent). On CPU alone the same 275 resolves would ta
 projection's other caveats (§13.4: N and K unknown, the script mix, the trie extrapolation, the padded-cycle bias) are
 unchanged; the recursion cost is no longer among them.
 
+**The join's cost** (§11.3 left it ESTIMATED): the join guest is 119,707 user cycles, one 2^18 segment, plus 3 resolves;
+120.4 s on this CPU box (MEASURED), and PROJECTED on one GPU at a few seconds (3 × 0.28 s plus one small segment and
+its lift), far below the core's own join (mode 18, 6.4 s, LIBZYNC.md §4) that §11.3 compared it with.
+
 **Does the per-resolve cost stay flat with more receipts?** A second combine (MEASURED 22.11.2026,
 `/root/ts14w/run_r104b.sh`): the same snapshot cut into 8 chunks (21-22 coins; 210,176-297,684 user cycles, one 2^19
 segment each, proved in 94.2-97.7 s, lifted in 17.6-18.9 s) and the same 3 BIP30 pieces (same entry list), so the
@@ -1180,3 +1184,18 @@ prebuilt, host `--features trusted-state`):
 Not built (still §8.1): the joined statement after the join receipt; history facts relabelled "since H" (the
 prototype checks no fact; its label says history starts at H); coin and tx facts below H on the 0x02 block-forest
 leaves; the zAPP-side wrappers. The pin is trusted: it is only as good as the reproducible build behind it.
+
+**A synthetic run not finished.** A 10^4-coin `ts-anchor synth` set (4 chunks of 2,500 coins, 26 segments each; 4 BIP30
+pieces) was started with `TS_PROVE=1` and stopped after 49 minutes in its first chunk: at 2-5 minutes per segment on the
+shared box the set would have taken about 8 hours, and the question it was for (the recursion per receipt) does not
+depend on the coin count, which the runs above show directly. No number from it is used.
+
+### 14.4 Still not done
+
+- The snapshot at 965,000 (`dumptxoutset`, waits for the user's OK), so N, K, the real script mix and the anchor_id of
+  the mainnet pin (PENDING in `ts-verify`).
+- The disk build's remaining memory growth (§14.2: ~0.26 GB per 10^6 coins, unprofiled).
+- Verifier: the joined statement, history facts relabelled "since H", coin and tx facts below H, the zAPP-side wrappers
+  (§14.3); pinning the six join images from reproducible builds (§11.3).
+- A real GPU measurement of the ingest images' proving rate (§13.4 still uses the header-chain zAPP's rate) — GPU work,
+  not done here by instruction.
