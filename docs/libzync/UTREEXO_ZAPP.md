@@ -609,8 +609,13 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   unpinned base image; the `AssumeUtreexoValue` source of a tip statement.
 - **A real CPU proof** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, hazync-coord under a load average
   of ~37 from other work): the step 3 → 103 from the base receipt `vectors/mainnet-3.receipt` (H = 3), resting on the
-  core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`), so 100 blocks plus
-  3,733 link headers: **4,945.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `4e0c2bde…`). The
+  core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`, no longer kept
+  anywhere), so 100 blocks plus 3,733 link headers: **4,945.9 s**, 226,138 bytes (sha256 `4e0c2bde…`, under the tip
+  image `ab6f7a26`). **Re-proved on 22.11.2026** under the strict-parser images (base `00b2d1e8`, tip `5ef26dfe`, the
+  container build of `cffa2cbb`, same settings) from the re-proved base receipt, on the core spine 1..4,790
+  (`46666b6f`, hazync-proof's `/var/lib/hazync-lz/spine/heads/spine_4790.bin` of 20.11.2026, sha256 `8a8e1b00…`, tip
+  `00000000133…8eb5`; kept as `vectors/core-spine-4790.receipt` so the vector can be re-proved again): 100 blocks plus
+  4,687 link headers, **5,180.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `a2e37240…`). The
   roots equal the native replay's; `zapp-utreexo verify` gives DEMO (below minimum work; both images were also unpinned then) with
   every check ok. That time is a loaded shared box, not a benchmark. The blocks 4..103 have no spends: deletions are
   covered by the executions above, not by a proof (a proof of the step 103 → 180, with the first spends, was started
