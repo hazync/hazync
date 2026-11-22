@@ -51,6 +51,10 @@ mod utreexo_tip_host;
 mod utreexo_roots {
     pub use libzync::utreexo_roots::*;
 }
+/// The compact-size reader, under the name the shared tip step uses for it.
+mod facts {
+    pub use libzync::facts::*;
+}
 #[path = "../../methods/utreexo-tip/src/step.rs"]
 mod utreexo_tip_step;
 /// The name the witness source's files (also #[path]-included by zapps/utreexo/tip-step) use for step.rs.

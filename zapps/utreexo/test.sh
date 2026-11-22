@@ -74,14 +74,14 @@ grep -q "chainwork at block 3 equals the proven" "$T/out" || { cat "$T/out"; ech
 want 1 "--bitcoin-cli and --expect-tip: the node's chainwork at block 3 is not the proven one" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/badwork3" --expect-tip 3:$H3
 want 1 "--bitcoin-cli and --expect-tip: the node disagrees with the tip given" -- verify $V/mainnet-2.receipt --bitcoin-cli "$T/wrong3" --expect-tip 3:$H3
 # tip mode (UTREEXO_ZAPP.md §10): a real CPU proof of a step from the base at 3 (vectors/mainnet-3.receipt) to 103,
-# linked to the core proof 1..3,836 (the spine of 18.11.2026)
+# linked to the core proof 1..4,790 (vectors/core-spine-4790.receipt, sha256 8a8e1b00…, the spine head of 20.11.2026)
 H103=000000002109057cb846ff7d1d96bc77f9f65cb547938efe1961760a8bbb3f75
-T3836=00000000e26d786351dd5c6926f1b04a54e8f7fd4a7c81cec40db01505b143ee
+T4790=0000000013371ed4d67e526a2fd2d8bd270b477c72bdacbd01048392f5528eb5
 R=$V/mainnet-tip-103.receipt
-want 2 "tip 103: block 103 and the core tip named (DEMO)" -- verify $R --expect 103:$H103 --expect-tip 3836:$T3836
+want 2 "tip 103: block 103 and the core tip named (DEMO)" -- verify $R --expect 103:$H103 --expect-tip 4790:$T4790
 grep -q "tip mode: 1 steps from the base at 3, the last from 3" "$T/out" || { cat "$T/out"; echo "::error::the tip line"; exit 1; }
-want 1 "tip 103, another block 103" -- verify $R --expect 103:$H3 --expect-tip 3836:$T3836
-want 1 "tip 103, another core tip" -- verify $R --expect 103:$H103 --expect-tip 3836:$H103
+want 1 "tip 103, another block 103" -- verify $R --expect 103:$H3 --expect-tip 4790:$T4790
+want 1 "tip 103, another core tip" -- verify $R --expect 103:$H103 --expect-tip 4790:$H103
 want 1 "tip 103, another tip image" -- verify $R --expect 103:$H103 --image "$(printf 'ab%.0s' $(seq 32))"
 want 1 "tip 103, another base image" -- verify $R --expect 103:$H103 --base-image "$(printf 'ab%.0s' $(seq 32))"
 grep -q "FAIL.*the chain starts from a walk of the trusted base image" "$T/out" || { cat "$T/out"; echo "::error::the base image is not the failed check"; exit 1; }
@@ -92,8 +92,8 @@ want 1 "tip 103 with a trailing byte" -- verify <(cat $R; printf '\0') --expect 
 python3 -c "import struct,sys; sys.stdout.buffer.write(struct.pack('<I',0) + struct.pack('<QQI',0,1,0)*300000)" > "$T/nested.receipt"
 want 1 "a composite receipt nested 300,000 deep" -- verify "$T/nested.receipt" --expect 103:$H103
 grep -q "FAIL.*composite" "$T/out" || { cat "$T/out" "$T/err"; echo "::error::the nested composite is not refused as composite"; exit 1; }
-want 2 "tip 103 --json --allow-demo" -- verify $R --expect 103:$H103 --expect-tip 3836:$T3836 --json --allow-demo
-python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['mode']=='tip' and j['steps']==1 and j['from']==3 and j['base_height']==3 and j['height']==103 and j['leaves']==103 and j['n_live'] is None and j['core_height']==3836 and j['image_source']=='builtin-pinned', j" "$T/out"
+want 2 "tip 103 --json --allow-demo" -- verify $R --expect 103:$H103 --expect-tip 4790:$T4790 --json --allow-demo
+python3 -c "import json,sys; j=json.load(open(sys.argv[1])); assert j['mode']=='tip' and j['steps']==1 and j['from']==3 and j['base_height']==3 and j['height']==103 and j['leaves']==103 and j['n_live'] is None and j['core_height']==4790 and j['image_source']=='builtin-pinned', j" "$T/out"
 want 2 "tip 103 --floresta --allow-demo" -- verify $R --expect 103:$H103 --floresta --allow-demo
 grep -q 'height: 103,' "$T/out" && head -1 "$T/out" | grep -q '^// mainnet:' || { cat "$T/out"; echo "::error::--floresta output (tip)"; exit 1; }
 echo "ZAPP_UTREEXO_CLI $n cases"

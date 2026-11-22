@@ -13,9 +13,9 @@ Type=oneshot
 User=root
 Environment=UTREEXO_DIR=/var/lib/hazync-utreexo
 Environment=UTREEXO_BIN=/opt/hazync-utreexo/bin
-# the container-built tip guest (reproduce/LIBZYNC_IDS zyncapp-utreexo-tip, image ab6f7a26)
+# the container-built tip guest (reproduce/LIBZYNC_IDS zyncapp-utreexo-tip, image 5ef26dfe)
 Environment=ELF=/opt/hazync-utreexo/bin/zyncapp-utreexo-tip.bin
-Environment=WANT_ELF=dd9d09bd0ea181f2d8518a330cd20820754e2362c094763d3b23e80724b32250
+Environment=WANT_ELF=9c5c04c61e6e0bf5fe29e6f727d1c9a61af411d8070224a09f7c08a0fe5c372c
 Environment=CORE=/var/lib/hazync-lz/spine/spine.bin
 Environment=HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie
 Environment=WITNESS_SOURCE=forest
