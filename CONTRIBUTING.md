@@ -105,8 +105,8 @@ started on an older release keeps producing proofs the board refuses until you r
 
 ```
 # which prover: the GPU (CUDA) build, or the CPU build if you have no NVIDIA card. Keep ONE of these two lines.
-HOSTBIN=hazync-host-x86_64-linux-gnu-cuda    # GPU: about 390 MB
-# HOSTBIN=hazync-host-x86_64-linux-gnu       # no GPU: the CPU build, about 223 MB
+HOSTBIN=hazync-host-x86_64-linux-gnu-cuda    # GPU: about 425 MB
+# HOSTBIN=hazync-host-x86_64-linux-gnu       # no GPU: the CPU build, about 224 MB
 
 # the checksum list first — everything below is verified against it before it runs
 curl -LO https://github.com/hazync/hazync/releases/latest/download/SHA256SUMS.txt
