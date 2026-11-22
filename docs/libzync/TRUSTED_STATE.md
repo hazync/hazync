@@ -330,7 +330,8 @@ comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt 
    `(network, H, block, hash_serialized_3, anchor_id)` (built into the verifier like `genesis_anchor_hex`, so the
    anchor's identity is reproducible: anyone with Core's snapshot reruns `ts-anchor build` and must get the pinned
    `anchor_id`); a verdict between OK and DEMO with the §4 wording; the block forest read with 0x02 leaves for heights
-   ≤ H (`undo_from` = H+1 for an anchored chain); and history facts relabelled "since H" (§5.5).
+   ≤ H (`undo_from` = H+1 for an anchored chain); and history facts relabelled "since H" (§5.5). **A prototype of the
+   table and the verdict is §14.3** (a separate crate wrapping swiftsync-verify unmodified; the 965,000 entry PENDING).
 2. **The side inputs are not covered by Core's hash.** `hash_serialized_3` covers outpoint, height, coinbase flag and
    output, not the tracked bit, the REPEATABLE slots or the creation MTP. The headers are bound by hashing; the
    tracked and REPEATABLE lists are checked only by a later join (a wrong one moves `live_hash`: §5.3 controls). On
@@ -355,7 +356,8 @@ comparison is like for like.) The regtest image (`a4344798…`) was not rebuilt 
    snapshot, closes that.
 7. **Host at mainnet scale.** The PoC keeps the anchor's coin log and trie in memory (1 M coins: 3.2 GB). A mainnet
    anchor needs the host's disk stores (`HAZYNC_COINLOG_DIR`, `HAZYNC_TRIE_DIR`) fed from the snapshot, and
-   `HAZYNC_TS_SMT_SEED` refuses a resume (the PoC replays nothing): both small host changes, not made.
+   `HAZYNC_TS_SMT_SEED` refuses a resume (the PoC replays nothing): both small host changes, not made. **Built in §14.2**
+   (22.11.2026): the disk stores fed by `ts-anchor build`, and a resume from `state_<k>.smt`.
 
 ## 9. Mainnet: the anchor height and an estimate path
 
@@ -808,7 +810,7 @@ cycles, which understates the chunks by about 9% (§13.4, "A bias in that rate")
   anchor equality and the controls (§12.3), 1 M and 10 M runs (§12.4). Executor only, dev mode; no receipt was proved.
 - Not built: splitting the BIP30 tree by key prefix (it is one receipt in the combine); a streaming planner (it reads
   the whole snapshot into memory: 458 MB at 10 M, several GB at mainnet); the combine verifying chunk receipts
-  recursively in a real prover run (its recursion cost); real mainnet data above height 200.
+  recursively in a real prover run (its recursion cost; done in §14.1, 22.11.2026); real mainnet data above height 200.
 - The free inputs are unchanged from the one-shot ingest (§11.1): the tracked and REPEATABLE lists.
 - No core guest file changed (§7 still holds: `git diff origin/main...HEAD -- prover/methods libzync coinbase-smt
   accumulator` is empty).
@@ -940,7 +942,7 @@ scan-plan peak RSS 3.3 MB, synth 7.3 MB.
 |---|---|---|---|
 | 256 chunks of 625,000 coins | **1.888e12** (1,888,155,313,769; 11,800 per coin; first chunk 5.96e9, largest 7.645e9) | ≈ 2.14e6 (≈ 8,660 for the largest) | ≈ 1.41 GB peak RSS for the last chunk |
 | BIP30: 16 pieces of ≤ 50,000 entries, depth 6 | **1.044e11** | ≈ 1.04e5 | not projected (measured 49 MB at ~12.5 k entries) |
-| combine (965,001 headers + forest) | **4.536e9** + resolving 272 receipts (recursion, NOT measured) | ≈ 4.3e3 | not projected (measured 16 MB at 16 + 4 receipts) |
+| combine (965,001 headers + forest) | **4.536e9** + resolving 272 receipts (recursion: MEASURED per resolve in §14.1, ≈ 77 s on one card in all) | ≈ 4.3e3 | not projected (measured 16 MB at 16 + 4 receipts) |
 | **total** | **1.997e12** | **≈ 2.25e6** | |
 
 **What the move from 935,000 to 965,000 costs** (COMPUTED from the two `scan-plan` runs): only the header terms
@@ -977,7 +979,7 @@ known until the snapshot is taken (§9); 1.6e8 and 800,000 are this synthetic se
 only: at the measured per-type rates an all-P2PK65 set would cost 2,060 more per coin than raw-22 in the snapshot phase
 (9,227.6 − 7,167.6, MEASURED rates), so a real snapshot has to go through `scan-plan` itself. The trie term is
 extrapolated 4 doublings beyond the largest measured trie (§13.2's caution). The recursion cost of resolving 272
-receipts in the combine is not measured. Against §12.5's earlier projection of ≈ 11.5 k cycles per coin, this model
+receipts in the combine was not measured here; §14.1 measures it (≈ 77 s on one card, +0.002%). Against §12.5's earlier projection of ≈ 11.5 k cycles per coin, this model
 gives 11.8 k per coin at 1.6e8.
 
 ## 14. Real proofs, the recursion cost, the host's disk stores and a verifier prototype (fifth PoC step, 22.11.2026)
@@ -991,7 +993,64 @@ core images are unchanged (mainnet `46666b6f`). Labels as in §13: **MEASURED** 
 
 ### 14.1 Real proofs of the chunked ingest and the join: the recursion cost
 
-<!-- 14.1 is filled in below once the CPU runs finish -->
+Until now every receipt of the ingest was a dev-mode claim, so the cost of the combine and the join **resolving** their
+receipts (one recursion proof per receipt they `env::verify`) was not measured (§12.4, §12.6, §13.4). Here the whole
+chain was proved for real, on CPU, end to end.
+
+**How.** `ts-ingest-host` gained `TS_PROVE=1` (dev mode off): the guest is executed, every segment proved
+(`prove_segment`), merged and lifted (`prepare_lifts`), joined pairwise to one receipt, then each assumption resolved
+(`resolve`, one call per receipt the guest verified) and the result verified against the image id; a `TSP` line times
+each stage. `run_chunked.sh` passes `TS_PROVE=1` through. The join takes the anchored tip as a REAL receipt
+(`TS_TIP_RCPT`, verified under the tip image, its journal required to be `tip.journal`). The anchored tip is block 105
+proved for real by the core host on the anchor at 104: the host built on hazync-coord with the CI regtest guest
+embedded prebuilt (`HAZYNC_GUEST_ELF`, sha `1c3d671a…`, image `eb2cd424`, the image of the real main@104 receipt) and
+`--features trusted-state`, `HAZYNC_SEG_PO2=20`, `HAZYNC_CHUNKS=1`, `HAZYNC_TS_SMT_SEED`. So main and tip are the same
+image here, as the design allows (§11.3 pins both).
+
+**Box.** hazync-coord (AMD EPYC 9645 VM, 16 vCPU, 62 GB), CPU prover (risc0 3.1.0, `prove` feature, no CUDA), every run
+`nice -n 10`, segment size 2^20 for the ingest images. **Shared**: the Ghost spine's two `fold-range` provers ran the
+whole time (load average 40-48 on 16 vCPU), so every wall time below is a contended-CPU time, comparable within this
+section only. No GPU, nothing paid.
+
+**The chain proved** (MEASURED 22.11.2026, `/root/ts14w/run_r104.sh`; all real receipts, each verified):
+
+| receipt | user cycles | padded (segments) | segment proofs | merge + lifts | joins | resolves | wall | peak RSS |
+|---|---|---|---|---|---|---|---|---|
+| anchored block 105 (core image `eb2cd424`, base step on the anchor at 104): chunk + trie + aggregate | 1,275,832 + 65,421 + 2,559,376 | 1,572,864 (2) + 262,144 (1) + 3,145,728 (3) | (inside the host) | | | (the aggregate resolves its chunk and trie receipts) | **1,664.7 s** | 10.4 GB |
+| ingest chunk 0 / 1 / 2 of Core's `utxo_104.dat` (57 / 56 / 56 coins) | 594,265 / 618,336 / 613,276 | 2^20 (1) each | 294.3 / 204.5 / 214.3 s | 27.0 / 18.7 / 21.5 s | — | — | 321.5 / 223.3 / 235.8 s | 9.6 GB |
+| BIP30 piece 0 / 1 / 2 (depth 4; 100 entries + 1 REPEATABLE in all) | 5,083,393 / 4,682,036 / 4,544,799 | 6 / 5 / 5 segments | 1,121.1 / 941.7 / 949.9 s (186.9-190.0 s each) | 121.4 / 93.0 / 94.6 s (18.6-20.2 s each) | 5 / 4 / 4: 102.0 / 71.8 / 75.9 s (18.0-20.4 s each) | — | 1,344.7 / 1,106.7 / 1,120.5 s | 9.6 GB |
+| combine (`--bip30`, 3 chunks + 3 pieces) | 620,991 | 2^20 (1) | 189.8 s | 17.6 s | — | **6: 109.6 s (18.27 s each, 17.69-18.77)** | 317.1 s | 9.6 GB |
+| join (main@104 REAL GPU receipt + the combine receipt + the anchored block 105) | 119,707 | 2^18 (1) | 46.1 s | 19.0 s | — | **3: 55.3 s (18.44 s each, 17.71-19.42)** | 120.4 s | 2.4 GB |
+
+Results: the combine's journal is the planner's expected journal byte for byte (`COMBINE_MATCH`); the join guest
+**JOINED** (join image `a7f37798…` of this build): H = 104, anchor link `8fce9ea6…` (the ANCHOR_ID of §5.1), T = 105.
+So the anchor at 104, built from Core's snapshot, is shown in one chain of real proofs to be the deterministic function of
+the snapshot (ingest), equal in every JOIN field to the real from-genesis receipt at 104, and the base of a real proof of
+block 105. Every image id here is a hazync-coord build (paths), not a pinnable id (§11.3).
+
+**What a resolve costs.** All 9 resolves took 17.7-19.4 s, mean 18.3 s, in a combine of 6 assumptions and a join of 3:
+flat in the number of assumptions and in the size of the receipt resolved (a 1-segment chunk, a 6-segment piece, the
+core aggregate), and the same as one lift (17.6-27.0 s) or one join (18.0-20.4 s) on this box. That is what risc0's
+recursion predicts (a resolve is one fixed-size recursion program over two succinct receipts), now MEASURED. A resolve is
+about 1/10 of proving one 2^20 segment here (18.3 s against 186.9-294.3 s).
+
+**Folded into §13.4** (PROJECTED, 1.6e8 coins, 256 chunks + 16 pieces):
+
+| term | basis | projection |
+|---|---|---|
+| resolves in the combine | 272 receipts, one resolve each | 272 |
+| resolves in the join | main@H, ingest, tip | 3 |
+| on this CPU box (contended) | 18.3 s per resolve (MEASURED above) | 275 × 18.3 s ≈ **84 min**, serial (a resolve consumes the previous one's output) |
+| on one GPU | 0.28 s per resolve, MEASURED before on the core aggregate's chunk resolves (docs/history/TEN_MINUTE_BLOCK.md §8.15 (b); 16 resolves in 4.2-4.7 s, docs/history/SEGMENT_DISTRIBUTION.md) | 275 × 0.28 s ≈ **77 s ≈ 0.02 card-hours ≈ $0.05** at $2.49/hr |
+| making each chunk and piece receipt succinct (its own lifts and joins) | already in §13.4's rate: the header-chain zAPP's 59.4 min is for ONE succinct receipt of 2,437 segments, lifts and joins included | no new term |
+
+So the recursion §13.4 left out adds about 77 s on one card to the ≈ 913 card-hours (≈ $2,273) projected there:
+**+0.002%, below the precision of that figure**, plus about 77 s of serial latency at the end of the combine (the
+chunks and pieces stay independent). On CPU alone the same 275 resolves would take about 1.4 hours on this box. The
+projection's other caveats (§13.4: N and K unknown, the script mix, the trie extrapolation, the padded-cycle bias) are
+unchanged; the recursion cost is no longer among them.
+
+<!-- 14.1b: an 8-chunk combine (11 resolves), filled in below -->
 
 ### 14.2 The host at mainnet scale: the anchor written into the host's disk stores (§8.7)
 
