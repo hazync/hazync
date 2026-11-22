@@ -1026,7 +1026,12 @@ Results: the combine's journal is the planner's expected journal byte for byte (
 **JOINED** (join image `a7f37798…` of this build): H = 104, anchor link `8fce9ea6…` (the ANCHOR_ID of §5.1), T = 105.
 So the anchor at 104, built from Core's snapshot, is shown in one chain of real proofs to be the deterministic function of
 the snapshot (ingest), equal in every JOIN field to the real from-genesis receipt at 104, and the base of a real proof of
-block 105. Every image id here is a hazync-coord build (paths), not a pinnable id (§11.3).
+block 105. Every image id here is a hazync-coord build (paths), not a pinnable id (§11.3). The anchored block 105's
+state equals the real from-genesis receipt's `state_105.json` in `tip_hash`, `height`, `utxo_value`, `live_set`,
+`live_hash`, `cum_work`, `recent_times`, `max_time`, `prev_nbits`, `epoch_start`, `profile`, `block_leaves` (checked).
+Kept as vectors (`experimental/trusted-state/vectors/`, `SHA256SUMS`): the anchored receipt
+`anchored_105_on_104_eb2cd424.rcpt` (227,610 bytes, verifies under `eb2cd424`), its state, `anchor_104.json` (identical
+to the laptop's build of §5) and the join journal.
 
 **What a resolve costs.** All 9 resolves took 17.7-19.4 s, mean 18.3 s, in a combine of 6 assumptions and a join of 3:
 flat in the number of assumptions and in the size of the receipt resolved (a 1-segment chunk, a 6-segment piece, the
@@ -1050,7 +1055,14 @@ chunks and pieces stay independent). On CPU alone the same 275 resolves would ta
 projection's other caveats (§13.4: N and K unknown, the script mix, the trie extrapolation, the padded-cycle bias) are
 unchanged; the recursion cost is no longer among them.
 
-<!-- 14.1b: an 8-chunk combine (11 resolves), filled in below -->
+**Does the per-resolve cost stay flat with more receipts?** A second combine (MEASURED 22.11.2026,
+`/root/ts14w/run_r104b.sh`): the same snapshot cut into 8 chunks (21-22 coins; 210,176-297,684 user cycles, one 2^19
+segment each, proved in 94.2-97.7 s, lifted in 17.6-18.9 s) and the same 3 BIP30 pieces (same entry list), so the
+combine resolves 11 receipts. Combine: 655,313 user cycles, one 2^20 segment (190.3 s), lift 18.9 s, **11 resolves
+209.2 s (19.02 s each, 17.72-20.08)**, `COMBINE_MATCH`. Over all 20 resolves of the three runs (6 + 3 + 11): 374.1 s,
+**18.7 s per resolve**, with no trend in the count. A lift costs the same for a 2^19 and a 2^20 segment (17.6-18.9 s vs
+17.6-27.0 s), so the recursion per receipt is a constant, not a fraction of the receipt's size; on a 2^19 segment it is
+about 1/5 of the segment's proof, on a 2^20 one about 1/10 (this box).
 
 ### 14.2 The host at mainnet scale: the anchor written into the host's disk stores (§8.7)
 
@@ -1146,7 +1158,8 @@ tip is above H; and the work and checkpoint an OK would need. It prints §4's la
 The regtest image (`eb2cd424`, genesis anchor `99509fc5…cf63`, profile 0x79) is carried by the prototype as
 `zapps/corecheck` carries it under its `regtest-test` feature; a unit test recomputes the genesis anchor.
 
-**Controls** (`experimental/trusted-state/verify_controls.sh`, MEASURED 22.11.2026, `VERIFY_CONTROLS_OK`), on REAL
+**Controls** (`experimental/trusted-state/verify_controls.sh <ts-verify> <controls build>
+vectors/anchored_105_on_104_eb2cd424.rcpt vectors/anchor_104.json <work>`, MEASURED 22.11.2026, `VERIFY_CONTROLS_OK`), on REAL
 receipts: main@104 (`block_104.rcpt`, GPU, 16.11) and the anchored lineage's block 105, proved for real on CPU on
 hazync-coord as a base step on the anchor at 104 (§14.1; core image `eb2cd424`, the CI regtest guest embedded
 prebuilt, host `--features trusted-state`):
