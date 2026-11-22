@@ -6,12 +6,13 @@
 # Writes <work>/summary.tsv (chunk, coins, user cycles, padded cycles, segments, peak RSS kB, wall s) and prints
 # CHUNKED_OK or CHUNKED_FAILED. CHUNK_COINS=<C> cuts by coin count instead of <chunks> (then <chunks> is an upper bound).
 # BIP30_DEPTH=<d> BIP30_PIECES=<P>: the BIP30 tree as P piece receipts at depth d (§13.1), the combine run with --bip30;
-# the piece rows go to <work>/pieces.tsv. TIMEV=<cmd> replaces `/usr/bin/time -v` (a box without GNU time).
+# the piece rows go to <work>/pieces.tsv. TS_PROVE=1: real proofs instead of dev mode (§14.1). TIMEV=<cmd> replaces `/usr/bin/time -v` (a box without GNU time).
 set -uo pipefail
 read -r -a TV <<< "${TIMEV:-/usr/bin/time -v}"
 TS=$1; IH=$2; NET=$3; SNAP=$4; SIDE=$5; N=$6; W=$7; EXP=${8:-}
 mkdir -p "$W"
-export RISC0_DEV_MODE=1
+# TS_PROVE=1: a REAL prove of every receipt (TRUSTED_STATE.md §14.1), dev mode off; each receipt's TSP line goes to <work>/tsp.log
+if [ "${TS_PROVE:-}" = 1 ]; then unset RISC0_DEV_MODE; else export RISC0_DEV_MODE=1; fi
 plan=(--network "$NET" --snapshot "$SNAP" --side "$SIDE" --out "$W")
 if [ -n "${CHUNK_COINS:-}" ]; then plan+=(--chunk-coins "$CHUNK_COINS"); else plan+=(--chunks "$N"); fi
 [ -n "${TRIE_DIR:-}" ] && { rm -rf "$TRIE_DIR"; plan+=(--trie-dir "$TRIE_DIR"); }
@@ -42,6 +43,7 @@ if [ -n "${BIP30_DEPTH:-}" ]; then
 fi
 "${TV[@]}" "$IH" combine "$W/final.in" "$EXP" "${rcpts[@]}" "${bip[@]}" > "$W/combine.log" 2>&1
 grep -aE "^COMBINE|TSX|Maximum resident|Elapsed" "$W/combine.log"
+grep -ah "^TSP " "$W"/chunk_*.log "$W"/piece_*.log "$W/combine.log" > "$W/tsp.log" 2>/dev/null
 column -t "$W/summary.tsv"
 awk 'NR>1{u+=$3; p+=$4; s+=$5; if($6>m)m=$6} END{printf "chunks total: user %d padded %d segments %d max peak RSS %d kB\n", u, p, s, m}' "$W/summary.tsv"
 grep -aq COMBINE_MATCH "$W/combine.log" && echo CHUNKED_OK || { echo CHUNKED_FAILED; exit 1; }
