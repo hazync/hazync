@@ -230,6 +230,10 @@ fn build(a: &[String]) {
             if stream && ins.len() >= TRIE_BATCH {
                 let t = Instant::now();
                 trie.apply(&Vec::new(), &ins).map_err(|e| format!("trie: {e:?} (two coins with one trie key?)"))?;
+                // durable per batch: the disk arena holds the slots an update replaced in memory until a flush, then
+                // reuses them; without it that list (and the arena) grows with every batch. The meta it writes says
+                // height 0 until the final flush, so a build killed here leaves a trie no anchor names.
+                trie.flush().map_err(|e| format!("trie flush: {e}"))?;
                 ins.clear();
                 t_trie_acc.set(t_trie_acc.get() + t.elapsed().as_secs_f64());
             }
