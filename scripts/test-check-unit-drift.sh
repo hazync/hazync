@@ -170,6 +170,69 @@ for u in libzync-prep libzync-fetch libzync-board-prep libzync-board-fetch; do
         && ok "$u declares alert.conf" || bad "$u declares no alert.conf"
 done
 
+# 8. ⛔⛔ SEVERAL ASSIGNMENTS ON ONE Environment= LINE ARE SEVERAL KEYS. systemd and the box side's `xargs -n1`
+#    split `Environment=LZ_ROOT=/x LZ_WINDOW=1500 LZ_JOBS=4` into three; the repo side kept it as one line, so
+#    LZ_WINDOW and LZ_JOBS read as "appears NOWHERE in the repo" every night from 19.11.2026 (after #754).
+#    The function is pulled out of the script and run, as in 5 and 7.
+sfn=$(sed -n '/^split_declared_env()/,/^}/p' scripts/check-unit-drift.sh)
+if [ "$CONTROL" = yes ]; then   # the pre-fix behaviour: one line in, one (quote-stripped) line out
+    sfn='split_declared_env() { sed -e "s/^Environment=//" -e "s/^\"\(.*\)\"$/\1/"; }'
+fi
+if ! printf '%s\n' "$sfn" | grep -q 'split_declared_env()'; then
+    bad "could not extract split_declared_env from scripts/check-unit-drift.sh"
+else
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "$sfn")
+    got=$(printf '%s\n' 'Environment=LZ_ROOT=/var/lib/libzync-prep LZ_WINDOW=1500 LZ_JOBS=4' | split_declared_env | paste -sd'|' -)
+    if [ "$got" = 'LZ_ROOT=/var/lib/libzync-prep|LZ_WINDOW=1500|LZ_JOBS=4' ]; then
+        if [ "$CONTROL" = yes ]; then bad "control did NOT reproduce the one-line bug -- it is testing nothing"
+        else ok "three assignments on one Environment= line give three keys"; fi
+    else
+        if [ "$CONTROL" = yes ]; then ok "control reproduces it: one line stays one key ($got)"
+        else bad "multi-assignment line not split: got '$got'"; fi
+    fi
+    if [ "$CONTROL" != yes ]; then
+        got=$(printf '%s\n' 'Environment="HAZYNC_DISK_PATHS=/srv/bulk /"' | split_declared_env)
+        [ "$got" = 'HAZYNC_DISK_PATHS=/srv/bulk /' ] && ok "a quoted value with a space stays ONE key" || bad "quoted value split or kept quoted: '$got'"
+        got=$(printf '%s\n' 'Environment=A=1 "B=two words" C=3' | split_declared_env | paste -sd'|' -)
+        [ "$got" = 'A=1|B=two words|C=3' ] && ok "mixed quoted and unquoted assignments split like xargs" || bad "mixed line: '$got'"
+        got=$(printf '%s\n' 'Environment=MSG=say"hi' | split_declared_env)
+        [ "$got" = 'MSG=say"hi' ] && ok "an unbalanced inner quote falls back to the one-line form" || bad "inner quote: '$got'"
+        # and the real unit that tripped it, read straight from the repo
+        got=$(grep -E '^Environment=' coordinator/deploy/libzync/libzync-fetch.service | split_declared_env)
+        grep -qx 'LZ_WINDOW=1500' <<< "$got" && grep -qx 'LZ_JOBS=4' <<< "$got" \
+            && ok "libzync-fetch.service declares LZ_WINDOW and LZ_JOBS as keys" || bad "libzync-fetch keys: '$got'"
+    fi
+fi
+
+# 9. ⛔ EVERY UNIT FILE IN THE REPO IS ONE repo_unit CAN FIND. A fixed list of directories missed headers-api/ and
+#    watchdog/, so hazync-headers-api's every setting read as "appears NOWHERE in the repo" (21.11.2026).
+rfn=$(sed -n '/^repo_unit()/,/^}/p' scripts/check-unit-drift.sh)
+if [ "$CONTROL" = yes ]; then   # the pre-fix list of three directories
+    rfn='repo_unit() { local d; for d in coordinator/deploy coordinator/deploy/libzync coordinator/deploy/headers; do [ -f "$d/$1.service" ] && { cat "$d/$1.service"; return 0; }; done; return 0; }'
+fi
+if ! printf '%s\n' "$rfn" | grep -q 'repo_unit()'; then
+    bad "could not extract repo_unit from scripts/check-unit-drift.sh"
+else
+    # shellcheck disable=SC1090
+    source <(printf '%s\n' "$rfn")
+    lost=""; n=0
+    while IFS= read -r f; do
+        n=$((n + 1)); u=$(basename "$f" .service)
+        cmp -s <(repo_unit "$u") "$f" || lost="$lost $f"
+    done < <(git ls-files 'coordinator/deploy/*.service')
+    [ "$n" -gt 30 ] || bad "only $n unit files listed: this would pass vacuously"
+    if [ -z "$lost" ]; then
+        if [ "$CONTROL" = yes ]; then bad "control did NOT reproduce the missed directories -- it is testing nothing"
+        else ok "all $n repo unit files resolve through repo_unit"; fi
+    else
+        if [ "$CONTROL" = yes ]; then ok "control reproduces it: not found:$lost"
+        else bad "unit files repo_unit cannot find:$lost"; fi
+    fi
+    dup=$(git ls-files 'coordinator/deploy/*.service' | xargs -n1 basename | sort | uniq -d | paste -sd' ' -)
+    [ -z "$dup" ] && ok "no unit name is declared in two directories" || bad "unit names declared twice: $dup"
+fi
+
 echo
 if [ "$fails" = 0 ]; then echo "PASS ($([ "$CONTROL" = yes ] && echo control || echo real))"; exit 0; fi
 echo "FAIL: $fails assertion(s)"; exit 1

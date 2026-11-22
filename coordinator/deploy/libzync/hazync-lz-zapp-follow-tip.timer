@@ -1,0 +1,10 @@
+[Unit]
+Description=Every 10 minutes: bring zync-serve's tip mode up to the board's spine (ZAPP_FOLLOWER Z3)
+
+[Timer]
+OnBootSec=5min
+OnUnitInactiveSec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

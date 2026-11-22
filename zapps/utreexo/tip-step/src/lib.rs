@@ -1,5 +1,6 @@
 //! The utreexo tip step's block rules (prover/zyncapps/methods/utreexo-tip/src/step.rs, the file the tip guest and the
 //! host #[path]-include) under test natively, in the zAPP's own module so CI's zapps job runs it (zapps/utreexo/test.sh).
+//! Also the tip mode's production witness source (prover/zyncapps/host/src/utreexo_forest.rs, utreexo_witness.rs).
 //! Nothing here is part of any image.
 extern crate alloc;
 /// libzync's base derivation, under the name step.rs uses for it.
@@ -8,6 +9,14 @@ pub mod utreexo_roots {
 }
 #[path = "../../../../prover/zyncapps/methods/utreexo-tip/src/step.rs"]
 pub mod step;
+/// The tip mode's production witness source (host side, UTREEXO_ZAPP.md §10.5.1): the compact forest and the source
+/// itself, under test here so CI's zapps job runs them (`forest_tests.rs`).
+#[path = "../../../../prover/zyncapps/host/src/utreexo_forest.rs"]
+pub mod utreexo_forest;
+#[path = "../../../../prover/zyncapps/host/src/utreexo_witness.rs"]
+pub mod utreexo_witness;
+#[cfg(test)]
+mod forest_tests;
 
 #[cfg(test)]
 mod tests {

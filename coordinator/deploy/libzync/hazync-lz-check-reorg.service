@@ -9,6 +9,12 @@ OnFailure=hazync-alert@%n.service
 Type=oneshot
 User=hazync
 Environment=COORD_DB=/var/lib/hazync-lz/coordinator.db
+# D1 (REORG.md §19): the tip run (the paper prep, LZ_HI=follow) standing still below the node's tip for an hour pages
+Environment=CHECK_TIP_RUN_PREP_TIP=/var/lib/libzync-fast/out/PREP_TIP.json
+Environment=CHECK_TIP_RUN_STATE=/var/lib/hazync-lz/check-tip-run.json
+# a stall the tip run's leaf window explains (no one proves tip blocks) is said so (review, MEDIUM 3; its window from the
+# tip run's out/RUN.json); and once the tip run is past X, block X must have a bundle or be proven (round 2, MEDIUM 2)
+Environment=CHECK_TIP_RUN_LEAVES=/srv/bulk/libzync-prep/leaves
 ExecStart=/usr/bin/python3 /opt/hazync-lz/coordinator/deploy/libzync/hazync-lz-check-reorg.py
 Nice=10
 NoNewPrivileges=true

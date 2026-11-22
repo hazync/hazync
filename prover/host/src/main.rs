@@ -1339,8 +1339,10 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-prep") {
-        let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prep <lo> <hi> <json dir> <anchor.json|genesis> <out dir>") };
-        prep::lz_prep_cmd(n(1), n(2), &args[p + 3], &args[p + 4], &args[p + 5]);
+        let n = |k: usize| -> u32 { args.get(p + k).and_then(|s| s.parse().ok()).expect("libzync-prep <lo> <hi | follow> <json dir> <anchor.json|genesis> <out dir>") };
+        // `follow`: no last block, the run follows the node's tip (REORG.md §19, the tip run)
+        let hi = if args.get(p + 2).map(String::as_str) == Some("follow") { prep::FOLLOW } else { n(2) };
+        prep::lz_prep_cmd(n(1), hi, &args[p + 3], &args[p + 4], &args[p + 5]);
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-undo-hashes") {
