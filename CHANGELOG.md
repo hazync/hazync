@@ -13,6 +13,18 @@ Hazync v2's release notes are in [`docs/`](docs/README.md).
 Releases up to v0.22.1 are **Hazync v1** (the original per-signature CORE design, image `37987b85` since v0.21.0);
 v0.23.0 onwards are **Hazync v2** (the libzync engine).
 
+## v0.28.0 — ⏳ PLACEHOLDER release date — strict transaction parsers, the board follows the tip; core image unchanged (`46666b6f`)
+The core images are unchanged (mainnet `46666b6f`, signet `01a80f17`, headers `de54b94f`); nothing on the board is
+re-proved. Every transaction parser reads compact sizes as Bitcoin Core does (shortest form, at most MAX_SIZE, every length
+within the bytes left, no superfluous witness; #788, #774), so three zyncAPP images move: hints `1894f12e` → `11c72c44`,
+utreexo `27bea7da` → `00b2d1e8`, utreexo-tip `ab6f7a26` → `5ef26dfe`. Receipts under the old ids stop verifying, and no old
+id is kept as accepted. WASM: core `hazync-verify.wasm` `0c8cf026` → `893aa98b`, headers `bc0fa13a` → `a7ed0ac8`, hints
+→ `1c7f050c`, utreexo → `9f1d14c2`, deposit → `4f48016f`, statement → `a6911de6`; assume and liveness unchanged. Following
+the tip: the coordinator follows the paper prep from X = 974,937 (D1), tip blocks first for workers able to prove them,
+zAPP tip mode Z2–Z5 (#779); utreexo tip mode gets a production witness source, a disk forest, with follower fall-back and
+checks (#783). Also: the Windows GPU gate's segment size follows the card (#785), superseded-release warnings (#786),
+unit-drift fixes (#787), url 2.5.9 (#790), ooga-land and docs fixes (#789). Notes: [`docs/RELEASE_NOTES_v0.28.0.md`](docs/RELEASE_NOTES_v0.28.0.md).
+
 ## v0.27.1 — 2026-11-21 — fix release: the Linux GPU prover works again; images unchanged (`46666b6f`)
 The images are unchanged (mainnet `46666b6f`, signet `01a80f17`, headers `de54b94f`). The Linux CUDA host of v0.26.1 and
 v0.27.0 stopped on its first GPU step: a stale sppark build cache mixed two layouts of one structure (#739's header change);
