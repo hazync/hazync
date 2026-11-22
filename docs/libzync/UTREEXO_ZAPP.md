@@ -3,7 +3,8 @@
 Status: released in v0.27.0 (#744, 20.11.2026) as an **early** zAPP, CPU only. Executed (no dev mode) from genesis to H = 1,999,
 10,000 and 100,000; the roots are byte-identical to Floresta's own code at every H tested; real CPU proofs at H = 2 and 3
 (§8). Reviewed 15.11.2026 (no soundness break found); images pinned in `reproduce/LIBZYNC_IDS` from the reproducible
-container build: base `27bea7da`, tip mode (§10) `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
+container build: base `00b2d1e8`, tip mode (§10) `5ef26dfe` since 21.11.2026 (the block walks read compact sizes as
+Core does, with libzync::facts' reader; two agreeing builds of `cffa2cbb`); before them `27bea7da` / `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
 top of it, like every zAPP.
 
 Utreexo is Tadge Dryja's accumulator; Floresta (getfloresta/Floresta, formerly vinteumorg) is Davidson Souza's node
@@ -189,7 +190,7 @@ additionally needs **block H from the node's own header chain** (`--expect`, or 
 for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
 chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
-the built-in id `27bea7da…` is **pinned since 18.11.2026** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
+the built-in id `00b2d1e8…` (since 21.11.2026; `27bea7da…` from 18.11.2026) is **pinned** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
 reproducible container's build, §10.8; until then a local build, and a proof under an unpinned built-in id is at most
 DEMO) (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
 and the OK line say the checker does not know its code); otherwise DEMO. A FAIL report carries no statement. The receipt is decoded with a 16 MiB bincode
@@ -475,7 +476,7 @@ Because the guest checks every proof, the source is never trusted.
 
 The production host replaces only the part that yields, per block, the spent coins' data and the batch proof. Its
 output is the format the guest already reads (step.rs `put_spent`, `encode_proof`), so **neither the guest nor any
-image changed** (core `46666b6f`, utreexo base `27bea7da`, tip `ab6f7a26`).
+image changed** (core `46666b6f`, utreexo base `27bea7da`, tip `ab6f7a26` then; since 21.11.2026 base `00b2d1e8`, tip `5ef26dfe`, strict compact sizes).
 
 **Untrusted, as the guest code shows.** The guest (`utreexo-tip/src/main.rs`, `step.rs`) takes the blocks only as
 bytes bound to the previous statement's block by hash, to their Merkle roots and through the link headers to the core
@@ -707,8 +708,13 @@ dels × 260,000 + (adds + dels) × 23,800: 930,000 ≈ 7,078 × 260 k + 16,431 �
   unpinned base image; the `AssumeUtreexoValue` source of a tip statement.
 - **A real CPU proof** (no dev mode, `ProverOpts::succinct`, `RAYON_NUM_THREADS=6`, hazync-coord under a load average
   of ~37 from other work): the step 3 → 103 from the base receipt `vectors/mainnet-3.receipt` (H = 3), resting on the
-  core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`), so 100 blocks plus
-  3,733 link headers: **4,945.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `4e0c2bde…`). The
+  core spine proof 1..3,836 (`46666b6f`, copied from hazync-proof on 18.11.2026, sha256 `96ab09fc…`, no longer kept
+  anywhere), so 100 blocks plus 3,733 link headers: **4,945.9 s**, 226,138 bytes (sha256 `4e0c2bde…`, under the tip
+  image `ab6f7a26`). **Re-proved on 22.11.2026** under the strict-parser images (base `00b2d1e8`, tip `5ef26dfe`, the
+  container build of `cffa2cbb`, same settings) from the re-proved base receipt, on the core spine 1..4,790
+  (`46666b6f`, hazync-proof's `/var/lib/hazync-lz/spine/heads/spine_4790.bin` of 20.11.2026, sha256 `8a8e1b00…`, tip
+  `00000000133…8eb5`; kept as `vectors/core-spine-4790.receipt` so the vector can be re-proved again): 100 blocks plus
+  4,687 link headers, **5,180.9 s**, 226,138 bytes (`vectors/mainnet-tip-103.receipt`, sha256 `a2e37240…`). The
   roots equal the native replay's; `zapp-utreexo verify` gives DEMO (below minimum work; both images were also unpinned then) with
   every check ok. That time is a loaded shared box, not a benchmark. The blocks 4..103 have no spends: deletions are
   covered by the executions above, not by a proof (a proof of the step 103 → 180, with the first spends, was started

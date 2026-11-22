@@ -408,14 +408,18 @@ fn parse_tx(raw: &[u8]) -> Result<ParsedTx, String> {
             let e = self.i.checked_add(n).filter(|e| *e <= self.b.len()).ok_or("the transaction ends early")?;
             let s = &self.b[self.i..e]; self.i = e; Ok(s)
         }
+        /// A count, as Core reads a compact size (libzync::facts::varint: the shortest form, at most MAX_SIZE).
         fn var(&mut self) -> Result<u64, String> {
-            let n = match self.take(1)?[0] {
-                0xfd => u16::from_le_bytes(self.take(2)?.try_into().unwrap()) as u64,
-                0xfe => u32::from_le_bytes(self.take(4)?.try_into().unwrap()) as u64,
-                0xff => u64::from_le_bytes(self.take(8)?.try_into().unwrap()),
-                x => x as u64,
-            };
+            if self.i >= self.b.len() { return Err("the transaction ends early".into()); }
+            let n = libzync::facts::varint(self.b, &mut self.i).ok_or("a compact size not as Core reads it (shortest form, at most MAX_SIZE), or cut short")?;
             if n > self.b.len() as u64 { return Err("a count larger than the transaction".into()); }
+            Ok(n)
+        }
+        /// A length of bytes still to come: a count that also fits in the bytes left.
+        /// (`var` bounds it by the transaction's length, so it fits a usize on wasm32 too.)
+        fn len(&mut self) -> Result<usize, String> {
+            let n = self.var()? as usize;
+            if n > self.b.len() - self.i { return Err("a length past the end of the transaction".into()); }
             Ok(n)
         }
     }
@@ -430,14 +434,21 @@ fn parse_tx(raw: &[u8]) -> Result<ParsedTx, String> {
     for k in 0..inputs {
         let prev = r.take(36)?;
         if k == 0 { first_prevout.copy_from_slice(prev); }
-        let n = r.var()?; r.take(n as usize)?; r.take(4)?;
+        let n = r.len()?; r.take(n)?; r.take(4)?;
     }
     let outputs = r.var()?;
     if outputs == 0 { return Err("a transaction with no outputs".into()); }
-    for _ in 0..outputs { r.take(8)?; let n = r.var()?; r.take(n as usize)?; }
+    for _ in 0..outputs { r.take(8)?; let n = r.len()?; r.take(n)?; }
     let body_end = r.i;
     if segwit {
-        for _ in 0..inputs { for _ in 0..r.var()? { let n = r.var()?; r.take(n as usize)?; } }
+        let mut any = false;
+        for _ in 0..inputs {
+            let k = r.var()?;
+            any |= k > 0;
+            for _ in 0..k { let n = r.len()?; r.take(n)?; }
+        }
+        // Core's UnserializeTransaction: "Superfluous witness record" (the marker with every stack empty)
+        if !any { return Err("a witness section with every stack empty".into()); }
     }
     let lock = r.take(4)?.to_vec();
     if r.i != raw.len() { return Err("bytes after the lock time".into()); }

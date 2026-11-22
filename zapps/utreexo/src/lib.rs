@@ -17,9 +17,9 @@ mod tip;
 pub use tip::*;
 
 /// The utreexo (base walk) image id this checker trusts by default: the reproducible container's build
-/// (reproduce/libzync.Dockerfile, `libzync-ids.sh`), pinned in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, 18.11.2026,
-/// two agreeing builds: hazync-coord and a laptop). The same id as the first local build of 15.11.2026.
-pub const UTREEXO_IMAGE_ID: &str = "27bea7da7c9c2c528a0c9b6e6d22f5d06c5b2c87bcd9d58c360ffecaf5424fb9";
+/// (reproduce/libzync.Dockerfile, `libzync-ids.sh`), pinned in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, 21.11.2026,
+/// two agreeing builds of cffa2cbb on hazync-coord: the strict compact sizes of #774's follow-up; before it 27bea7da).
+pub const UTREEXO_IMAGE_ID: &str = "00b2d1e856b5ac55dc330da5b0d7143ccda357edb18d61a69a808999b2d2d4c6";
 /// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
 pub const UTREEXO_IMAGE_LABEL: &str = "pinned in reproduce/LIBZYNC_IDS, reproducible container build";
 /// Whether [`UTREEXO_IMAGE_ID`] is a reproducible build pinned in reproduce/LIBZYNC_IDS. While it is not, nobody can
