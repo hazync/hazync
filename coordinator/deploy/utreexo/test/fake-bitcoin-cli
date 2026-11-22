@@ -25,7 +25,7 @@ elif a[0] == 'getblockheader':
     ix = os.path.join(tempfile.gettempdir(), 'fake-bitcoin-cli-%s-%d.json' % (hashlib.sha256(os.path.abspath(d).encode()).hexdigest()[:16], tip))
     if not os.path.exists(ix):
         m = {bhash(h): h for h in range(0, tip + 1) if os.path.exists(f'{d}/block_{h}.json')}
-        json.dump(m, open(ix + '.tmp', 'w')); os.replace(ix + '.tmp', ix)
+        t = '%s.tmp.%d' % (ix, os.getpid()); json.dump(m, open(t, 'w')); os.replace(t, ix)   # a temp name per process: parallel runs (run_ci.sh) share the index
     # a lied hash answers with the real header of its height (only the stub tests read headers past a lie)
     h = {x: int(k) for k, x in lie.items()}.get(a[1], json.load(open(ix)).get(a[1]))
     if h is None: sys.exit('Block not found')

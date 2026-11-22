@@ -28,8 +28,8 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 HOST="${1:-}"
 [ -n "$HOST" ] || { echo "usage: $0 <ssh-host>   e.g. $0 hazync-proof   (or localhost, on the box)" >&2; exit 2; }
 DROPINS_DIR=coordinator/deploy/dropins
-# Unit files live in three places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
-# coordinator/deploy/libzync/, the header-chain follower's in coordinator/deploy/headers/. Reading only the first made
+# Unit files live in several places: the v1 units in coordinator/deploy/, the Hazync v2 board's in
+# coordinator/deploy/libzync/, the header-chain follower's in headers/, the utreexo follower's in utreexo/. Reading only the first made
 # every setting of a v2 unit "appear NOWHERE in the repo" (2026-11-12: the switch's units failed this check).
 # ⛔ EVERY DIRECTORY, NOT A LIST OF THEM. The list was three directories; coordinator/deploy/headers-api/ (the MMR
 # path service) and coordinator/deploy/watchdog/ came later and were never added, so every setting of
