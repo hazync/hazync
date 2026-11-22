@@ -31,9 +31,71 @@ fn ctl_tag() -> &'static str {
     if CONTROLS { "  <<< CONTROLS BUILD (TS_CONTROLS=1): cut-capable images, NEVER PIN THESE IDS >>>" } else { "" }
 }
 
-fn prove_dev(env: risc0_zkvm::ExecutorEnv, elf: &[u8]) -> risc0_zkvm::ProveInfo {
-    assert!(std::env::var("RISC0_DEV_MODE").as_deref() == Ok("1"), "set RISC0_DEV_MODE=1: the chunked ingest is measured in dev mode");
-    risc0_zkvm::default_prover().prove(env, elf).expect("guest")
+/// Dev mode (RISC0_DEV_MODE=1, the default way to run this tool: executed, a fake receipt carrying the claim) or, with
+/// TS_PROVE=1 and dev mode off, a REAL local prove (TRUSTED_STATE.md §14.1), staged so each recursion step is timed:
+/// every segment proved, merged and lifted, the join tree, then one `resolve` per assumption (the receipts this guest
+/// `env::verify`d, each a succinct receipt), and the result verified against `id`. Prints one `TSP` line with the stages.
+fn prove_dev(env: risc0_zkvm::ExecutorEnv, elf: &[u8], id: &[u32; 8], what: &str) -> risc0_zkvm::ProveInfo {
+    let real = std::env::var("TS_PROVE").as_deref() == Ok("1");
+    if !real {
+        assert!(std::env::var("RISC0_DEV_MODE").as_deref() == Ok("1"), "set RISC0_DEV_MODE=1 (dev mode) or TS_PROVE=1 (a real prove)");
+        return risc0_zkvm::default_prover().prove(env, elf).expect("guest");
+    }
+    assert!(std::env::var("RISC0_DEV_MODE").map_or(true, |v| v != "1" && v.to_lowercase() != "true"),
+            "TS_PROVE=1 is a real prove: unset RISC0_DEV_MODE");
+    use risc0_zkvm::{ExecutorImpl, ProverOpts, VerifierContext};
+    use std::time::Instant;
+    let t0 = Instant::now();
+    let session = ExecutorImpl::from_elf(env, elf).expect("executor").run().expect("guest");
+    let exec_s = t0.elapsed().as_secs_f64();
+    let server = risc0_zkvm::get_prover_server(&ProverOpts::succinct()).expect("prover server");
+    let ctx = VerifierContext::default();
+    let t = Instant::now();
+    let mut segs = Vec::with_capacity(session.segments.len());
+    for sref in session.segments.iter() {
+        let seg = sref.resolve().expect("segment");
+        segs.push(server.prove_segment(&ctx, &seg).expect("prove segment"));
+    }
+    let seg_s = t.elapsed().as_secs_f64();
+    let nseg = segs.len();
+    let t = Instant::now();
+    let mut level = server.prepare_lifts(&ctx, &session, segs).expect("merge + lift");
+    let lift_s = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let mut joins = 0usize;
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut it = level.into_iter();
+        while let Some(a) = it.next() {
+            match it.next() { Some(b) => { next.push(server.join(&a, &b).expect("join")); joins += 1; } None => next.push(a) }
+        }
+        level = next;
+    }
+    let join_s = t.elapsed().as_secs_f64();
+    let mut cond = level.pop().expect("one receipt");
+    let t = Instant::now();
+    let assumptions = server.session_assumptions_succinct(&session).expect("assumptions (each must be a real receipt)");
+    let conv_s = t.elapsed().as_secs_f64();
+    let t = Instant::now();
+    let mut each: Vec<f64> = Vec::with_capacity(assumptions.len());
+    for a in &assumptions {
+        let t1 = Instant::now();
+        cond = server.resolve(&cond, a).expect("resolve");
+        each.push(t1.elapsed().as_secs_f64());
+    }
+    let res_s = t.elapsed().as_secs_f64();
+    let info = server.assemble_from_resolved(&session, cond).expect("assemble");
+    let t = Instant::now();
+    info.receipt.verify(*id).expect("the proved receipt does not verify against its image id");
+    let ver_s = t.elapsed().as_secs_f64();
+    let (mn, mx) = each.iter().fold((f64::MAX, 0f64), |(a, b), x| (a.min(*x), b.max(*x)));
+    println!("TSP {what}: REAL PROVE (CPU, local) exec {exec_s:.1} s | {nseg} segments proved {seg_s:.1} s ({:.2} s each) | merge+lift {lift_s:.1} s ({:.2} s each) | \
+              {joins} joins {join_s:.1} s ({:.2} s each) | assumptions to succinct {conv_s:.2} s | {} resolves {res_s:.1} s ({:.2} s each, min {:.2} max {:.2}) | \
+              verify {ver_s:.2} s | total {:.1} s | seal {} B",
+             seg_s / nseg.max(1) as f64, lift_s / nseg.max(1) as f64, join_s / joins.max(1) as f64, each.len(),
+             res_s / each.len().max(1) as f64, if each.is_empty() { 0.0 } else { mn }, mx, t0.elapsed().as_secs_f64(),
+             bincode::serialize(&info.receipt).map(|b| b.len()).unwrap_or(0));
+    info
 }
 
 fn chunk_cmd(inp: &str, out: &str) {
@@ -46,7 +108,7 @@ fn chunk_cmd(inp: &str, out: &str) {
         b.stdout(&mut log);
         write_cut(&mut b);
         for x in &s { section_writer(&mut b, x); }
-        prove_dev(b.build().unwrap(), TS_CHUNK_ELF)
+        prove_dev(b.build().unwrap(), TS_CHUNK_ELF, &TS_CHUNK_ID, "chunk")
     };
     let tsc = String::from_utf8_lossy(&log).lines().find(|l| l.contains("TSC ")).unwrap_or("").to_string();
     std::fs::write(out, bincode::serialize(&info.receipt).unwrap()).unwrap();
@@ -76,7 +138,7 @@ fn bip30_cmd(inp: &str, out: &str) {
         for x in &dlh { b.write(x).unwrap(); }
         for x in &s[1..] { section_writer(&mut b, x); }
         let env = b.build().unwrap();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_BIP30_ELF)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_BIP30_ELF, &TS_BIP30_ID, "bip30")))
     };
     let text = String::from_utf8_lossy(&log).to_string();
     let info = match r { Ok(i) => i, Err(_) => { println!("BIP30_REFUSED {inp}"); std::process::exit(1); } };
@@ -117,7 +179,7 @@ fn combine_cmd(fin: &str, expected: &str, args: &[String]) {
             for r in &preceipts { let w = words(&r.journal.bytes); b.write(&(w.len() as u32)).unwrap(); b.write_slice(&w); }
         }
         let env = b.build().unwrap();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_COMBINE_ELF)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_COMBINE_ELF, &TS_COMBINE_ID, "combine")))
     };
     let text = String::from_utf8_lossy(&log).to_string();
     let info = match r {
@@ -286,7 +348,19 @@ fn join_cmd(a: &[String]) {
     let ingest_image = env_id("TS_INGEST_IMAGE", TS_COMBINE_ID);
     // the anchored tip: a dev-mode claim (what a dev-mode run of the core image on the anchor yields)
     // TS_TIP_CLAIM_IMAGE (a control): the claim made under another image than the one the guest is told
-    let tip_r = fake(env_id("TS_TIP_CLAIM_IMAGE", tip_image), jt.clone());
+    // TS_TIP_RCPT=<block_T.rcpt> (§14.1): a REAL receipt of the anchored tip instead of the claim, verified here under
+    // tip_image, its journal required to be tip.journal byte for byte (what join-inputs wrote from the tip's state).
+    let tip_r = match std::env::var("TS_TIP_RCPT") {
+        Ok(p) => {
+            assert!(std::env::var("TS_TIP_CLAIM_IMAGE").is_err(), "TS_TIP_RCPT and TS_TIP_CLAIM_IMAGE (a dev-mode control): one or the other");
+            let r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(&p).unwrap_or_else(|e| panic!("{p}: {e}"))).expect("TS_TIP_RCPT: a bincode Receipt");
+            r.verify(tip_image).unwrap_or_else(|e| panic!("TS_TIP_RCPT {p} does not verify under the tip image: {e}"));
+            assert!(r.journal.bytes == jt, "TS_TIP_RCPT {p}: its journal is not {dir}/tip.journal");
+            println!("tip: the REAL receipt {p} (verified under the tip image)");
+            r
+        }
+        Err(_) => fake(env_id("TS_TIP_CLAIM_IMAGE", tip_image), jt.clone()),
+    };
     let mut log: Vec<u8> = Vec::new();
     let t0 = std::time::Instant::now();
     let r = {
@@ -300,7 +374,7 @@ fn join_cmd(a: &[String]) {
         b.write(&genesis).unwrap();
         for j in [&main_r.journal.bytes, &ing_r.journal.bytes, &jt] { let w = words(j); b.write(&(w.len() as u32)).unwrap(); b.write_slice(&w); }
         let env = b.build().unwrap();
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_JOIN_ELF)))
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prove_dev(env, TS_JOIN_ELF, &TS_JOIN_ID, "join")))
     };
     let text = String::from_utf8_lossy(&log).to_string();
     let info = match r { Ok(i) => i, Err(_) => { println!("JOIN_REFUSED"); std::process::exit(1); } };
