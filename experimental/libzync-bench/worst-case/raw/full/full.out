@@ -1,0 +1,21 @@
+core: /Satoshi:28.0.0/ par: default (nproc 16 )
+full: 24453 heavy coins of type 0x2 at height 357 (16 s)
+full: 24453 heavy coins of type 0x1 at height 604 (17 s)
+CASE full_none height=605 bytes=999707 inputs=24377 checks=4656007 sighash_bytes_per_check~999479 load1=1.5
+CORE full_none par=default core=accept weight=3998720 submitblock_s=506.1 load1_end=17.1
+Traceback (most recent call last):
+  File "/root/worst-case/worst_full.py", line 405, in <module>
+    main()
+  File "/root/worst-case/worst_full.py", line 272, in main
+    p = full_stage(p)
+        ^^^^^^^^^^^^^
+  File "/root/worst-case/worst_full.py", line 395, in full_stage
+    t0 = time.time(); cli("reconsiderblock", bh); dt1 = time.time() - t0
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/root/worst-case/worst_full.py", line 60, in cli
+    raise RuntimeError(r.stderr)
+RuntimeError: error: timeout on transient error: Could not connect to the server 127.0.0.1:18790 (error code 0 - "timeout reached")
+
+Make sure the bitcoind server is running and that you are connecting to the correct RPC port.
+Use "bitcoin-cli -help" for more info.
+

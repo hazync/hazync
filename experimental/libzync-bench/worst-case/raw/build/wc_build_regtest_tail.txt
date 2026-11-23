@@ -1,0 +1,30 @@
+   Compiling bitcoin v0.32.102
+   Compiling ringbuffer v0.15.0
+   Compiling rustc-demangle v0.1.28
+   Compiling inventory v0.3.24
+   Compiling bit-vec v0.8.0
+   Compiling typed-arena v2.0.2
+   Compiling addr2line v0.24.2
+   Compiling bonsai-sdk v1.4.3
+   Compiling rrs-lib v0.1.0
+   Compiling risc0-groth16 v3.0.6
+   Compiling prost v0.13.5
+   Compiling base58ck v0.1.101
+   Compiling matchers v0.2.0
+   Compiling sharded-slab v0.1.7
+   Compiling bincode v1.3.3
+   Compiling tracing-log v0.2.0
+   Compiling thread_local v1.1.10
+   Compiling nu-ansi-term v0.50.3
+   Compiling bitcoin-units v0.1.101
+   Compiling bech32 v0.11.1
+   Compiling tracing-subscriber v0.3.23
+   Compiling libzync v0.1.0 (/hazync-zkvm/libzync)
+   Compiling hazync-coinbase-smt v0.1.0 (/hazync-zkvm/coinbase-smt)
+   Compiling hazync-utreexo v0.1.0 (/hazync-zkvm/accumulator)
+   Compiling risc0-circuit-rv32im v4.1.0
+   Compiling risc0-circuit-recursion v4.1.0
+   Compiling risc0-zkvm v3.1.0 (/hazync-zkvm/vendor/risc0-zkvm)
+   Compiling host v0.1.0 (/hazync-zkvm/prover/host)
+    Finished `fasthost` profile [optimized] target(s) in 9m 48s
+BUILD_DONE regtest rc=0

@@ -1,0 +1,7 @@
+core: /Satoshi:28.0.0/ par: default (nproc 16 )
+CASE none_small_k8 height=126 bytes=575 weight=2192 txs=2 inputs=8 outputs=3 core=accept core_submit_s=0.02
+GUEST none_small_k8 chunks=2 verdict=accept rc=0 TIMED wall_s=82.4 user_s=90.1 sys_s=1.3 maxrss_kb=1180500 rc=0 load1=0.9 load1_end=1.1 
+  LZ_STATS chunk segments=55 total_cycles=114294784 user_cycles=107186020
+  LZ_STATS chunk segments=55 total_cycles=114294784 user_cycles=107430343
+  LZ_STATS trie segments=1 total_cycles=262144 user_cycles=90624
+  LZ_STATS aggregate segments=2 total_cycles=3145728 user_cycles=2665823

@@ -20,9 +20,12 @@ for f in sys.argv[1:]:
         m = re.match(r"CASE (\S+) (.*)", line)
         if m:
             cases[m.group(1)] = m.group(2).strip()
-        m = re.match(r"GUEST (\S+) chunks=(\d+) verdict=(\S+) rc=(-?\d+) (TIMED .*?)?\s*(.*)$", line)
+        m = re.match(r"GUEST (\S+) chunks=(\d+) verdict=(\S+) rc=(-?\d+) (.*)$", line)
         if m:
-            cur = {"case": m.group(1), "chunks": int(m.group(2)), "verdict": m.group(3), "timed": m.group(5) or "", "why": m.group(6), "s": []}
+            rest = m.group(5)
+            t = re.search(r"TIMED .*?load1_end=\S+", rest)
+            cur = {"case": m.group(1), "chunks": int(m.group(2)), "verdict": m.group(3), "timed": t.group(0) if t else "",
+                   "why": rest[t.end():].strip() if t else rest, "s": []}
             rows.append(cur)
         m = re.match(r"\s+LZ_STATS (\w+) segments=(\d+) total_cycles=(\d+) user_cycles=(\d+)", line)
         if m and cur:

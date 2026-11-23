@@ -55,7 +55,8 @@ N_LIGHT = 24_600                  # light coins: enough to fill a block with 41-
 
 
 def cli(*a):
-    r = subprocess.run([CLI] + RPC + ["-stdin", str(a[0])], input="".join(f"{x}\n" for x in a[1:]), capture_output=True, text=True)
+    # no client-side timeout: a worst-case block keeps reconsiderblock busy for hours (-par=1)
+    r = subprocess.run([CLI] + RPC + ["-rpcclienttimeout=0", "-stdin", str(a[0])], input="".join(f"{x}\n" for x in a[1:]), capture_output=True, text=True)
     if r.returncode:
         raise RuntimeError(r.stderr)
     return r.stdout.strip()
@@ -226,12 +227,18 @@ def case_block(c, name, prep):
         ht = SIG_NONE if m.group(1) == "none" else SIG_ALL
         k = int(m.group(2))
         return c.block([fill_tx(c, prep["heavy"][ht][:k], light=L)])
+    m = re.fullmatch(r"(none|all)_small_k(\d+)", name)   # control: k heavy inputs in a SMALL transaction (~7 kB sighash)
+    if m:
+        ht = SIG_NONE if m.group(1) == "none" else SIG_ALL
+        coins = prep["heavy"][ht][-1 - int(m.group(2)):-1]
+        return c.block([spend(coins, [(sum(c.utxo[o][0] for o in coins), bytes(ANYONE))])])
     m = re.fullmatch(r"mem_k(\d+)", name)        # k memory-heavy inputs first, then light ones
     if m:
         return c.block([fill_tx(c, prep["mem"][:int(m.group(1))], light=L)])
-    if name == "unsplit":                         # ONE input doing 2 x 191 checks: its scriptSig is a heavy script too
-        ss = bytes(heavy_script(SIG_ALL, keys(191)))[:-1]   # the scriptSig without its final OP_1 (left: 10 falses)
-        return c.block([fill_tx(c, prep["heavy"][SIG_ALL][-1:], scriptsigs={0: ss}, light=L)])
+    if name in ("unsplit", "unsplit_none"):     # ONE input doing 2 x 191 checks: its scriptSig is a heavy script too
+        ht = SIG_ALL if name == "unsplit" else SIG_NONE
+        ss = bytes(heavy_script(ht, keys(191)))[:-1]   # the scriptSig without its final OP_1 (left: 10 falses)
+        return c.block([fill_tx(c, prep["heavy"][ht][-1:], scriptsigs={0: ss}, light=L)])
     if name == "max_outputs":                     # the most coins a block can create: empty-script outputs, 9 bytes each
         x = mature(c); v = c.utxo[x][0]
         n = (MAX_STRIPPED - 80 - 400 - 60) // 9 - 2
@@ -239,7 +246,7 @@ def case_block(c, name, prep):
     raise KeyError(name)
 
 
-CASES = ["light_only", "max_outputs", "none_k8", "none_k24", "all_k8", "all_k24", "unsplit", "mem_k1140"]
+CASES = ["light_only", "max_outputs", "none_k8", "none_k24", "all_k8", "all_k24", "unsplit", "mem_k1140", "none_small_k8", "unsplit_none"]
 
 
 def run_guest(c, name, b, nch):
@@ -358,6 +365,12 @@ def full_stage(p):
         for _ in range(110):
             b = c.block(); got, _ = submit(c, b); assert got in ("", "null"), got; c.accept(b)
         save(c, prep)
+    import pickle
+    saved = rev_hex(pickle.load(open(STATE + ".pkl", "rb"))[0]["tip"])
+    best = cli("getbestblockhash")
+    if best != saved:   # a case block left connected (an earlier -par=1 reconsiderblock): back to the saved tip
+        assert json.loads(cli("getblockheader", best))["previousblockhash"] == saved, "unexpected tip"
+        cli("invalidateblock", best)
     c, prep = load()
     n_full = (MAX_STRIPPED - 80 - 3 - 400 - 60) // 41
     for ht in (SIG_NONE, SIG_ALL):
@@ -373,6 +386,8 @@ def full_stage(p):
         print(f"full: {len(prep['heavy'][ht])} heavy coins of type {ht:#x} at height {c.height} ({time.time() - t0:.0f} s)", flush=True)
         save(c, prep)
     for ht, nm in ((SIG_NONE, "full_none"), (SIG_ALL, "full_all")):
+        if os.environ.get("HZ_FULL_ONLY") and nm != os.environ["HZ_FULL_ONLY"]:
+            continue
         coins = prep["heavy"][ht][:n_full]
         t = spend(coins, [(sum(c.utxo[o][0] for o in coins), bytes(ANYONE))])
         while len(t.serialize()) > MAX_STRIPPED - 80 - 3 - 400:
@@ -389,6 +404,8 @@ def full_stage(p):
         if core != "accept":
             continue
         cli("invalidateblock", bh)
+        if os.environ.get("HZ_PAR1") == "0":
+            continue
         # once more single-threaded, from a fresh process (empty signature/script caches)
         cli("stop"); p.wait()
         p = start_node(["-par=1"])

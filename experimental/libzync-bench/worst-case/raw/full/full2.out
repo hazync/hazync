@@ -1,0 +1,5 @@
+core: /Satoshi:28.0.0/ par: default (nproc 16 )
+full: 24453 heavy coins of type 0x2 at height 604 (0 s)
+full: 24453 heavy coins of type 0x1 at height 604 (0 s)
+CASE full_all height=605 bytes=999707 inputs=24377 checks=4656007 sighash_bytes_per_check~999479 load1=1.6
+CORE full_all par=default core=accept weight=3998720 submitblock_s=583.5 load1_end=17.2
