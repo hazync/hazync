@@ -54,7 +54,7 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     let i = NEXT; NEXT += 1;
     let h = &*core::ptr::addr_of!(HINTS);
     let (Some(qxf), Some(qyf)) = (Fq::from_le_bytes(&le(&qxl)), Fq::from_le_bytes(&le(&qyl))) else { FALLBACK += 1; return 0; };
-    let q = P::from_xy_unchecked(qxf, qyf);   // libsecp parsed and validated Q
+    let q = unsafe { P::from_xy_unchecked(qxf, qyf) };   // libsecp parsed and validated Q
     if (i + 1) * HINT_BYTES > h.len() || u32::from_le_bytes(h[i*HINT_BYTES..i*HINT_BYTES+4].try_into().unwrap()) != 1 {
         FALLBACK += 1;
         for v in [&a, &b] { v.assert_reduced(); }
@@ -109,7 +109,7 @@ pub fn finish() -> bool {
 // ---- the point accumulator the live-coin hash (swiftsync.rs) uses ----
 fn to_p(p: &Pt) -> P {
     let mut x = [0u32; 8]; let mut y = [0u32; 8]; x.copy_from_slice(&p[..8]); y.copy_from_slice(&p[8..]);
-    P::from_xy_unchecked(Fq::from_le_bytes(&le(&x)).expect("Pt x"), Fq::from_le_bytes(&le(&y)).expect("Pt y"))
+    unsafe { P::from_xy_unchecked(Fq::from_le_bytes(&le(&x)).expect("Pt x"), Fq::from_le_bytes(&le(&y)).expect("Pt y")) }
 }
 fn from_p(p: &P) -> Pt {
     let mut o = [0u32; 16]; o[..8].copy_from_slice(&limbs(p.x().as_le_bytes())); o[8..].copy_from_slice(&limbs(p.y().as_le_bytes())); o
