@@ -683,38 +683,118 @@ pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
     Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim), collected })
 }
 
-/// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
-/// cores). Returns per chunk a FakeReceipt carrying its claim and journal, plus the guest's captured
-/// stdout (BATCHREC lines in collect mode). Used by `libzync-hints` and by seg-serve's HAZYNC_AGG_EARLY.
-pub(crate) fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
-    -> Vec<(risc0_zkvm::Receipt, Vec<u8>)> {
+/// One chunk executed (collect mode unless the $HAZYNC_LZ_HINTS bundle has an entry for exactly `lo..hi`): a
+/// FakeReceipt carrying its claim and journal, plus the guest's captured stdout (BATCHREC lines in collect mode).
+pub(crate) fn exec_chunk(w: &BlockWitness, lo: usize, hi: usize) -> Result<(risc0_zkvm::Receipt, Vec<u8>), String> {
     use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    let mut log = Vec::new();
+    let session = {
+        let mut b = ExecutorEnv::builder();
+        b.segment_limit_po2(seg_po2());
+        b.stdout(&mut log);
+        b.write(&4u32).unwrap();
+        b.write(&w.height).unwrap();
+        b.write(&chunk_block_hash(&w.header)).unwrap();
+        write_chunk_inputs(&mut b, w, lo, hi);
+        lz_execute(b.build().unwrap())?
+    };
+    let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
+    Ok((Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone()), log))
+}
+
+/// `exec_chunk` for every chunk at once, `threads` at a time; one result per chunk, in order.
+pub(crate) fn execute_chunks_parallel_res(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
+    -> Vec<Result<(risc0_zkvm::Receipt, Vec<u8>), String>> {
+    type R = Result<(risc0_zkvm::Receipt, Vec<u8>), String>;
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let done: std::sync::Mutex<Vec<Option<(Receipt, Vec<u8>)>>> =
-        std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
+    let done: std::sync::Mutex<Vec<Option<R>>> = std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
     std::thread::scope(|s| {
         for _ in 0..threads.min(bounds.len()).max(1) {
             s.spawn(|| loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let Some(&(lo, hi)) = bounds.get(i) else { break };
-                let mut log = Vec::new();
-                let session = {
-                    let mut b = ExecutorEnv::builder();
-                    b.segment_limit_po2(seg_po2());
-                    b.stdout(&mut log);
-                    b.write(&4u32).unwrap();
-                    b.write(&w.height).unwrap();
-                    b.write(&chunk_block_hash(&w.header)).unwrap();
-                    write_chunk_inputs(&mut b, w, lo, hi);
-                    lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))
-                };
-                let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
-                let r = Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone());
-                done.lock().unwrap()[i] = Some((r, log));
+                let r = exec_chunk(w, lo, hi);
+                done.lock().unwrap()[i] = Some(r);
             });
         }
     });
     done.into_inner().unwrap().into_iter().map(|x| x.expect("chunk")).collect()
+}
+
+/// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
+/// cores). Returns per chunk a FakeReceipt carrying its claim and journal, plus the guest's captured
+/// stdout (BATCHREC lines in collect mode). Used by seg-serve's HAZYNC_AGG_EARLY and prove-chunk's collect: a failed
+/// chunk panics (no re-split, see `collect_chunks`).
+pub(crate) fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
+    -> Vec<(risc0_zkvm::Receipt, Vec<u8>)> {
+    execute_chunks_parallel_res(w, bounds, threads).into_iter()
+        .map(|r| r.unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))).collect()
+}
+
+/// The guest ran out of heap (#794): risc0's bump allocator never frees, so a chunk whose inputs leave enough
+/// unreclaimed memory panics with this exact message (risc0-zkvm-platform heap/bump.rs), prefixed by the executor's
+/// "Guest panicked: ". Nothing else is read as out-of-memory: every other failure (a REJECT, a C abort) passes through.
+pub(crate) fn is_guest_oom(msg: &str) -> bool {
+    msg.contains("Guest panicked: Out of memory! You have been using the default bump allocator which does not reclaim memory.")
+}
+
+/// Runs `exec` over `bounds` and re-splits every chunk that ran out of guest memory (#794), until each piece runs.
+///
+/// - Only `is_guest_oom` triggers a re-split. Any other failure is returned as it is, so a block the guest rejects is
+///   still rejected: a reject in a chunk that also ran out of memory surfaces in the piece that holds it.
+/// - Sound by construction: the re-split only changes chunk WIDTHS (contiguous runs, in order), which the aggregate
+///   accepts for any partition; every piece must itself execute (and later prove) in full.
+/// - Deterministic: execution is, and `split` (`chunks::split_chunk`) is a function of the block.
+/// - Bounded: each cut is strictly inside its chunk, so pieces shrink; a chunk `split` cannot cut (one input, or one
+///   tracked transaction) that still runs out of memory is an error, not a loop.
+///
+/// `exec` gets the chunks to run in one round (to run them in parallel or in turn) and returns one result each, in order.
+pub(crate) fn resplit_on_oom<T>(
+    bounds: &[(usize, usize)],
+    split: &dyn Fn(usize, usize) -> Option<usize>,
+    exec: &mut dyn FnMut(&[(usize, usize)]) -> Vec<Result<T, String>>,
+) -> Result<Vec<((usize, usize), T)>, String> {
+    enum Node<T> { Todo((usize, usize)), Done((usize, usize), T) }
+    let mut nodes: Vec<Node<T>> = bounds.iter().map(|&b| Node::Todo(b)).collect();
+    loop {
+        let todo: Vec<(usize, usize)> = nodes.iter().filter_map(|n| match n { Node::Todo(b) => Some(*b), Node::Done(..) => None }).collect();
+        if todo.is_empty() { break }
+        let results = exec(&todo);
+        assert_eq!(results.len(), todo.len(), "resplit_on_oom: one result per chunk");
+        let mut results = results.into_iter();
+        let mut next = Vec::with_capacity(nodes.len() + todo.len());
+        for n in nodes {
+            let (lo, hi) = match n { Node::Todo(b) => b, done => { next.push(done); continue } };
+            match results.next().unwrap() {
+                Ok(t) => next.push(Node::Done((lo, hi), t)),
+                Err(e) if is_guest_oom(&e) => match split(lo, hi) {
+                    Some(mid) if lo < mid && mid < hi => {
+                        eprintln!("  libzync: inputs {lo}..{hi} ran out of guest memory: re-split into {lo}..{mid} and {mid}..{hi} (#794)");
+                        next.push(Node::Todo((lo, mid)));
+                        next.push(Node::Todo((mid, hi)));
+                    }
+                    _ => return Err(format!(
+                        "inputs {lo}..{hi} run out of guest memory and cannot be split further ({}): the guest's bump \
+                         allocator cannot hold them, only a reclaiming allocator (an image change) can (#794): {e}",
+                        if hi - lo == 1 { "a single input" } else { "one tracked transaction" })),
+                },
+                Err(e) => return Err(e),
+            }
+        }
+        nodes = next;
+    }
+    Ok(nodes.into_iter().map(|n| match n { Node::Done(b, t) => (b, t), Node::Todo(_) => unreachable!() }).collect())
+}
+
+/// The block's collect pass with `resplit_on_oom`: every chunk executed in parallel, and a chunk that runs out of
+/// guest memory re-split and run again. Returns the final chunks (the layout to prove) with each one's execution.
+/// A failure that is not out-of-memory panics as `execute_chunks_parallel` does.
+pub(crate) fn collect_chunks(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
+    -> Vec<((usize, usize), (risc0_zkvm::Receipt, Vec<u8>))> {
+    let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
+    let split = |lo: usize, hi: usize| crate::chunks::split_chunk(w, costs.get_or_init(|| crate::chunks::input_costs(w)), lo, hi);
+    resplit_on_oom(bounds, &split, &mut |todo| execute_chunks_parallel_res(w, todo, threads))
+        .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))
 }
 
 pub(crate) fn hint_threads() -> usize {
@@ -738,9 +818,10 @@ pub(crate) fn libzync_hints_cmd(out: &str) {
     // Collect mode for every hint kind: no bundle.
     std::env::remove_var("HAZYNC_LZ_HINTS");
     let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
     let threads = hint_threads();
-    let done = execute_chunks_parallel(&w, &bounds, threads);
+    // a chunk that runs out of guest memory is re-split (#794); the bundle records the layout that ran
+    let (bounds, done): (Vec<(usize, usize)>, Vec<_>) =
+        collect_chunks(&w, &chunk_bounds(&w, nchunks_env()), threads).into_iter().unzip();
     let t_chunks = t0.elapsed().as_secs_f64();
 
     let mut bundle = libzync::host::BlockBundle { height: w.height, block_hash: header_hash(&w.header), ..Default::default() };
@@ -1109,38 +1190,63 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             assert!(b.in_smt_root == w.in_smt_root && bincode::serialize(&b.smt).unwrap() == bincode::serialize(&w.smt).unwrap(),
                     "HAZYNC_LEAF_CHECK: leaf_{h}.bin's BIP30 witness != this run's");
         }
-        let bounds = chunk_bounds(&w, nchunks_env());
+        let mut bounds = chunk_bounds(&w, nchunks_env());
         // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
         // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
         // would be PROVED with libsecp verifying each signature itself: valid, but the unbatched cost.
+        // A chunk that runs out of guest memory is re-split here (#794), and `bounds` becomes the layout that ran.
         let bp = format!("{out}/bundle_{h}.lzb");
         let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
+        let sig_blob = |log: &[u8]| -> Vec<u8> {
+            libzync::host::sig_records(&String::from_utf8_lossy(log)).iter().flat_map(|r| libzync::host::sig_hint(r)).collect()
+        };
         if !bounds.is_empty() {
-            let done = execute_chunks_parallel(&w, &bounds, hint_threads());
-            for (i, &(clo, chi)) in bounds.iter().enumerate() {
-                rig_echo(&done[i].1);
-                let blob: Vec<u8> = libzync::host::sig_records(&String::from_utf8_lossy(&done[i].1))
-                    .iter().flat_map(|r| libzync::host::sig_hint(r)).collect();
-                bd.chunks.push((clo as u32, chi as u32, blob));
+            let done = collect_chunks(&w, &bounds, hint_threads());
+            bounds = done.iter().map(|(b, _)| *b).collect();
+            for ((clo, chi), (_, log)) in &done {
+                rig_echo(log);
+                bd.chunks.push((*clo as u32, *chi as u32, sig_blob(log)));
             }
             bd.write(&bp).unwrap();
             std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         }
         let t_sig = t0.elapsed().as_secs_f64();
-        let mut chunks: Vec<Receipt> = Vec::with_capacity(bounds.len());
-        for &(clo, chi) in &bounds {
-            let mut b = ExecutorEnv::builder();
-            b.segment_limit_po2(seg_po2());
-            b.write(&4u32).unwrap();
-            b.write(&w.height).unwrap();
-            b.write(&chunk_block_hash(&w.header)).unwrap();
-            write_chunk_inputs(&mut b, &w, clo, chi);
-            let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).expect("prove chunk");
-            lz_stats("chunk", h, &info.stats);
-            let r = info.receipt;
-            r.verify(METHOD_ID).expect("chunk receipt verifies");
-            chunks.push(r);
+        // Proving: a hinted chunk holds its signature hints in guest memory, so it can run out where its collect run
+        // did not. It is re-split the same way (#794); a piece the bundle has no hints for is collected first (the
+        // bundle has no entry for it, so write_chunk_inputs runs it in collect mode), then proved hinted.
+        let proved = {
+            let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
+            let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w, costs.get_or_init(|| crate::chunks::input_costs(&w)), lo, hi);
+            let mut prove_one = |clo: usize, chi: usize| -> Result<Receipt, String> {
+                if bd.chunk_sig(clo as u32, chi as u32).is_none() {
+                    let (_, log) = exec_chunk(&w, clo, chi)?;
+                    rig_echo(&log);
+                    bd.chunks.push((clo as u32, chi as u32, sig_blob(&log)));
+                    bd.write(&bp).unwrap();
+                    std::env::set_var("HAZYNC_LZ_HINTS", &bp);
+                }
+                let mut b = ExecutorEnv::builder();
+                b.segment_limit_po2(seg_po2());
+                b.write(&4u32).unwrap();
+                b.write(&w.height).unwrap();
+                b.write(&chunk_block_hash(&w.header)).unwrap();
+                write_chunk_inputs(&mut b, &w, clo, chi);
+                let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts).map_err(|e| format!("{e:#}"))?;
+                lz_stats("chunk", h, &info.stats);
+                let r = info.receipt;
+                r.verify(METHOD_ID).expect("chunk receipt verifies");
+                Ok(r)
+            };
+            resplit_on_oom(&bounds, &split, &mut |todo| todo.iter().map(|&(clo, chi)| prove_one(clo, chi)).collect())
+                .unwrap_or_else(|e| panic!("block {h}: prove chunk: {}", guest_failure("chunk proof", &e)))
+        };
+        // the bundle keeps only the layout proved (a re-split in proving leaves its parent's entry behind)
+        bounds = proved.iter().map(|(b, _)| *b).collect();
+        if bd.chunks.len() != bounds.len() {
+            bd.chunks.retain(|c| bounds.contains(&(c.0 as usize, c.1 as usize)));
+            bd.write(&bp).unwrap();
         }
+        let chunks: Vec<Receipt> = proved.into_iter().map(|(_, r)| r).collect();
         let t_chunks = t0.elapsed().as_secs_f64();
         std::env::remove_var("HAZYNC_LZ_HINTS"); // the aggregate's collect pass below runs without ECMH hints
         libzync_agg_prep(&mut w);
@@ -1941,6 +2047,114 @@ mod guest_failure_tests {
         assert!(a.starts_with("BLOCK REFUSED (chunk execution)") && a.contains("C abort()"), "{a}");
         let r = guest_failure("aggregate execution", &"Guest panicked: agg-lite: REJECT no trie receipt for this block");
         assert_eq!(r, "aggregate execution failed: Guest panicked: agg-lite: REJECT no trie receipt for this block");
+    }
+}
+
+#[cfg(test)]
+mod resplit_tests {
+    use super::{is_guest_oom, resplit_on_oom};
+    use crate::chunks::split_cut;
+
+    const OOM: &str = "Guest panicked: Out of memory! You have been using the default bump allocator which does not reclaim \
+        memory. Enable the `heap-embedded-alloc` feature to reclaim memory. This will result in extra cycle cost.";
+
+    fn halve(lo: usize, hi: usize) -> Option<usize> { (hi - lo >= 2).then(|| lo + (hi - lo) / 2) }
+
+    fn covers(pieces: &[(usize, usize)], n: usize) {
+        assert_eq!(pieces.first().map(|p| p.0), Some(0));
+        assert_eq!(pieces.last().map(|p| p.1), Some(n));
+        assert!(pieces.windows(2).all(|w| w[0].1 == w[1].0) && pieces.iter().all(|p| p.0 < p.1), "{pieces:?}");
+    }
+
+    #[test]
+    fn only_the_bump_allocator_message_is_out_of_memory() {
+        assert!(is_guest_oom(OOM));
+        assert!(is_guest_oom(&format!("chunk proof: {OOM}")));
+        assert!(!is_guest_oom("Guest panicked: agg-lite: REJECT bad-txns-inputs-missingorspent"));
+        assert!(!is_guest_oom("Guest panicked: C abort()"));
+        assert!(!is_guest_oom("Out of memory"));
+        assert!(!is_guest_oom("Guest panicked: Out of memory!"));
+    }
+
+    #[test]
+    fn a_chunk_that_runs_out_of_memory_is_re_split_until_it_runs() {
+        // injected: a chunk of more than 3 inputs runs out of memory
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        let out = resplit_on_oom(&[(0, 10), (10, 12)], &halve, &mut |todo| {
+            runs.extend_from_slice(todo);
+            todo.iter().map(|&(lo, hi)| if hi - lo > 3 { Err(OOM.to_string()) } else { Ok(hi - lo) }).collect()
+        }).unwrap();
+        let pieces: Vec<_> = out.iter().map(|(b, _)| *b).collect();
+        assert_eq!(pieces, vec![(0, 2), (2, 5), (5, 7), (7, 10), (10, 12)]);
+        covers(&pieces, 12);
+        assert!(out.iter().all(|((lo, hi), n)| hi - lo == *n));
+        // round 1: both; round 2: the halves of 0..10; round 3: the halves of each (10..12 ran once)
+        assert_eq!(runs, vec![(0, 10), (10, 12), (0, 5), (5, 10), (0, 2), (2, 5), (5, 7), (7, 10)]);
+    }
+
+    #[test]
+    fn a_failure_that_is_not_out_of_memory_is_never_retried() {
+        let mut calls = 0;
+        let r: Result<Vec<_>, _> = resplit_on_oom(&[(0, 4), (4, 8)], &halve, &mut |todo| {
+            calls += 1;
+            todo.iter().map(|&(lo, _)| if lo == 4 { Err("Guest panicked: C abort()".to_string()) } else { Ok(()) }).collect()
+        });
+        assert_eq!(r.err().as_deref(), Some("Guest panicked: C abort()"));
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn a_reject_inside_a_chunk_that_ran_out_of_memory_still_rejects() {
+        // 0..8 runs out of memory; once small enough, the piece holding input 6 rejects
+        let r: Result<Vec<_>, _> = resplit_on_oom(&[(0, 8)], &halve, &mut |todo| {
+            todo.iter().map(|&(lo, hi)| if hi - lo > 2 { Err(OOM.to_string()) }
+                else if (lo..hi).contains(&6) { Err("Guest panicked: REJECT".to_string()) } else { Ok(()) }).collect()
+        });
+        assert_eq!(r.err().as_deref(), Some("Guest panicked: REJECT"));
+    }
+
+    #[test]
+    fn a_single_input_that_runs_out_of_memory_fails_and_does_not_loop() {
+        let mut rounds = 0;
+        let r: Result<Vec<_>, _> = resplit_on_oom(&[(0, 4)], &halve, &mut |todo| {
+            rounds += 1;
+            assert!(rounds < 10, "looping");
+            todo.iter().map(|&(lo, hi)| if (lo..hi).contains(&1) { Err(OOM.to_string()) } else { Ok(()) }).collect()
+        });
+        let e = r.err().unwrap();
+        assert!(e.starts_with("inputs 1..2 run out of guest memory and cannot be split further (a single input)"), "{e}");
+        assert!(is_guest_oom(&e), "the cause is kept: {e}");
+        assert_eq!(rounds, 3);
+        // a split that does not shrink the chunk is refused, not followed
+        let r: Result<Vec<()>, _> = resplit_on_oom(&[(0, 4)], &|lo, _| Some(lo), &mut |t| t.iter().map(|_| Err(OOM.to_string())).collect());
+        assert!(r.err().unwrap().contains("cannot be split further"));
+    }
+
+    #[test]
+    fn the_cut_is_the_cost_midpoint_and_never_inside_a_tracked_transaction() {
+        let flat = vec![1u64; 8];
+        let plain: Vec<(u32, bool)> = (0..8).map(|i| (i / 4, false)).collect();
+        assert_eq!(split_cut(&flat, &plain, 0, 8), Some(4));
+        // costs weigh the cut: the heavy first input stands alone
+        assert_eq!(split_cut(&[100, 1, 1, 1], &plain[..4], 0, 4), Some(1));
+        // one untracked transaction can be cut anywhere
+        let one: Vec<(u32, bool)> = vec![(0, false); 8];
+        assert_eq!(split_cut(&flat, &one, 0, 8), Some(4));
+        // a tracked transaction 2..7 stays whole: the cut moves to its end, else its start
+        let tr: Vec<(u32, bool)> = vec![(0, false), (0, false), (1, true), (1, true), (1, true), (1, true), (1, true), (2, false)];
+        assert_eq!(split_cut(&flat, &tr, 0, 8), Some(7));
+        assert_eq!(split_cut(&flat, &tr, 0, 7), Some(2));
+        // nothing to cut: one input, or one tracked transaction
+        assert_eq!(split_cut(&flat, &tr, 3, 4), None);
+        assert_eq!(split_cut(&flat, &tr, 2, 7), None);
+        // a transaction with one untracked input is not tracked
+        let mixed: Vec<(u32, bool)> = vec![(0, true), (0, true), (0, false), (0, true)];
+        assert_eq!(split_cut(&flat[..4], &mixed, 0, 4), Some(2));
+        // the split pieces of a resplit cover the block
+        let out = resplit_on_oom(&[(0, 8)], &|lo, hi| split_cut(&flat, &tr, lo, hi), &mut |todo| {
+            todo.iter().map(|&(lo, hi)| if hi - lo > 5 && lo == 0 { Err(OOM.to_string()) } else { Ok(()) }).collect()
+        }).unwrap();
+        assert_eq!(out.iter().map(|(b, _)| *b).collect::<Vec<_>>(), vec![(0, 2), (2, 7), (7, 8)]);
     }
 }
 
