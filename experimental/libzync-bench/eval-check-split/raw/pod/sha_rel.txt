@@ -1,0 +1,3 @@
+hazync-host-x86_64-linux-gnu: OK
+hazync-host-x86_64-linux-gnu-cuda: OK
+hazync-verify-x86_64-linux-gnu: OK

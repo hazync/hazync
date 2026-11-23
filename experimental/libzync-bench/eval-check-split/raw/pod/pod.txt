@@ -1,0 +1,7 @@
+NVIDIA RTX PRO 6000 Blackwell Server Edition, 595.112.07, 97887 MiB
+256
+model name	: AMD EPYC 9554 64-Core Processor
+Mem:            1007         161         247           0         598         838
+overlay         150G   21M  150G   1% /
+nsys=/opt/nvidia/nsight-systems/2024.6.2/bin/nsys ncu=/opt/nvidia/nsight-compute/2024.1.1/ncu
+build rc 0

@@ -1,0 +1,39 @@
+cuda 12.8 install	1	0	300.6	21:57:39
+a_warm leaf 170	1	0	36.7	21:58:16
+a_rel leaf 170	1	0	37.2	21:58:53
+a_rel leaf 300000	1	0	116.0	22:00:49
+a_rel leaf 200000	1	0	166.3	22:03:35
+nsys rel 300000	1	0	131.3	22:05:47
+nsys rel 170	1	0	41.6	22:06:29
+ncu rel_evalcheck	1	1	90.1	22:07:59
+ncu rel_stepexec	1	1	89.0	22:09:28
+dump leaf 170	1	101	16.9	22:21:16
+dump leaf 170	2	101	16.1	22:21:33
+cpu test random	1	0	42.8	22:22:15
+cpu test real	1	1	119.7	22:24:15
+cmp_split leaf 300000	1	101	19.7	22:24:35
+cmp_split leaf 300000	2	101	19.7	22:24:55
+cmp_splitim leaf 300000	1	101	19.9	22:25:15
+cmp_splitim leaf 300000	2	101	19.9	22:25:34
+dump leaf 170	1	0	154.3	22:37:59
+cpu test random	1	0	42.3	22:38:42
+cpu test real	1	0	119.6	22:40:41
+cmp_split leaf 300000	1	0	130.7	22:42:52
+cmp_split leaf 200000	1	0	190.0	22:46:02
+b_warm leaf 170	1	0	37.3	22:46:40
+b_stock leaf 300000	1	0	117.2	22:48:37
+b_split leaf 300000	1	0	116.6	22:50:33
+b_stock leaf 200000	1	0	166.0	22:53:19
+b_split leaf 200000	1	0	164.3	22:56:04
+b_rel leaf 300000	1	0	116.2	22:58:00
+nsys stock 300000	1	0	129.1	23:00:09
+nsys split 300000	1	0	128.9	23:02:18
+ncu br_stock_evalcheck	1	1	0.0	23:02:18
+ncu br_split	1	1	0.0	23:02:18
+method-id rel 1	1	0	0.0	23:02:18
+method-id rel 2	1	0	0.0	23:02:18
+method-id rel 3	1	0	0.0	23:02:18
+fx rel 1..2 one process	1	0	45.4	23:03:03
+fx rel 1 alone	1	0	27.1	23:03:31
+fx rel 2 alone	1	0	26.6	23:03:57
+fx rel 1..4 one process	1	0	83.1	23:05:20

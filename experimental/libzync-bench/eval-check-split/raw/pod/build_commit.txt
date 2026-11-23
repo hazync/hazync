@@ -1,0 +1,2 @@
+b3cc5b5c93854206f8458d114a50ae49d4544af7 perf(eval_check): split the generated eval_check chain into kernels (prover-only, experiment)
+7a8079ff663064a3ae1976cfc4990bfa91cf9ef5 perf(eval_check): drop the --inline-mul variants from the build (they broke the poly_mix symbol copy)

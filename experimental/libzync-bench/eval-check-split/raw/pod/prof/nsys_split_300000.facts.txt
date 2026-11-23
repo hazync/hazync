@@ -1,0 +1,18 @@
+kernels 219682  total kernel time 27.215 s
+   10.87%      2.960 s      696x  _poseidon2_rows
+   10.56%      2.875 s       32x  stepAccum
+    9.78%      2.661 s      249x  split_piece4
+    8.86%      2.412 s      249x  split_piece3
+    8.67%      2.358 s      249x  split_piece2
+    8.03%      2.186 s      249x  split_piece1
+    7.73%      2.105 s       63x  parStepExec
+    7.44%      2.024 s       64x  par_stepExec
+    4.97%      1.352 s      249x  split_piece0
+    4.23%      1.151 s    68639x  _CT_NTT
+    4.00%      1.087 s      380x  batch_evaluate_any
+    2.98%      0.812 s    11881x  _poseidon2_fold
+    2.20%      0.598 s       63x  eval_check
+    1.76%      0.479 s      570x  batch_bit_reverse
+    1.59%      0.432 s    20349x  LDE_distribute_powers
+first CUDA runtime call 18.548 s, first kernel 18.682 s, first eval_check 19.158 s, last kernel end 117.197 s, session 117.711 s
+GPU busy (union of kernels) 27.215 s = 27.6% of first..last kernel

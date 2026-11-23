@@ -1,0 +1,2 @@
+compare calls 84 nonzero 0
+cpu split==stock runs 3 of 3; GOOD=1
