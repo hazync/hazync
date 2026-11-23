@@ -2126,7 +2126,7 @@ mod resplit_tests {
         assert!(is_guest_oom(&e), "the cause is kept: {e}");
         assert_eq!(rounds, 3);
         // a split that does not shrink the chunk is refused, not followed
-        let r: Result<Vec<()>, _> = resplit_on_oom(&[(0, 4)], &|lo, _| Some(lo), &mut |t| t.iter().map(|_| Err(OOM.to_string())).collect());
+        let r: Result<Vec<((usize, usize), ())>, _> = resplit_on_oom(&[(0, 4)], &|lo, _| Some(lo), &mut |t| t.iter().map(|_| Err(OOM.to_string())).collect());
         assert!(r.err().unwrap().contains("cannot be split further"));
     }
 
