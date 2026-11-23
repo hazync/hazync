@@ -59,6 +59,8 @@ bigint2-ecdsa = ["dep:risc0-crypto"]
 agg-readslice = []
 # libzync: log per-transaction cycles (TXCYC) in chunks, for fitting the host packer. Measurement only.
 tx-cycles = []
+# TEST ONLY (HAZYNC_HEAP_POISON=1, hazync#794): poison C-heap blocks on free and on reuse (src/c_heap.rs). Moves METHOD_ID.
+heap-poison = ["libzync"]
 # libsecp field backend on the coprocessor. Canonical 8x32 limbs, no conversion. patches/0012.
 field-bigint2 = ["dep:risc0-crypto"]
 # hazync#205 — recover a pubkey's Y from a host HINT and VERIFY it with y^2 == x^3+7. Advice-and-

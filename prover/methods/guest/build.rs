@@ -423,6 +423,9 @@ fn main() {
     assert_eq!(lz_feat, lz_env, "the guest's `libzync` feature and HAZYNC_LIBZYNC disagree: build through \
         methods/build.rs with HAZYNC_LIBZYNC set, not with --features");
     define_if(&mut b, "HAZYNC_NO_SCRIPTS", assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1"));
+    // hazync#794: the libzync guest's C heap recycles freed blocks (src/c_heap.rs, the `libzync` feature); the C++ side
+    // then keeps the legacy sighash cache's key where that free() can clear it (verify_input.cpp, patches/libzync/0101).
+    define_if(&mut b, "HAZYNC_C_HEAP_RECYCLE", lz_env);
     // HAZYNC_NETWORK=signet: Core's SigNet chainparams + CheckSignetBlockSolution (signet.cpp below).
     println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
