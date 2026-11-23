@@ -1,0 +1,122 @@
+diff -ru hzsrc/libzync/src/coinlog.rs trie2/libzync/src/coinlog.rs
+--- hzsrc/libzync/src/coinlog.rs	2026-11-19 10:56:52.894007130 +0100
++++ trie2/libzync/src/coinlog.rs	2026-11-23 23:41:14.668685015 +0100
+@@ -118,10 +118,14 @@
+     o
+ }
+ /// The IVs as the accelerator's state words (the state's big-endian bytes in memory order).
+-#[cfg(target_os = "zkvm")]
++#[cfg(all(target_os = "zkvm", not(any(feature = "ovm_iv", feature = "ovm_nat"))))]
+ static IV_NODE_W: [[u32; 8]; 64] = swapped(&IV_NODE);
+-#[cfg(target_os = "zkvm")]
++#[cfg(all(target_os = "zkvm", not(any(feature = "ovm_iv", feature = "ovm_nat"))))]
+ static IV_SPENT_W: [u32; 8] = swapped(&[IV_SPENT])[0];
++#[cfg(all(target_os = "zkvm", any(feature = "ovm_iv", feature = "ovm_nat")))]
++static IV_NODE_W: [[u32; 8]; 64] = IV_NODE;
++#[cfg(all(target_os = "zkvm", any(feature = "ovm_iv", feature = "ovm_nat")))]
++static IV_SPENT_W: [u32; 8] = IV_SPENT;
+ 
+ // In the zkVM: one accelerated compression on words, written straight into `out` (risc0's sys_sha_compress, exported by
+ // the guest runtime). Outside the zkVM: sha2's compress256 on the same bytes. The host's roots are checked against the
+@@ -131,13 +135,37 @@
+     fn sys_sha_compress(out: *mut [u32; 8], in_state: *const [u32; 8], b1: *const [u32; 8], b2: *const [u32; 8]);
+ }
+ 
+-#[cfg(target_os = "zkvm")]
++#[cfg(all(target_os = "zkvm", not(any(feature = "ovm_iv", feature = "ovm_nat"))))]
+ #[inline(always)]
+ fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
+     unsafe { sys_sha_compress(out, iv, a, b) };
+ }
++// fresh-trie lever (SAME format): OpenVM-native IV state (no input swaps); output still swapped to digest bytes.
++#[cfg(all(target_os = "zkvm", feature = "ovm_iv"))]
++extern "C" { fn ovm_compress_iv(out: *mut [u32; 8], iv_native: *const [u32; 8], a: *const [u32; 8], b: *const [u32; 8]); }
++#[cfg(all(target_os = "zkvm", feature = "ovm_iv"))]
++#[inline(always)]
++fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
++    unsafe { ovm_compress_iv(out, iv, a, b) };
++}
++// fresh-trie NEW FORMAT: a node hashes its children's SHA-256 STATE WORDS as little-endian bytes (no byte swap anywhere).
++#[cfg(all(target_os = "zkvm", feature = "ovm_nat"))]
++extern "C" { fn ovm_compress_nat(out: *mut [u32; 8], iv_native: *const [u32; 8], a: *const [u32; 8], b: *const [u32; 8]); }
++#[cfg(all(target_os = "zkvm", feature = "ovm_nat"))]
++#[inline(always)]
++fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
++    unsafe { ovm_compress_nat(out, iv, a, b) };
++}
+ 
+-#[cfg(not(target_os = "zkvm"))]
++#[cfg(all(not(target_os = "zkvm"), feature = "ovm_nat"))]
++fn compress_w(iv: &[u32; 8], a: &W, b: &W, out: &mut W) {
++    let mut st = *iv;
++    let mut blk = [0u8; 64];
++    for i in 0..8 { blk[4 * i..4 * i + 4].copy_from_slice(&a[i].to_le_bytes()); blk[32 + 4 * i..36 + 4 * i].copy_from_slice(&b[i].to_le_bytes()); }
++    sha2::compress256(&mut st, &[blk.into()]);
++    *out = st;
++}
++#[cfg(all(not(target_os = "zkvm"), not(feature = "ovm_nat")))]
+ fn compress_w(iv: &[u32; 8], a: &W, b: &W, out: &mut W) {
+     let mut st = *iv;
+     let mut blk = [0u8; 64];
+diff -ru hzsrc/libzync/src/ttree.rs trie2/libzync/src/ttree.rs
+--- hzsrc/libzync/src/ttree.rs	2026-11-19 10:56:52.895030641 +0100
++++ trie2/libzync/src/ttree.rs	2026-11-23 23:49:04.730294566 +0100
+@@ -407,6 +407,36 @@
+ /// Split mode (E1 measurement): the digest of one block's update list, which the trie receipt commits and the aggregate
+ /// recomputes from the chunks' keys. SHA-256 over [marks count, inserts count] (u32 LE), each mark (key, spender words
+ /// LE), each insert (key, spent flag byte, spender words LE, value u64 LE).
++/// fresh-trie lever (SAME digest): SHA-256 of a byte string on OpenVM's SHA-256 extension (native-word state).
++#[cfg(all(target_os = "zkvm", feature = "ovm_sha"))]
++pub fn sha256_ovm(b: &[u8]) -> [u8; 32] {
++    extern "C" { fn zkvm_sha256_impl(state: *const u8, input: *const u8, output: *mut u8); }
++    let mut st: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
++    let full = b.len() / 64;
++    let mut blk = [0u32; 16];
++    for i in 0..full {
++        unsafe {
++            core::ptr::copy_nonoverlapping(b.as_ptr().add(64 * i), blk.as_mut_ptr() as *mut u8, 64);
++            zkvm_sha256_impl(st.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8);
++        }
++    }
++    let rest = &b[64 * full..];
++    let mut tail = [0u8; 128];
++    tail[..rest.len()].copy_from_slice(rest);
++    tail[rest.len()] = 0x80;
++    let n = if rest.len() + 9 <= 64 { 64 } else { 128 };
++    tail[n - 8..n].copy_from_slice(&((b.len() as u64) * 8).to_be_bytes());
++    for c in tail[..n].chunks_exact(64) {
++        unsafe {
++            core::ptr::copy_nonoverlapping(c.as_ptr(), blk.as_mut_ptr() as *mut u8, 64);
++            zkvm_sha256_impl(st.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8);
++        }
++    }
++    let mut o = [0u8; 32];
++    for i in 0..8 { o[4 * i..4 * i + 4].copy_from_slice(&st[i].to_be_bytes()); }
++    o
++}
++
+ pub fn list_digest(marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)]) -> [u8; 32] {
+     use sha2::{Digest, Sha256};
+     // One byte buffer, one hash. (A streamed version through a 1 KB stack buffer measured SLOWER, 11-04: +1.5 M on
+@@ -421,5 +451,8 @@
+         for x in sp.unwrap_or([0; 8]) { b.extend_from_slice(&x.to_le_bytes()); }
+         b.extend_from_slice(&v.to_le_bytes());
+     }
++    #[cfg(all(target_os = "zkvm", feature = "ovm_sha"))]
++    return sha256_ovm(&b);
++    #[allow(unreachable_code)]
+     Sha256::digest(&b).into()
+ }
+--- hzsrc/libzync/Cargo.toml	2026-11-19 17:59:38.811214528 +0100
++++ trie2/libzync/Cargo.toml	2026-11-23 23:49:04.731294631 +0100
+@@ -24,6 +24,10 @@
+ hints = []
+ # The coin-liveness zyncAPP's proof format (src/liveness.rs): for zapps/liveness only, never the core verifier.
+ liveness = []
++# fresh-trie experiments (OpenVM): native-IV SHA calls (same format); native-word hashing (NEW format)
++ovm_iv = []
++ovm_nat = []
++ovm_sha = []
+ 
+ [dependencies]
+ sha2 = { version = "0.10", default-features = false, features = ["compress"] }

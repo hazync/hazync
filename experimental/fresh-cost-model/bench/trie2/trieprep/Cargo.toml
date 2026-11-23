@@ -1,0 +1,12 @@
+[package]
+name = "trieprep"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[dependencies]
+libzync = { path = "/root/fresh-bench/trie2/libzync" }
+serde_json = "1"
+hex = "0.4"
+sha2 = "0.10"
+[features]
+nat = ["libzync/ovm_nat"]
