@@ -3,6 +3,7 @@
 //   mode 1 = ECDSA verify (prehash, SEC1 pubkey, compact low-S sig)
 //   mode 2 = BIP340 Schnorr verify
 //   mode 3 = txids (double SHA-256 of stripped txs) + merkle root == header root
+//   mode 4 = every sighash preimage hashed (dSHA, or TapSighash tagged) == its sighash
 //   mode 0 = parse only (baseline: input read + parse cost)
 // Returns a 32-byte digest committed as the public output.
 fn rd_u32(b: &[u8], o: &mut usize) -> usize {
@@ -54,6 +55,30 @@ fn bench_run(input: &[u8]) -> [u8; 32] {
     }
     let _ = sc_at;
     let mut out = [0u8; 32];
+    if mode == 4 {
+        // skip txs + header root to reach the preimage section
+        let mut p = tx_at;
+        for _ in 0..n_tx { let l = rd_u32(b, &mut p); p += l; }
+        p += 32;
+        let n_pre = rd_u32(b, &mut p);
+        let tag = sha2::Sha256::digest(b"TapSighash");
+        let mut acc = [0u8; 32];
+        for _ in 0..n_pre {
+            let k = b[p]; p += 1;
+            let l = rd_u32(b, &mut p);
+            let data = &b[p..p + l]; p += l;
+            let want = &b[p..p + 32]; p += 32;
+            let got: [u8; 32] = if k == 1 {
+                let mut h = sha2::Sha256::new();
+                h.update(&tag[..]); h.update(&tag[..]); h.update(data);
+                h.finalize().into()
+            } else { dsha(data) };
+            assert_eq!(&got[..], want, "sighash mismatch");
+            for j in 0..32 { acc[j] ^= got[j]; }
+        }
+        out = acc;
+        checked = n_pre as u32;
+    }
     if mode == 3 {
         let mut level: Vec<[u8; 32]> = Vec::with_capacity(n_tx);
         let mut p = tx_at;

@@ -29,6 +29,16 @@ async fn main() {
             client.verify(&proof, pk.verifying_key(), None).expect("verify");
             println!("RESULT vm=sp1 mode={mode} action=prove secs={secs:.2} out={}", hex(proof.public_values.as_slice()));
         }
+        "compress" => {
+            // core proof + recursion down to ONE constant-size STARK (what a block chain would carry)
+            let pk = client.setup(ELF).await.unwrap();
+            let t = Instant::now();
+            let proof = client.prove(&pk, stdin).compressed().await.unwrap();
+            let secs = t.elapsed().as_secs_f64();
+            client.verify(&proof, pk.verifying_key(), None).expect("verify");
+            let sz = bincode::serialize(&proof).map(|v| v.len()).unwrap_or(0);
+            println!("RESULT vm=sp1 mode={mode} action=compress secs={secs:.2} proof_bytes={sz} out={}", hex(proof.public_values.as_slice()));
+        }
         _ => panic!("action"),
     }
 }
