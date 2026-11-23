@@ -19,7 +19,9 @@
 // named is gone, whatever later lands there. It also keys on hz_tx_generation, which every script entry point bumps.
 //
 // Classes (16-byte header included): 16-byte steps up to 2 KiB, then four per power of two up to 1 GiB (at most 25%
-// slack). A block above 1 GiB is never recycled, as before. Header: [class, capacity, next (while free), unused].
+// slack). A block above 1 GiB is never recycled, as before. Header: [class, capacity, next, state], state = FREE_MARK
+// while the block is on a list. A double free, or a free of a pointer this heap never handed out, panics (no receipt)
+// instead of putting a block on a list twice: the bump allocator made both harmless, recycling would not.
 use std::alloc::{alloc as ralloc, Layout};
 
 pub const HDR: usize = 16;
@@ -29,6 +31,8 @@ const K_MIN: u32 = 11; // octaves 2^11 .. 2^29, four classes each
 const K_MAX: u32 = 29;
 const N_CLASSES: usize = N_SMALL + 1 + 4 * (K_MAX - K_MIN + 1) as usize;
 const UNPOOLED: usize = usize::MAX;
+const FREE_MARK: usize = 0x4652_4545; // "FREE"
+const LIVE_MARK: usize = 0x4c49_5645; // "LIVE"
 
 static mut FREE: [*mut u8; N_CLASSES] = [core::ptr::null_mut(); N_CLASSES];
 
@@ -72,6 +76,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     if c != UNPOOLED && !free[c].is_null() {
         let base = free[c];
         free[c] = *word(base, 2) as *mut u8;
+        *word(base, 3) = LIVE_MARK;
         #[cfg(feature = "heap-poison")]
         core::ptr::write_bytes(base.add(HDR), 0x5a, cap - HDR);
         return base.add(HDR);
@@ -83,6 +88,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     }
     *word(base, 0) = c;
     *word(base, 1) = cap;
+    *word(base, 3) = LIVE_MARK;
     base.add(HDR)
 }
 
@@ -96,6 +102,8 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
         key[0] = core::ptr::null();
     }
     let base = ptr.sub(HDR);
+    assert!(*word(base, 3) == LIVE_MARK, "C heap: free() of a block that is not live (a double free?)");
+    *word(base, 3) = FREE_MARK;
     let c = *word(base, 0);
     #[cfg(feature = "heap-poison")]
     core::ptr::write_bytes(ptr, 0xa5, *word(base, 1) - HDR);
