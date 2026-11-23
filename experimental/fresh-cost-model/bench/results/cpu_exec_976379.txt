@@ -1,0 +1,15 @@
+# Executor-only (CPU, hazync-coord), block 976,379: 7,060 ECDSA / 899 Schnorr / 4,395 txs. 23.11.2026
+# Units differ per VM (risc0 cycles, SP1 instructions+syscalls/gas, OpenVM instructions + "cost") -- NOT comparable across VMs.
+risc0 3.1.0   mode0 parse   user_cycles=2,555,311
+risc0 3.1.0   mode1 ecdsa   user_cycles=2,110,719,342  padded=2,241,855,488  segments=2138  exec_secs=108.8
+risc0 3.1.0   mode2 schnorr user_cycles=245,586,729    segments=252  exec_secs=12.8
+risc0 3.1.0   mode3 txid+mk user_cycles=19,052,461     segments=24   exec_secs=1.1
+sp1 6.10.0    mode0 parse   instructions=1,393
+sp1 6.10.0    mode1 ecdsa   instructions=779,111,074  syscalls=5,417,063  gas=822,103,353  exec_secs=33.0
+sp1 6.10.0    mode2 schnorr instructions=34,109,861   syscalls=696,941    gas=53,464,743   exec_secs=3.7
+sp1 6.10.0    mode3 txid+mk instructions=21,956,379   syscalls=65,162     gas=37,593,226   exec_secs=1.0
+openvm 2.1.0  mode0 parse   instructions=5,119        cost=14,996,664
+openvm 2.1.0  mode1 ecdsa   instructions=175,049,997  cost=8,771,764,643   wall=18.8s (incl. build check)
+openvm 2.1.0  mode2 schnorr NOT SUPPORTED (no BIP340 in OpenVM)
+openvm 2.1.0  mode3 txid+mk instructions=16,099,985   cost=880,986,088
+# All outputs agree: 7060 ECDSA ok, 899 Schnorr ok (risc0, sp1), merkle root == header (all three).
