@@ -152,6 +152,12 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // (review 11-14: only the chunk path did, through hz_cache_reset).
 extern "C" { unsigned hz_tx_generation = 0; }
 static inline void hz_new_script_tx() { ++hz_tx_generation; }
+// hazync#794: the libzync guest's C heap recycles freed blocks (src/c_heap.rs), so a vin / vout address can name two
+// buffers in turn. The legacy sighash cache stores the two it was filled from here, and the guest's free() clears [0]
+// when either is freed, which makes the cache refill: an entry never outlives the buffers it was keyed by.
+#ifdef HAZYNC_C_HEAP_RECYCLE
+extern "C" { const void* hz_lsh_key[2] = {nullptr, nullptr}; }
+#endif
 #ifdef HAZYNC_TX_ONCE
 #include <map>
 // libzync EXPERIMENT: parse each transaction ONCE per guest run.
@@ -169,11 +175,12 @@ struct HzCachedTx {
     unsigned char head[32], tail[32];   // the hit guard: first / last 32 bytes (see hz_same_bytes)
     std::unique_ptr<const CTransaction> tx;
 };
-// The hit guard. The key is (pointer, length), and risc0's default guest heap is a BUMP allocator:
-// dealloc never returns memory, so within one guest run no address is ever handed out twice and the
-// key alone identifies a buffer. (This guest enables no other allocator; `heap-embedded-alloc` would
-// break that and must not be combined with tx-once.) So a full compare is redundant, and it cost 9%
-// of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
+// The hit guard. The key is (pointer, length) of a buffer the Rust side passes in (the witness), and
+// Rust's guest heap is risc0's BUMP allocator: dealloc never returns memory, so within one guest run no
+// Rust address is ever handed out twice and the key alone identifies a buffer. (The C heap recycles,
+// src/c_heap.rs, hazync#794: no C-heap buffer is ever a key here. Rust's must stay bump, or these
+// caches need a content key; main() checks it at start-up.) So a full compare is redundant, and it cost
+// 9% of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
 // allocator change -- not the soundness argument.
 static void hz_remember(unsigned char* head, unsigned char* tail, const uint8_t* p, unsigned len) {
     const unsigned k = len < 32 ? len : 32;
@@ -187,7 +194,7 @@ static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, 
 // libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
 // chunk calls hz_cache_reset before EVERY transaction, so an entry never outlives the transaction it was
 // made for. (pointer, length) identifies a buffer only while no address is reused: the guest checks at
-// start that its allocator never reuses one (main.rs), which every address-keyed cache here relies on.
+// start that Rust's allocator, which every buffer keyed here comes from, never reuses one (main.rs).
 #ifdef HAZYNC_RAW_TXID
 static void hz_dsha_parts(uint256& out, const unsigned char* a, size_t na, const unsigned char* b, size_t nb,
                           const unsigned char* c, size_t nc) {

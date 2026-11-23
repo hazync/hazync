@@ -14,6 +14,7 @@ sighash and merkle root depends on them, so a mistake fails a block rather than 
   HAZYNC_H160_MEMO       script/interpreter.cpp  memo of HASH160 over 33-byte keys (full key compared)
   HAZYNC_LEGACY_SIGHASH  script/interpreter.cpp  legacy SIGHASH_ALL from preserialised slices + midstate
   HAZYNC_AGG_LITE        script/interpreter.cpp  the legacy-sighash cache also keys on the tx generation
+  HAZYNC_C_HEAP_RECYCLE  script/interpreter.cpp  the legacy-sighash cache's key is cleared when its buffers are freed
 
 Measured motivation for each (block 962,000) is in experimental/libzync-bench/hook/apply_round*.py,
 which produced these edits and are kept only as history. Regenerate with scripts/libzync-base.sh.
@@ -410,7 +411,7 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
                      else if (opcode == OP_HASH256)
                          CHash256().Write(vch).Finalize(vchHash);
                      popstack(stack);
-@@ -1338,6 +1367,101 @@
+@@ -1338,6 +1367,113 @@
      }
  };
  
@@ -441,6 +442,11 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
 +#ifdef HAZYNC_AGG_LITE
 +extern "C" unsigned hz_tx_generation;
 +#endif
++#ifdef HAZYNC_C_HEAP_RECYCLE
++/* hazync#794: the guest's C heap recycles freed blocks, so a vin / vout address can name two buffers in turn.
++ * [0], [1] = the buffers this cache was filled from; the guest's free() clears [0] when either is freed. */
++extern "C" const void* hz_lsh_key[2];
++#endif
 +
 +/** SIGHASH_ALL legacy sighash from preserialised bytes; same digest as Core's serialiser. */
 +template <class T>
@@ -454,12 +460,19 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
 +#ifdef HAZYNC_AGG_LITE
 +        || c.gen != hz_tx_generation
 +#endif
++#ifdef HAZYNC_C_HEAP_RECYCLE
++        || hz_lsh_key[0] == nullptr
++#endif
 +        ) {
 +#ifdef HAZYNC_AGG_LITE
 +        c.gen = hz_tx_generation;
 +#endif
 +        c.vin_data = txTo.vin.data();
 +        c.vout_data = txTo.vout.data();
++#ifdef HAZYNC_C_HEAP_RECYCLE
++        hz_lsh_key[0] = c.vin_data;
++        hz_lsh_key[1] = c.vout_data;
++#endif
 +        c.n_in = n;
 +        c.n_out = txTo.vout.size();
 +        c.version = uint32_t(txTo.version);
@@ -512,7 +525,7 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
  /** Compute the (single) SHA256 of the concatenation of all prevouts of a tx. */
  template <class T>
  uint256 GetPrevoutsSHA256(const T& txTo)
-@@ -1623,6 +1747,12 @@
+@@ -1623,6 +1759,12 @@
          }
      }
  

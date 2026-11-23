@@ -250,6 +250,13 @@ fn main() {
     if lever("HAZYNC_TX_CYCLES") {
         features.push("tx-cycles".to_string());
     }
+    // TEST ONLY (hazync#794): fill every block the C heap frees or recycles with a pattern, so a read of freed or
+    // uninitialised C-heap memory changes a verdict or a journal instead of reading what the bump allocator left there.
+    println!("cargo:rerun-if-env-changed=HAZYNC_HEAP_POISON");
+    if lever("HAZYNC_HEAP_POISON") {
+        assert!(libzync, "HAZYNC_HEAP_POISON needs HAZYNC_LIBZYNC (only the libzync guest recycles C-heap blocks)");
+        features.push("heap-poison".to_string());
+    }
     if libzync {
         features.push(LIBZYNC_FEATURE.to_string());
     }
