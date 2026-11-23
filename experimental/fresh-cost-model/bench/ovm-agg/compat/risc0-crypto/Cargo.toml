@@ -1,0 +1,7 @@
+[package]
+name = "risc0-crypto"
+version = "0.1.0-rc.1"
+edition = "2021"
+[dependencies]
+openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }

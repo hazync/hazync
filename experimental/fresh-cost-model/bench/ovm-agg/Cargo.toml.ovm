@@ -1,0 +1,45 @@
+[package]
+name = "ovmagg"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[features]
+default = ["serde", "libzync", "coinlog", "utxohash", "trie"]
+serde = []
+# libzync WITHOUT the risc0-coprocessor levers (bigint2-ecdsa, liftx-hint, field-bigint2, scalar-inv-accel): their
+# OpenVM counterparts are the libsecp hooks (bench/ovm-secp/apply_hook.py) and batch_ecdsa_ovm.rs.
+libzync = ["agg-readslice", "batch-ecdsa", "tx-once", "swiftsync", "agg-lite", "fast-commit"]
+agg-readslice = []
+batch-ecdsa = []
+tx-once = []
+swiftsync = ["batch-ecdsa"]
+agg-lite = ["swiftsync", "tx-once"]
+fast-commit = []
+coinlog = ["libzync"]
+utxohash = ["coinlog"]
+trie = ["coinlog"]
+bigint2-ecdsa = []
+liftx-hint = []
+field-bigint2 = []
+scalar-inv-accel = []
+liftx-accel = []
+msm = []
+field-bench = []
+tx-cycles = []
+signet = []
+regtest = []
+txlog = []
+test-lineage = []
+xver-v3_0_5 = []
+xver-v3_1_0 = []
+[dependencies]
+risc0-zkvm = { path = "COMPAT/risc0-zkvm" }
+risc0-crypto = { path = "COMPAT/risc0-crypto" }
+sha2 = { path = "COMPAT/sha2", features = ["compress"] }
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", features = ["std"] }
+openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }
+[build-dependencies]
+cc = "1"
