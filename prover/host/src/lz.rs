@@ -683,9 +683,14 @@ pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
     Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim), collected })
 }
 
+/// A chunk's input range `lo..hi` (indices into the block's inputs).
+pub(crate) type Span = (usize, usize);
+/// One chunk executed: its FakeReceipt and the guest's captured stdout.
+pub(crate) type ChunkExec = (risc0_zkvm::Receipt, Vec<u8>);
+
 /// One chunk executed (collect mode unless the $HAZYNC_LZ_HINTS bundle has an entry for exactly `lo..hi`): a
 /// FakeReceipt carrying its claim and journal, plus the guest's captured stdout (BATCHREC lines in collect mode).
-pub(crate) fn exec_chunk(w: &BlockWitness, lo: usize, hi: usize) -> Result<(risc0_zkvm::Receipt, Vec<u8>), String> {
+pub(crate) fn exec_chunk(w: &BlockWitness, lo: usize, hi: usize) -> Result<ChunkExec, String> {
     use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
     let mut log = Vec::new();
     let session = {
@@ -703,9 +708,9 @@ pub(crate) fn exec_chunk(w: &BlockWitness, lo: usize, hi: usize) -> Result<(risc
 }
 
 /// `exec_chunk` for every chunk at once, `threads` at a time; one result per chunk, in order.
-pub(crate) fn execute_chunks_parallel_res(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
-    -> Vec<Result<(risc0_zkvm::Receipt, Vec<u8>), String>> {
-    type R = Result<(risc0_zkvm::Receipt, Vec<u8>), String>;
+pub(crate) fn execute_chunks_parallel_res(w: &BlockWitness, bounds: &[Span], threads: usize)
+    -> Vec<Result<ChunkExec, String>> {
+    type R = Result<ChunkExec, String>;
     let next = std::sync::atomic::AtomicUsize::new(0);
     let done: std::sync::Mutex<Vec<Option<R>>> = std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
     std::thread::scope(|s| {
@@ -752,8 +757,8 @@ pub(crate) fn is_guest_oom(msg: &str) -> bool {
 pub(crate) fn resplit_on_oom<T>(
     bounds: &[(usize, usize)],
     split: &dyn Fn(usize, usize) -> Option<usize>,
-    exec: &mut dyn FnMut(&[(usize, usize)]) -> Vec<Result<T, String>>,
-) -> Result<Vec<((usize, usize), T)>, String> {
+    exec: &mut dyn FnMut(&[Span]) -> Vec<Result<T, String>>,
+) -> Result<Vec<(Span, T)>, String> {
     enum Node<T> { Todo((usize, usize)), Done((usize, usize), T) }
     let mut nodes: Vec<Node<T>> = bounds.iter().map(|&b| Node::Todo(b)).collect();
     loop {
@@ -789,8 +794,7 @@ pub(crate) fn resplit_on_oom<T>(
 /// The block's collect pass with `resplit_on_oom`: every chunk executed in parallel, and a chunk that runs out of
 /// guest memory re-split and run again. Returns the final chunks (the layout to prove) with each one's execution.
 /// A failure that is not out-of-memory panics as `execute_chunks_parallel` does.
-pub(crate) fn collect_chunks(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
-    -> Vec<((usize, usize), (risc0_zkvm::Receipt, Vec<u8>))> {
+pub(crate) fn collect_chunks(w: &BlockWitness, bounds: &[Span], threads: usize) -> Vec<(Span, ChunkExec)> {
     let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
     let split = |lo: usize, hi: usize| crate::chunks::split_chunk(w, costs.get_or_init(|| crate::chunks::input_costs(w)), lo, hi);
     resplit_on_oom(bounds, &split, &mut |todo| execute_chunks_parallel_res(w, todo, threads))
@@ -1198,7 +1202,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         let bp = format!("{out}/bundle_{h}.lzb");
         let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
         let sig_blob = |log: &[u8]| -> Vec<u8> {
-            libzync::host::sig_records(&String::from_utf8_lossy(log)).iter().flat_map(|r| libzync::host::sig_hint(r)).collect()
+            libzync::host::sig_records(&String::from_utf8_lossy(log)).iter().flat_map(libzync::host::sig_hint).collect()
         };
         if !bounds.is_empty() {
             let done = collect_chunks(&w, &bounds, hint_threads());
