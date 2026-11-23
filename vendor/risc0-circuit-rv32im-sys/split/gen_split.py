@@ -20,9 +20,12 @@ the domain):
     from the carry; the writer also stores it). Carry columns are reused once their value is dead.
 The last piece computes check[] exactly as the stock eval_check kernel does.
 
-Options: --inline-mul also #undefs __CUDACC_RDC__ before sppark's baby_bear.hpp is included, which makes
+Options (⚠ see below): --inline-mul also #undefs __CUDACC_RDC__ before sppark's baby_bear.hpp is included, which makes
 FpExt*FpExt and FpExt*Fp inline instead of __device__ __noinline__ calls (baby_bear.hpp:398). --keep-calls with
 no --cuts reproduces the stock chain (separate __noinline__ functions) in one TU, to measure --inline-mul alone.
+⚠ MEASURED 23.11.2026: a binary holding an --inline-mul TU failed the stock cudaMemcpyToSymbol(poly_mix) with
+"invalid argument" (undefining __CUDACC_RDC__ evidently changes how that TU registers with the runtime), so
+those variants are not built; inline FpExt multiplication needs a source rewrite, not the macro.
 
 Usage:
   gen_split.py cuda <kernels/cuda dir> <out.cu> --prefix split --cuts 18,14,10,4 [--inline-mul] [--keep-calls]

@@ -32,10 +32,8 @@
 
 extern "C" const char* split_eval_check(Fp*, const Fp*, const Fp*, const Fp*, const Fp*, const Fp*,
                                         const Fp&, uint32_t, uint32_t, size_t);
-extern "C" const char* splitim_eval_check(Fp*, const Fp*, const Fp*, const Fp*, const Fp*, const Fp*,
-                                          const Fp&, uint32_t, uint32_t, size_t);
-extern "C" const char* chainim_eval_check(Fp*, const Fp*, const Fp*, const Fp*, const Fp*, const Fp*,
-                                          const Fp&, uint32_t, uint32_t, size_t);
+// (splitim/chainim, the --inline-mul variants, are not built: #undef __CUDACC_RDC__ in their TUs made the
+// stock cudaMemcpyToSymbol(poly_mix) fail with "invalid argument" in the same binary, measured 23.11.2026.)
 
 namespace risc0::circuit::rv32im_v2::cuda {
 
@@ -90,8 +88,6 @@ const char* stock_eval_check(Fp* check, const Fp* ctrl, const Fp* data, const Fp
 
 split_fn variant_fn(const std::string& v) {
   if (v == "split") return split_eval_check;
-  if (v == "splitim") return splitim_eval_check;
-  if (v == "chainim") return chainim_eval_check;
   return nullptr;
 }
 
