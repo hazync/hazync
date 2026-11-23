@@ -7,6 +7,10 @@ extern crate alloc;
 pub mod utreexo_roots {
     pub use libzync::utreexo_roots::*;
 }
+/// libzync's compact-size reader, under the name step.rs uses for it.
+pub mod facts {
+    pub use libzync::facts::*;
+}
 #[path = "../../../../prover/zyncapps/methods/utreexo-tip/src/step.rs"]
 pub mod step;
 /// The tip mode's production witness source (host side, UTREEXO_ZAPP.md §10.5.1): the compact forest and the source

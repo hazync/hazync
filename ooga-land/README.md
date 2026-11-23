@@ -26,8 +26,7 @@ public/fonts/          Schibsted Grotesk + Spline Sans Mono (.woff2), SIL OFL 1.
   `public/` at `/ooga/`, taken from a **pinned commit of this repository's `main`**. Its sync tool
   records the commit and the sha256 of every file, and its pre-deploy check refuses a copy that differs
   from the pin. So what is served is always a revision of this directory that anyone can read here.
-- **Owner and operator:** the Hazync maintainer (GitHub `defenwycke`, for the `hazync` organisation),
-  who also runs hazync.org. Security reports: see the repository's `SECURITY.md`.
+- **Run by:** me (GitHub `defenwycke`, for the `hazync` organisation); I also run hazync.org. Security reports: see the repository's `SECURITY.md`.
 - **Licence:** the code is under the repository's MIT licence ([`../LICENSE`](../LICENSE)); there is
   no separate licence file for this directory. The fonts are the exception: SIL OFL 1.1, with their
   licence in `public/fonts/OFL.txt` (also listed in `THIRD_PARTY_NOTICES.md`).

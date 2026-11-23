@@ -28,6 +28,29 @@ declare -A EXCLUDED=(
   [build-release.sh]="release build tool, not a test"
 )
 
+# tests_run_via_path_include <crate dir>: prints the including crates and succeeds when every .rs file under
+# <dir>/src that holds a #[test] is #[path]-included (the path resolved, not matched by name) by a crate under
+# zapps/<name>/ whose zapps/<name>/test.sh runs `cargo test --release --manifest-path ./<crate>/Cargo.toml`.
+tests_run_via_path_include() {
+  local d=$1 f inc p crate z m found all=""
+  while IFS= read -r f; do
+    found=""
+    while IFS= read -r inc; do
+      while IFS= read -r p; do
+        [ "$(realpath -m "$(dirname "$inc")/$p")" = "$(realpath -m "$f")" ] || continue
+        crate=$(dirname "$inc"); while [ "$crate" != . ] && [ ! -f "$crate/Cargo.toml" ]; do crate=$(dirname "$crate"); done
+        z=zapps/$(cut -d/ -f2 <<<"$crate"); m=".${crate#"$z"}/Cargo.toml"
+        if [ "$crate" != . ] && grep -qsF -- "cargo test --release --manifest-path $m" "$z/test.sh" \
+           && grep -rqsF 'zapps/*/test.sh' "$WF"; then found="$crate"; fi
+      done < <(sed -n 's/^[[:space:]]*#\[path *= *"\([^"]*\)"\].*/\1/p' "$inc")
+    done < <(git ls-files 'zapps/*.rs' | xargs grep -lsF -- "$(basename "$f")" 2>/dev/null)
+    [ -n "$found" ] || return 1
+    all="$all $found"
+  done < <(grep -rls --include='*.rs' '#\[test\]' "$d/src")
+  [ -n "$all" ] || return 1
+  tr ' ' '\n' <<<"$all" | sed '/^$/d' | sort -u | paste -sd' ' -
+}
+
 echo "== 1. every Rust crate that has tests is run by CI =="
 while read -r manifest; do
   d=$(dirname "$manifest")
@@ -54,7 +77,12 @@ while read -r manifest; do
       else bad "$d contains #[test] but $z/test.sh does not run them (cargo test --release --manifest-path $m), or no workflow runs zapps/*/test.sh"; fi
       continue ;;
   esac
-  if grep -rqs -- "--manifest-path $d/Cargo.toml" "$WF"; then ok "$d has tests and CI runs them"
+  # A GUEST'S SHARED FILE IS TESTED WHERE IT IS INCLUDED. A guest crate cannot run `cargo test` natively, so a rules
+  # file such as prover/zyncapps/methods/utreexo-tip/src/step.rs is #[path]-included by a native crate in the zAPP's
+  # own module (zapps/utreexo/tip-step), whose test.sh runs it; the file's own #[cfg(test)] module runs THERE. Accepted
+  # only when EVERY file of $d that holds a #[test] is so included by a zapps/ crate that its zAPP's test.sh runs.
+  if covered=$(tests_run_via_path_include "$d"); then ok "$d has tests and CI runs them (#[path]-included by $covered)"
+  elif grep -rqs -- "--manifest-path $d/Cargo.toml" "$WF"; then ok "$d has tests and CI runs them"
   # prover/host's tests need a libzync guest, so they run inside the reproducible container, from
   # scripts/libzync/ci/build-hosts.sh (named by the libzync-hosts job), as `cargo test -p host`.
   elif [ "$d" = prover/host ] && grep -qs 'cargo test .*-p host' scripts/libzync/ci/build-hosts.sh \

@@ -90,11 +90,11 @@ On a build box, from the commit being deployed:
 cargo build --release --manifest-path zapps/utreexo/cli/Cargo.toml --bin zapp-utreexo
 docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile .   # as CI does
 mkdir -p elf && docker run --rm -v "$PWD/elf:/out" hazync-libzync-repro cp /root/libzync-elf/zyncapp-utreexo-tip.bin /out/
-sha256sum elf/zyncapp-utreexo-tip.bin    # must be dd9d09bd0ea181f2d8518a330cd20820754e2362c094763d3b23e80724b32250 (LIBZYNC_IDS)
+sha256sum elf/zyncapp-utreexo-tip.bin    # must be 9c5c04c61e6e0bf5fe29e6f727d1c9a61af411d8070224a09f7c08a0fe5c372c (LIBZYNC_IDS)
 ```
 
 On hazync-proof, as root (copy the files above, `prover/fetch_block_rpc.py`, the two unit files here and a base receipt:
-`zapps/utreexo/vectors/mainnet-3.receipt` is a real base proof of H = 3 under the pinned base image `27bea7da`):
+`zapps/utreexo/vectors/mainnet-3.receipt` is a real base proof of H = 3 under the pinned base image `00b2d1e8`):
 
 ```sh
 install -d /opt/hazync-utreexo/bin /var/lib/hazync-utreexo
@@ -103,7 +103,7 @@ install -m644 zyncapp-utreexo-tip.bin /opt/hazync-utreexo/bin/
 cp hazync-utreexo-follow.service hazync-utreexo-follow.timer /etc/systemd/system/ && systemctl daemon-reload
 # the unit's environment, for the manual steps below
 E="UTREEXO_DIR=/var/lib/hazync-utreexo UTREEXO_BIN=/opt/hazync-utreexo/bin ELF=/opt/hazync-utreexo/bin/zyncapp-utreexo-tip.bin
-   WANT_ELF=dd9d09bd0ea181f2d8518a330cd20820754e2362c094763d3b23e80724b32250 CORE=/var/lib/hazync-lz/spine/spine.bin
+   WANT_ELF=9c5c04c61e6e0bf5fe29e6f727d1c9a61af411d8070224a09f7c08a0fe5c372c CORE=/var/lib/hazync-lz/spine/spine.bin
    HAZYNC_RPC_COOKIE=/var/lib/bitcoind/.cookie ALLOW_DEMO=1"
 export PATH=/usr/local/bin:$PATH    # bitcoin-cli is in /usr/local/bin, not on a non-interactive ssh shell's PATH
 env $E /opt/hazync-utreexo/bin/hazync-utreexo-follow --init

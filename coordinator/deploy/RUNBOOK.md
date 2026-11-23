@@ -705,7 +705,7 @@ the phone once when a check starts failing, at most hourly while it lasts, and o
 | `check-continuity.py` | coordinator | every 10 min | a block from 1 to the spine's tip has no record of its own, a seam does not link (tip hash or boundary digest), block 1 does not start at genesis, or the last block does not end on the spine's tip |
 | `check-proofs.py` | coordinator | nightly 04:17 UTC | a stored proof no longer hashes to the receipt that was accepted, no longer verifies, or verifies to a different range than its record |
 | `check-unit-drift.sh` | coordinator | nightly 06:10 UTC | a live `*.conf` drop-in, or an `Environment=` key the units actually run with, appears in no repo file and is not listed in `unit-drift-allow.txt` |
-| `hazync-check-disk.sh` | coordinator | hourly :49 UTC | free space on `/srv/bulk` or `/` falls below `HAZYNC_DISK_FLOOR_GB` (500 GB) — ~55 days of warning at the ~9 GB/day a tip-following bridge writes |
+| `hazync-check-disk.sh` | coordinator | hourly :49 UTC | free space on `/srv/bulk` or `/` falls below `HAZYNC_DISK_FLOOR_GB` (500 GB) — ~55 days of warning at the ~9 GB/day a tip-following bridge writes. ⚠ hazync-coord (one 2 TB disk, 916 GB node) runs 200 GB from a box-local `floor.conf` drop-in; see `unit-drift-allow.txt` |
 | `hazync-check-board-progress.sh` | coordinator | every 20 min :03,:23,:43 UTC | `progress.proven` has not risen for `BOARD_IDLE_ALERT_SECS` (2 h) **while the board still has work**. ⛔ The gap this closes: 2026-10-06, the board sat idle for EIGHT HOURS with every other check green, because none of them asks whether work is LANDING. ⚠ Silent when nothing is claimable — an idle board with no work is finished, not broken |
 | `hazync-check-breakers.sh` | coordinator | every 15 min :06,:21,:36,:51 UTC | a self-latching breaker file in `HAZYNC_BREAKER_PATHS` exists, meaning the service it guards is off and will stay off until a human deletes it. ⛔ Nothing else reports this: a unit skipped by `ConditionPathExists=` returns `Result=success`, so `OnFailure=` never fires. `hazync-sponsor-bot` latched on 2026-10-03 after four HTTP 503s and sat idle for two days having sent **zero** alerts |
 
@@ -743,6 +743,10 @@ install -m 644 coordinator/deploy/hazync-check-disk.{service,timer} /etc/systemd
 systemctl daemon-reload
 systemctl start hazync-check-disk.service          # first run: read it in the journal
 systemctl enable --now hazync-check-disk.timer
+# ⚠ hazync-coord ONLY (one 2 TB disk; 500 GB free is a quarter of it and paged 618 hours running):
+#   mkdir -p /etc/systemd/system/hazync-check-disk.service.d
+#   printf '[Service]\nEnvironment=HAZYNC_DISK_FLOOR_GB=200\n' > /etc/systemd/system/hazync-check-disk.service.d/floor.conf
+#   systemctl daemon-reload && systemctl start hazync-check-disk.service
 
 # is anybody proving? (hazync#650). ⛔ EVERY OTHER CHECK ASKS WHETHER A SERVICE IS UP, NOT WHETHER
 # WORK IS LANDING. On 2026-10-06 the board sat idle for eight hours with all of the above green.

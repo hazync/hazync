@@ -1,7 +1,7 @@
 # zyncAPP: a proven SwiftSync hints file (design, #722)
 
 Status: design APPROVED 2026-11-14; built (§10: what exists, measured, tested) on the U0 undo commitment (UNDO.md), and
-released in v0.27.0 (20.11.2026), image `1894f12e`. Real proofs only at H = 2 and 3 so far: treat it as early.
+released in v0.27.0 (20.11.2026), image `1894f12e`; since 21.11.2026 (strict compact sizes, v0.28) `11c72c44`. Real proofs only at H = 2 and 3 so far: treat it as early.
 
 SwiftSync was originally proposed by Ruben Somsen; the hints file and block-undo formats are specified in the SwiftSync
 BIP drafts
@@ -189,7 +189,7 @@ and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as
 ## 10. Built (2026-11-14)
 
 **Code.** `libzync/src/hints.rs` (the derivation and the Elias-Fano encoder/strict decoder, shared by guest and host),
-`prover/zyncapps/methods/hints` (the guest; published id `1894f12e…`, the `zyncapp-hints` line of `reproduce/LIBZYNC_IDS`),
+`prover/zyncapps/methods/hints` (the guest; pinned id `11c72c44…` since 21.11.2026, before it `1894f12e…`, the `zyncapp-hints` line of `reproduce/LIBZYNC_IDS`),
 `prover/zyncapps/host/src/hints_host.rs` + `hints-prove` / `hints-verify`, `zapps/hints/src/lib.rs` (the
 verifier for CLI, WASM, C ABI), `scripts/libzync/hints_ref.py` (an independent generator written from hintsfile.md),
 `prover/zyncapps/hints-crate-ref` (the `hintsfile` crate 0.2.0 as a second reference, test only).
@@ -239,7 +239,8 @@ by a proof. Proving the core further on CPU (~16 min a block here) was not attem
   a truncated file, a non-canonical re-encoding, the file for H = 2, a tampered undo file, another hash or height at H,
   a receipt of another image, an untrusted core image, `RISC0_DEV_MODE` set; H = 2 needs `--expect-tip` for T.
 
-**Pinned** (review H2): `zyncapp-hints` `1894f12e…` from the reproducible build's steps on hazync-coord (the three
+**Pinned** (review H2): `zyncapp-hints` `11c72c44…` since 21.11.2026 (the block walk reads compact sizes as Core does,
+with libzync::facts' reader: two agreeing `reproduce/libzync.Dockerfile` builds of `cffa2cbb` on hazync-coord); before it `1894f12e…` from the reproducible build's steps on hazync-coord (the three
 existing ids reproduced unchanged), with CI's `reproducible-image-id` as the second build; every tool trusts that id
 (`zapp_hints::HINTS_IMAGE_ID` in `zapps/hints`; `zyncapp hints-verify` too).
 
