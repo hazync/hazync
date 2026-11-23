@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run 2, arm 3 ON the pod: Hazync's OWN product guest (release v0.26.1 CUDA host, image 46666b6f) proving block
+# Run 2, arm 3 ON the pod: Hazync's OWN product guest (release v0.26.0 CUDA host; v0.26.1/v0.27.0 Linux CUDA hosts abort, stale sppark objects, image 46666b6f) proving block
 # 976,379 on this ONE card, the same steps as experimental/libzync-bench/gpu/gpu-libzync-multi.sh with N=1:
 # hints + execute check, every chunk, then the aggregate (trie update proved first). Coin log / trie around the
 # block are MODELLED (cl_synth_around, from the block's spends + hz_txcounts.txt), as in the 962,000 runs:
@@ -7,7 +7,7 @@
 cd /workspace; OUT=/workspace/hz; mkdir -p $OUT/receipts
 say(){ echo "[$(date +%H:%M:%S)] $*" | tee -a $OUT/run.log; }
 die(){ say "FATAL: $*"; echo HZ_DONE >> $OUT/run.log; exit 1; }
-B=https://github.com/hazync/hazync/releases/download/v0.26.1
+B=https://github.com/hazync/hazync/releases/download/${HZ_REL:-v0.26.0}
 curl -sSfLO $B/hazync-host-x86_64-linux-gnu-cuda && curl -sSfLO $B/SHA256SUMS.txt || die download
 grep " hazync-host-x86_64-linux-gnu-cuda$" SHA256SUMS.txt | sha256sum -c - >> $OUT/run.log 2>&1 || die "sha mismatch"
 BIN=/workspace/hazync-host-x86_64-linux-gnu-cuda; chmod +x $BIN
