@@ -1,14 +1,19 @@
 //! Hazync guest mode 17 (trie_update, prover/methods/guest/src/main.rs) on OpenVM, body unchanged; libzync's zkVM path
 //! calls risc0's sys_sha_compress, supplied here on OpenVM's SHA-256 extension. Input: the mode-17 words (trieprep).
+//! no_std: OpenVM's std PAL defines its own sys_sha_compress as an unreachable!() stub; without std only ours exists.
 //! Reveals SHA-256 of the journal words (little-endian bytes), as trieprep prints it.
+#![no_std]
+#![no_main]
 extern crate alloc;
 use alloc::vec::Vec;
 use libzync::{coinlog, ttree};
 use openvm_sha2::Sha256;
-openvm::init!();
+// no openvm::init!(): this config has no modular / curve extensions to initialise
 extern "C" { fn zkvm_sha256_impl(state: *const u8, input: *const u8, output: *mut u8); }
+static mut NCOMP: u32 = 0;
 #[no_mangle]
 pub unsafe extern "C" fn sys_sha_compress(out: *mut u32, inp: *const u32, b1: *const u32, b2: *const u32) {
+    NCOMP += 1;
     let mut st = [0u32; 8]; for i in 0..8 { st[i] = (*inp.add(i)).swap_bytes(); }
     let mut blk = [0u8; 64];
     core::ptr::copy_nonoverlapping(b1 as *const u8, blk.as_mut_ptr(), 32);
@@ -17,6 +22,7 @@ pub unsafe extern "C" fn sys_sha_compress(out: *mut u32, inp: *const u32, b1: *c
     zkvm_sha256_impl(st.as_ptr() as *const u8, blk.as_ptr(), o.as_mut_ptr() as *mut u8);
     for i in 0..8 { *out.add(i) = o[i].swap_bytes(); }
 }
+openvm::entry!(main);
 fn main() {
     let raw: Vec<u8> = openvm::io::read_vec();
     let words: Vec<u32> = raw.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
@@ -42,5 +48,7 @@ fn main() {
     // ----
     let jb: Vec<u8> = jn.iter().flat_map(|w| w.to_le_bytes()).collect();
     let mut h = Sha256::new(); h.update(&jb);
-    openvm::io::reveal_bytes32(h.finalize());
+    let mut out: [u8; 32] = h.finalize();
+    out[28..].copy_from_slice(&unsafe { NCOMP }.to_le_bytes());   // last word: compressions (measurement only)
+    openvm::io::reveal_bytes32(out);
 }
