@@ -1,0 +1,16 @@
+[package]
+name = "bench-sp1"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+sp1-sdk = "6.10.0"
+tokio = { version = "1", features = ["full"] }
+
+[build-dependencies]
+sp1-build = "6.10.0"
+
+[features]
+cuda = ["sp1-sdk/cuda"]

@@ -1,0 +1,19 @@
+[package]
+name = "bench-program"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[features]
+default = ["schnorr"]
+schnorr = []
+
+[dependencies]
+sp1-zkvm = "6.10.0"
+k256 = { version = "0.13.4", default-features = false, features = ["ecdsa", "alloc", "schnorr"] }
+sha2 = "=0.10.9"
+
+[patch.crates-io]
+k256 = { git = "https://github.com/sp1-patches/elliptic-curves", tag = "patch-k256-13.4-sp1-6.10.0" }
+sha2 = { git = "https://github.com/sp1-patches/RustCrypto-hashes", package = "sha2", tag = "patch-sha2-0.10.9-sp1-6.10.0" }
