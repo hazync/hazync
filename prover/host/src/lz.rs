@@ -845,6 +845,7 @@ pub(crate) fn hint_threads() -> usize {
 /// ⛔ The hints are untrusted input to the guest (it re-checks every one), so a bug here can only make a
 /// chunk fail, never make a bad signature pass. Uses the same chunk layout as proving (HAZYNC_CHUNKS,
 /// HAZYNC_PROFILE_LAYOUT), and records it: a bundle applied under another layout is ignored per chunk.
+///
 /// A chunk that runs out of guest memory is re-split (#794), and the bundle then records the re-split layout, which only
 /// libzync-prove-range uses (it prints a WARNING): the multi-process paths keep chunk_bounds' layout.
 pub(crate) fn libzync_hints_cmd(out: &str) {
