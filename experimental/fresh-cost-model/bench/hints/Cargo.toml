@@ -1,0 +1,8 @@
+[package]
+name = "hints"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[dependencies]
+k256 = { version = "0.13.4", features = ["arithmetic", "schnorr"] }
+sha2 = "0.10"
