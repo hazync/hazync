@@ -687,6 +687,8 @@ pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
 pub(crate) type Span = (usize, usize);
 /// One chunk executed: its FakeReceipt and the guest's captured stdout.
 pub(crate) type ChunkExec = (risc0_zkvm::Receipt, Vec<u8>);
+/// One round of `resplit_on_oom`: runs the given chunks, one result each, in order.
+pub(crate) type ExecRound<'a, T> = dyn FnMut(&[Span]) -> Vec<Result<T, String>> + 'a;
 
 /// One chunk executed (collect mode unless the $HAZYNC_LZ_HINTS bundle has an entry for exactly `lo..hi`): a
 /// FakeReceipt carrying its claim and journal, plus the guest's captured stdout (BATCHREC lines in collect mode).
@@ -755,9 +757,9 @@ pub(crate) fn is_guest_oom(msg: &str) -> bool {
 ///
 /// `exec` gets the chunks to run in one round (to run them in parallel or in turn) and returns one result each, in order.
 pub(crate) fn resplit_on_oom<T>(
-    bounds: &[(usize, usize)],
+    bounds: &[Span],
     split: &dyn Fn(usize, usize) -> Option<usize>,
-    exec: &mut dyn FnMut(&[Span]) -> Vec<Result<T, String>>,
+    exec: &mut ExecRound<'_, T>,
 ) -> Result<Vec<(Span, T)>, String> {
     enum Node<T> { Todo((usize, usize)), Done((usize, usize), T) }
     let mut nodes: Vec<Node<T>> = bounds.iter().map(|&b| Node::Todo(b)).collect();
