@@ -1,0 +1,9 @@
+976379t_w1_s15	rc=0	verify=0	240s	gpu_util=49%	peak_mem=674MiB
+976379t_w1_s24	rc=0	verify=0	221s	gpu_util=46%	peak_mem=674MiB
+976379t_w1_s32	rc=1	verify=1	182s	gpu_util=44%	peak_mem=6956MiB
+976379t_w2_s15	rc=0	verify=0	194s	gpu_util=66%	peak_mem=7300MiB
+976379t_w2_s20	rc=0	verify=0	191s	gpu_util=65%	peak_mem=674MiB
+976379t_w3_s12	rc=0	verify=0	183s	gpu_util=70%	peak_mem=9746MiB
+976379_w2_s15	rc=0	verify=0	245s	gpu_util=59%	peak_mem=941MiB
+962000t_w1_s24	rc=0	verify=0	180s	gpu_util=45%	peak_mem=674MiB
+741000t_w1_s24	rc=0	verify=0	39s	gpu_util=35%	peak_mem=6912MiB

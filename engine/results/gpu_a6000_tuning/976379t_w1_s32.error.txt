@@ -1,0 +1,1 @@
+Error: Other error: LogupZerocheck: Fractional sumcheck: nonzero root sum: p=1412310055 + 1312098735 X + 1006688625 X^2 + 1586299011 X^3, q=973344220 + 407182998 X + 1084426649 X^2 + 1790222885 X^3
