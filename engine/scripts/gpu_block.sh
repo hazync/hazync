@@ -15,8 +15,12 @@ gqlbal(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: ha
 say(){ echo "[$(date +%T)] $*"; }
 # GPUS: tried in order until one deploys (A40 = the A6000's GA102 chip, same 48 GB; L40S the next class up)
 GPUS="${GPUS:-NVIDIA RTX A6000|NVIDIA A40|NVIDIA L40S}"; PORT_TRIES=${PORT_TRIES:-60}
-ID=""; IFS='|' read -ra GL <<< "$GPUS"
-for GPU in "${GL[@]}"; do ID=$(rp deploy hz-engine-block "$GPU" "$PUB") && [ -n "$ID" ] && break; say "no $GPU"; ID=""; done
+# DEPLOY_WAIT_MIN: keep retrying the list every 2 min until one deploys (default: one pass)
+ID=""; IFS='|' read -ra GL <<< "$GPUS"; DEND=$((SECONDS + ${DEPLOY_WAIT_MIN:-0}*60))
+while :; do
+  for GPU in "${GL[@]}"; do ID=$(rp deploy hz-engine-block "$GPU" "$PUB") && [ -n "$ID" ] && break 2; say "no $GPU"; ID=""; done
+  [ $SECONDS -lt $DEND ] || break; sleep 120
+done
 [ -n "$ID" ] || { say "deploy failed on every GPU type"; exit 1; }
 [ -n "$ID" ] || { say "deploy failed: no pod id"; exit 1; }
 echo "$ID" > pod_id.txt; say "pod $ID deployed ($GPU)"
@@ -24,7 +28,7 @@ term(){ say "terminating $ID"; rp terminate "$ID" || say "TERMINATE FAILED for $
 harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
   [ -f conn.txt ] || return 0; read -r CIP CP < conn.txt; say "harvesting from $CIP:$CP"
   for t in 1 2 3 4 5 6; do
-    timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && tar czf out.tgz out setup.out build.log 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
+    timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && tar czf out.tgz --exclude="*.proof.json" out setup.out build.log; tar czf proofs.tgz out/*/block.proof.json out/block 2>/dev/null 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
     R=$(timeout 60 ssh $K -p $CP root@$CIP 'cat /workspace/out.tgz.sha256')
     timeout 900 scp -q $KS -P $CP root@$CIP:/workspace/out.tgz out.tgz && [ -n "$R" ] && [ "$(sha256sum out.tgz | cut -c1-64)" = "$R" ] \
       && rm -rf out2 && mkdir out2 && tar xzf out.tgz -C out2 && { say "fetched (try $t, sha $R)"; return 0; }
@@ -39,7 +43,8 @@ for i in $(seq 1 $PORT_TRIES); do L=$(rp ssh "$ID"); [ -n "$L" ] && break; sleep
 [ -n "$L" ] || { say "no ports"; term; rm -f pod_id.txt; exit 1; }
 set -- $L; IP=$1; P=$2; say "ssh $IP:$P"; echo "$IP $P" > conn.txt
 for t in $(seq 1 30); do ssh $K -p $P root@$IP true && break; sleep 10; done
-scp -q $KS -P $P "$HERE/pod/setup.sh" "$HERE/pod/run.sh" "$B" root@$IP:/workspace/ && say "scripts + bundle sent"
+RUN=${RUN:-run.sh}
+scp -q $KS -P $P "$HERE/pod/setup.sh" "$HERE/pod/$RUN" "$B" root@$IP:/workspace/ && say "scripts + bundle sent"
 ssh $K -p $P root@$IP 'cd /workspace && mv -f *.tgz bundle.tgz 2>/dev/null; (setsid nohup bash setup.sh > setup.out 2>&1 < /dev/null &)'
 for i in $(seq 1 180); do
   [ -f pod_id.txt ] || exit 1
@@ -47,15 +52,15 @@ for i in $(seq 1 180); do
   echo "$S" | grep -q 'SETUP_OK\|SETUP_FAIL' && break; sleep 20; done
 say "setup: $(echo $S | tr '\n' ' ')"
 echo "$S" | grep -q SETUP_OK || { rm -f pod_id.txt; harvest; term; exit 1; }
-ssh $K -p $P root@$IP 'cd /workspace && (setsid nohup bash run.sh > run.out 2>&1 < /dev/null &)'
+ssh $K -p $P root@$IP "cd /workspace && (R0_BLOCKS='$R0_BLOCKS' setsid nohup bash $RUN > run.out 2>&1 < /dev/null &)"
 say "proving the block"
 for i in $(seq 1 $((DEADLINE_MIN*4))); do
   [ -f pod_id.txt ] || exit 1
   ssh $K -p $P root@$IP 'test -f /workspace/out/RUN_DONE' && break
   ssh $K -p $P root@$IP true && F=0 || F=$((${F:-0}+1))
   [ "${F:-0}" -ge 40 ] && { say "POD_LOST: unreachable for 10 min"; rm -f pod_id.txt; term; exit 1; }
-  [ $((i % 8)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'grep -h "proved\|aggregate" /workspace/out/prove_block.log 2>/dev/null | tail -1')"
+  [ $((i % 8)) = 0 ] && say "  $(ssh $K -p $P root@$IP 'tail -n1 /workspace/out/times.tsv 2>/dev/null; grep -h "proved\|aggregate" /workspace/out/prove_block.log 2>/dev/null | tail -1')"
   sleep 15; done
-say "run: $(ssh $K -p $P root@$IP 'cat /workspace/out/RUN_DONE /workspace/out/times.txt')"
+say "run: $(ssh $K -p $P root@$IP 'cat /workspace/out/RUN_DONE /workspace/out/times.txt /workspace/out/times.tsv 2>/dev/null')"
 rm -f pod_id.txt
 if harvest; then term; sleep 5; say "GPU_BLOCK_DONE"; else say "HARVEST_FAILED: pod $ID LEFT RUNNING for a manual harvest"; fi
