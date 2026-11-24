@@ -401,16 +401,11 @@ const BIP30_OVERWRITE_A: [u8; 32] = [0xec, 0xca, 0xe0, 0x00, 0xe3, 0xc8, 0xe4, 0
 const BIP30_OVERWRITE_B: [u8; 32] = [0x21, 0xd7, 0x7c, 0xcb, 0x4c, 0x08, 0x38, 0x6a, 0x04, 0xac, 0x01, 0x96, 0xae, 0x10, 0xf6, 0xa1, 0xd2, 0xc2, 0xa3, 0x77, 0x55, 0x8c, 0xa1, 0x90, 0xf1, 0x43, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00]; // block 91880
 
 
-// --- libc glue for bare-metal C/C++ in the zkVM guest: malloc family + abort, backed by the
-// guest's Rust global allocator (size stored in a 16-byte header before each block). ---
-// The libzync guest recycles freed C-heap blocks instead (src/c_heap.rs, hazync#794); the older images keep this.
-use std::alloc::{alloc as ralloc, dealloc as rdealloc, Layout};
-#[cfg(feature = "libzync")]
-mod c_heap;
-#[cfg(not(feature = "libzync"))]
-const HDR: usize = 16;
-#[cfg(not(feature = "libzync"))]
-#[no_mangle]
+// --- libc glue for bare-metal C/C++ in the zkVM guest: malloc family + abort, backed by the guest's Rust global
+// allocator (size stored in a 16-byte header before each block); the libzync guest's recycles freed blocks (c_heap.rs). ---
+use std::alloc::{alloc as ralloc, dealloc as rdealloc, Layout}; #[cfg(feature = "libzync")] mod c_heap;
+#[cfg(not(feature = "libzync"))] const HDR: usize = 16;
+#[cfg(not(feature = "libzync"))] #[no_mangle]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     if size == 0 { return core::ptr::null_mut(); }
     // C's malloc fails on a size it cannot represent (review 11-14: `size + HDR` wrapped to a tiny block)
@@ -421,16 +416,14 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     *(p as *mut usize) = total;
     p.add(HDR)
 }
-#[cfg(not(feature = "libzync"))]
-#[no_mangle]
+#[cfg(not(feature = "libzync"))] #[no_mangle]
 pub unsafe extern "C" fn free(ptr: *mut u8) {
     if ptr.is_null() { return; }
     let base = ptr.sub(HDR);
     let total = *(base as *mut usize);
     rdealloc(base, Layout::from_size_align(total, HDR).unwrap());
 }
-#[cfg(not(feature = "libzync"))]
-#[no_mangle]
+#[cfg(not(feature = "libzync"))] #[no_mangle]
 pub unsafe extern "C" fn calloc(n: usize, sz: usize) -> *mut u8 {
     // C's calloc fails on overflow instead of returning a short block (review 11-03).
     let Some(total) = n.checked_mul(sz) else { return core::ptr::null_mut() };
@@ -438,8 +431,7 @@ pub unsafe extern "C" fn calloc(n: usize, sz: usize) -> *mut u8 {
     if !p.is_null() { core::ptr::write_bytes(p, 0, total); }
     p
 }
-#[cfg(not(feature = "libzync"))]
-#[no_mangle]
+#[cfg(not(feature = "libzync"))] #[no_mangle]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     if ptr.is_null() { return malloc(size); }
     let base = ptr.sub(HDR);
@@ -2402,31 +2394,17 @@ fn aggregate() {
 
 fn main() {
     // Run C++ static constructors ONCE (Core's global tagged-hash midstates) — fixed cost per run.
-    unsafe { __libc_init_array() };
-    // The per-transaction caches in verify_input.cpp (cached_tx, cached_spent: keyed by buffer address and length) are
-    // sound because the buffers they are keyed by are Rust's (the witness), and Rust's allocator, risc0's bump
-    // allocator, never hands an address out twice. Checked, not assumed: an allocator that gives a freed block back
-    // would let one address name two buffers (review 11-14).
-    #[cfg(not(feature = "libzync"))]
-    unsafe {
-        // The older images: C's heap is Rust's, and Core's legacy sighash cache relies on the same property.
+    unsafe { __libc_init_array() }; #[cfg(feature = "libzync")] c_heap::startup_check();
+    // The per-transaction caches in verify_input.cpp (cached_tx, cached_spent: keyed by buffer address and length) and
+    // Core's legacy sighash cache (patches/libzync/0101: keyed by the transaction's vector addresses) rely on an address
+    // never naming two buffers. Older images: risc0's bump allocator never frees, checked here. The libzync image
+    // recycles C-heap blocks and checks its own guarantees in c_heap::startup_check (hazync#794, src/c_heap.rs).
+    #[cfg(not(feature = "libzync"))] unsafe {
         let a = malloc(64);
         free(a);
         let b = malloc(64);
         assert!(!a.is_null() && !b.is_null() && a != b, "the guest allocator reuses freed memory: the address-keyed caches need one that never does");
         free(b);
-    }
-    #[cfg(feature = "libzync")]
-    unsafe {
-        let l = Layout::from_size_align(64, 16).unwrap();
-        let a = ralloc(l);
-        rdealloc(a, l);
-        let b = ralloc(l);
-        assert!(!a.is_null() && !b.is_null() && a != b, "the Rust allocator reuses freed memory: cached_tx / cached_spent need one that never does");
-        rdealloc(b, l);
-        // The C heap DOES recycle (hazync#794), and Core's legacy sighash cache, keyed by C-heap addresses, is
-        // invalidated when its buffers are freed: both checked here.
-        c_heap::self_check();
     }
     // Pin every Rust-side consensus literal to Core's own compiled value before doing any work.
     assert_core_constants();

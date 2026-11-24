@@ -8,12 +8,14 @@
 //
 // WHAT. Segregated free lists over the same bump allocator. A block's size class is fixed by its size; free() pushes
 // the block on its class's list and malloc() pops from it before taking fresh memory. No search, no splitting, no
-// coalescing: both are O(1), and a class can only ever hold as much as was once live in it at the same time, so the
-// heap is bounded by what Core holds live, not by what it ever allocated.
+// coalescing: both are O(1). A class never takes fresh memory while it has a free block, so its footprint is its own
+// peak: the most blocks of that class ever live at the same time. The heap is bounded by the SUM over classes of those
+// peaks (each class's peak can be reached at a different moment), not by everything ever allocated. For a script that
+// is the 1,000-element stack of <= 520-byte items per class it ever fills, a few MB in all.
 //
 // ONLY the C heap. Rust's allocator stays the bump allocator, so a Rust buffer's address still names one buffer for
 // the whole run; verify_input.cpp's cached_tx / cached_spent are keyed by such addresses (the witness buffers main.rs
-// passes in) and main() checks the property at start-up. The one cache keyed by C-heap addresses, Core's legacy
+// passes in) and startup_check() checks the property. The one cache keyed by C-heap addresses, Core's legacy
 // sighash cache (patches/libzync/0101, keyed by a transaction's vin / vout buffers), is invalidated here: free() clears
 // `hz_lsh_key[0]` when either buffer it is keyed by is freed, so an address can never be matched after the buffer it
 // named is gone, whatever later lands there. It also keys on hz_tx_generation, which every script entry point bumps.
@@ -22,7 +24,10 @@
 // slack). A block above 1 GiB is never recycled, as before. Header: [class, capacity, next, state], state = FREE_MARK
 // while the block is on a list. A double free, or a free of a pointer this heap never handed out, panics (no receipt)
 // instead of putting a block on a list twice: the bump allocator made both harmless, recycling would not.
-use std::alloc::{alloc as ralloc, Layout};
+use std::alloc::{alloc as ralloc, dealloc as rdealloc, Layout};
+
+// The header is four words in 16 bytes, and the class arithmetic assumes rv32.
+const _: () = assert!(core::mem::size_of::<usize>() == 4 && HDR == 4 * core::mem::size_of::<usize>());
 
 pub const HDR: usize = 16;
 const SMALL_MAX: usize = 2048;
@@ -38,9 +43,12 @@ static mut FREE: [*mut u8; N_CLASSES] = [core::ptr::null_mut(); N_CLASSES];
 
 #[allow(non_upper_case_globals)]
 extern "C" {
-    // verify_input.cpp. [0] = the vin buffer, [1] = the vout buffer the legacy sighash cache was filled from; the
-    // cache refills whenever [0] is null.
+    // Defined by patches/libzync/0101 (script/interpreter.cpp), so a Core tree without that hunk fails to link instead
+    // of building a guest whose cache never sets its key. [0] = the vin buffer, [1] = the vout buffer the legacy sighash
+    // cache was filled from; the cache refills whenever [0] is null.
     static mut hz_lsh_key: [*const u8; 2];
+    // verify_input.cpp: the cache through Core's own SignatureHash, across a freed and reused vin address (1 = passed).
+    fn hz_lsh_selftest() -> i32;
 }
 
 /// (class, capacity including the header) for a block of `total` bytes, total > HDR.
@@ -131,7 +139,9 @@ pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     if ptr.is_null() {
         return malloc(size);
     }
-    let room = *word(ptr.sub(HDR), 1) - HDR;
+    let base = ptr.sub(HDR);
+    assert!(*word(base, 3) == LIVE_MARK, "C heap: realloc() of a block that is not live (freed already?)");
+    let room = *word(base, 1) - HDR;
     if size != 0 && size <= room {
         return ptr; // still fits its block
     }
@@ -143,10 +153,21 @@ pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     np
 }
 
-/// main()'s start-up check: a freed block is handed out again (so the guest is running THIS allocator), and freeing
-/// a buffer the legacy sighash cache is keyed by clears its key (so the cache cannot match a reused address).
-pub fn self_check() {
+/// main()'s start-up check, before any work.
+/// - Rust's allocator never hands an address out twice: cached_tx / cached_spent are keyed by Rust buffers.
+/// - The C heap recycles a freed block (the guest runs THIS allocator).
+/// - Freeing either buffer the legacy sighash cache is keyed by clears the key.
+/// - Through Core's SignatureHash: filling the cache SETS the key to the transaction's vin buffer, destroying the
+///   transaction clears it, and a second transaction at the same vin address (same generation) gets its own sighash.
+pub fn startup_check() {
     unsafe {
+        let l = Layout::from_size_align(64, 16).unwrap();
+        let a = ralloc(l);
+        rdealloc(a, l);
+        let b = ralloc(l);
+        assert!(!a.is_null() && !b.is_null() && a != b, "the Rust allocator reuses freed memory: cached_tx / cached_spent need one that never does");
+        rdealloc(b, l);
+
         let a = malloc(64);
         free(a);
         let b = malloc(64);
@@ -163,5 +184,8 @@ pub fn self_check() {
         free(c);
         assert!(key[0].is_null(), "freeing the legacy sighash cache's vout buffer did not invalidate it");
         *key = saved;
+
+        let r = hz_lsh_selftest();
+        assert!(r == 1, "legacy sighash cache self-test failed ({r}): the cache key does not follow a freed vin buffer");
     }
 }

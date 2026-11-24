@@ -411,7 +411,7 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
                      else if (opcode == OP_HASH256)
                          CHash256().Write(vch).Finalize(vchHash);
                      popstack(stack);
-@@ -1338,6 +1367,113 @@
+@@ -1338,6 +1367,117 @@
      }
  };
  
@@ -444,14 +444,18 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
 +#endif
 +#ifdef HAZYNC_C_HEAP_RECYCLE
 +/* hazync#794: the guest's C heap recycles freed blocks, so a vin / vout address can name two buffers in turn.
-+ * [0], [1] = the buffers this cache was filled from; the guest's free() clears [0] when either is freed. */
-+extern "C" const void* hz_lsh_key[2];
++ * [0], [1] = the buffers this cache was filled from; the guest's free() clears [0] when either is freed. Defined
++ * HERE, so a guest built on a Core tree without this hunk fails to link (src/c_heap.rs declares it). */
++extern "C" { const void* hz_lsh_key[2] = {nullptr, nullptr}; }
 +#endif
 +
 +/** SIGHASH_ALL legacy sighash from preserialised bytes; same digest as Core's serialiser. */
 +template <class T>
 +uint256 HzLegacySighashAll(const CScript& scriptCode, const T& txTo, unsigned int nIn, int nHashType)
 +{
++#ifdef HAZYNC_C_HEAP_RECYCLE
++    static_assert(std::is_same_v<T, CTransaction>, "hz_lsh_key is one key: one instantiation may use the cache");
++#endif
 +    static HzLegacyCache c;
 +    const size_t n = txTo.vin.size();
 +    if (c.vin_data != (const void*)txTo.vin.data() || c.vout_data != (const void*)txTo.vout.data() ||
@@ -525,11 +529,15 @@ diff -ruN a/src/script/interpreter.cpp b/src/script/interpreter.cpp
  /** Compute the (single) SHA256 of the concatenation of all prevouts of a tx. */
  template <class T>
  uint256 GetPrevoutsSHA256(const T& txTo)
-@@ -1623,6 +1759,12 @@
+@@ -1623,6 +1763,16 @@
          }
      }
  
 +#ifdef HAZYNC_LEGACY_SIGHASH
++#ifdef HAZYNC_C_HEAP_RECYCLE
++    /* hz_lsh_key is ONE key, so only CTransaction's instantiation uses the cache; any other T takes Core's path. */
++    if constexpr (std::is_same_v<T, CTransaction>)
++#endif
 +    if (!(nHashType & SIGHASH_ANYONECANPAY) && (nHashType & 0x1f) != SIGHASH_SINGLE &&
 +        (nHashType & 0x1f) != SIGHASH_NONE) {
 +        return HzLegacySighashAll(scriptCode, txTo, nIn, nHashType);

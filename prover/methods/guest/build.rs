@@ -426,6 +426,12 @@ fn main() {
     // hazync#794: the libzync guest's C heap recycles freed blocks (src/c_heap.rs, the `libzync` feature); the C++ side
     // then keeps the legacy sighash cache's key where that free() can clear it (verify_input.cpp, patches/libzync/0101).
     define_if(&mut b, "HAZYNC_C_HEAP_RECYCLE", lz_env);
+    if lz_env {
+        // ...and a Core tree built before that hunk must not build (it would leave the key unset, the link aside).
+        let interp = std::fs::read_to_string(format!("{core}/script/interpreter.cpp")).expect("read script/interpreter.cpp");
+        assert!(interp.contains("hz_lsh_key[0] = c.vin_data;") && interp.contains("const void* hz_lsh_key[2] = {nullptr, nullptr};"),
+            "{core}/script/interpreter.cpp lacks patches/libzync/0101's hz_lsh_key hunk (hazync#794): rebuild the base with scripts/libzync-base.sh");
+    }
     // HAZYNC_NETWORK=signet: Core's SigNet chainparams + CheckSignetBlockSolution (signet.cpp below).
     println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());

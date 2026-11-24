@@ -152,12 +152,6 @@ static bool coin_leaf(const CTransaction& tx, const std::vector<CTxOut>& spent, 
 // (review 11-14: only the chunk path did, through hz_cache_reset).
 extern "C" { unsigned hz_tx_generation = 0; }
 static inline void hz_new_script_tx() { ++hz_tx_generation; }
-// hazync#794: the libzync guest's C heap recycles freed blocks (src/c_heap.rs), so a vin / vout address can name two
-// buffers in turn. The legacy sighash cache stores the two it was filled from here, and the guest's free() clears [0]
-// when either is freed, which makes the cache refill: an entry never outlives the buffers it was keyed by.
-#ifdef HAZYNC_C_HEAP_RECYCLE
-extern "C" { const void* hz_lsh_key[2] = {nullptr, nullptr}; }
-#endif
 #ifdef HAZYNC_TX_ONCE
 #include <map>
 // libzync EXPERIMENT: parse each transaction ONCE per guest run.
@@ -175,12 +169,11 @@ struct HzCachedTx {
     unsigned char head[32], tail[32];   // the hit guard: first / last 32 bytes (see hz_same_bytes)
     std::unique_ptr<const CTransaction> tx;
 };
-// The hit guard. The key is (pointer, length) of a buffer the Rust side passes in (the witness), and
-// Rust's guest heap is risc0's BUMP allocator: dealloc never returns memory, so within one guest run no
-// Rust address is ever handed out twice and the key alone identifies a buffer. (The C heap recycles,
-// src/c_heap.rs, hazync#794: no C-heap buffer is ever a key here. Rust's must stay bump, or these
-// caches need a content key; main() checks it at start-up.) So a full compare is redundant, and it cost
-// 9% of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
+// The hit guard. The key is (pointer, length) of a Rust buffer (the witness), and Rust's guest heap is
+// risc0's BUMP allocator: no Rust address is ever handed out twice in one run, so the key alone identifies
+// a buffer. (The libzync C heap recycles, src/c_heap.rs, hazync#794, but no C-heap buffer is a key here;
+// c_heap::startup_check checks Rust's never reuses.) So a full compare is redundant, and it cost 9%
+// of the aggregate. What remains is a tripwire on the first and last 32 bytes, against a future
 // allocator change -- not the soundness argument.
 static void hz_remember(unsigned char* head, unsigned char* tail, const uint8_t* p, unsigned len) {
     const unsigned k = len < 32 ? len : 32;
@@ -194,7 +187,7 @@ static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, 
 // libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
 // chunk calls hz_cache_reset before EVERY transaction, so an entry never outlives the transaction it was
 // made for. (pointer, length) identifies a buffer only while no address is reused: the guest checks at
-// start that Rust's allocator, which every buffer keyed here comes from, never reuses one (main.rs).
+// start that the allocator of every buffer keyed here (Rust's) never reuses one (main.rs, c_heap.rs).
 #ifdef HAZYNC_RAW_TXID
 static void hz_dsha_parts(uint256& out, const unsigned char* a, size_t na, const unsigned char* b, size_t nb,
                           const unsigned char* c, size_t nc) {
@@ -1343,3 +1336,53 @@ extern "C" int hz_test_tx(const uint8_t* tx_bytes, unsigned tx_len,
     }
     return 1;
 }
+
+#ifdef HAZYNC_C_HEAP_RECYCLE
+// hazync#794: the legacy sighash cache (patches/libzync/0101) is keyed by a transaction's vin / vout addresses, and the
+// libzync C heap recycles freed blocks. Run at start-up (c_heap::startup_check) through Core's own SignatureHash:
+//   -1  filling the cache did not set hz_lsh_key to the transaction's vin buffer
+//   -2  destroying the transaction did not clear it
+//   -3  the second transaction did not land on the first one's vin address (the test would prove nothing)
+//   -4  the second transaction, in the SAME generation, got a sighash other than a fresh computation's
+//   -5  the two sighashes are equal (the transactions do not differ where the cache would go stale)
+// Returns 1 when every check passes, or when the cache is not built (no HAZYNC_LEGACY_SIGHASH: nothing keyed by address).
+extern "C" const void* hz_lsh_key[2];
+extern "C" int hz_lsh_selftest() {
+#ifdef HAZYNC_LEGACY_SIGHASH
+    const auto mk = [](unsigned char tag) {
+        CMutableTransaction m;
+        m.version = 1;
+        m.vin.resize(2);
+        for (unsigned i = 0; i < 2; i++) {
+            uint256 h;
+            h.begin()[0] = (unsigned char)(tag + i);
+            m.vin[i].prevout = COutPoint(Txid::FromUint256(h), i);
+        }
+        m.vout.resize(1);
+        m.vout[0].nValue = tag;
+        m.vout[0].scriptPubKey = CScript() << OP_TRUE;
+        return m;
+    };
+    const CScript code = CScript() << OP_TRUE;
+    const void* addr = nullptr;
+    uint256 first;
+    {
+        const CTransaction a{mk(1)};
+        hz_new_script_tx();
+        first = SignatureHash(code, a, 0, SIGHASH_ALL, 0, SigVersion::BASE);
+        addr = a.vin.data();
+        if (hz_lsh_key[0] != addr) return -1;
+    }
+    if (hz_lsh_key[0] != nullptr) return -2;
+    const CTransaction b{mk(7)};
+    if ((const void*)b.vin.data() != addr) return -3;
+    const uint256 got = SignatureHash(code, b, 0, SIGHASH_ALL, 0, SigVersion::BASE);   // no new generation
+    hz_new_script_tx();
+    const uint256 want = SignatureHash(code, b, 0, SIGHASH_ALL, 0, SigVersion::BASE);  // refilled from scratch
+    if (got != want) return -4;
+    if (got == first) return -5;
+    hz_new_script_tx();
+#endif
+    return 1;
+}
+#endif
