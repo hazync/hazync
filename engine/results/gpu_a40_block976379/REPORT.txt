@@ -1,0 +1,19 @@
+chunk_00: proved 19.5 s, journal 155692 bytes sha256 2276029d852af304 r0 IDENTICAL
+chunk_01: proved 18.0 s, journal 124348 bytes sha256 4972978a697a56e7 r0 IDENTICAL
+chunk_02: proved 17.1 s, journal 127188 bytes sha256 41c4a2fabddcb8b2 r0 IDENTICAL
+chunk_03: proved 19.1 s, journal 84556 bytes sha256 cec975de4d88b35b r0 IDENTICAL
+chunk_04: proved 18.7 s, journal 112208 bytes sha256 4a53cae2fdf9729b r0 IDENTICAL
+chunk_05: proved 20.4 s, journal 176368 bytes sha256 f919c39cf24abe8c r0 IDENTICAL
+chunk_06: proved 17.5 s, journal 116928 bytes sha256 514b26af86fc6317 r0 IDENTICAL
+chunk_07: proved 17.9 s, journal 91800 bytes sha256 26ca640e8105469e r0 IDENTICAL
+chunk_08: proved 14.9 s, journal 63188 bytes sha256 1e1a97e68a8f97b1 r0 IDENTICAL
+chunk_09: proved 15.7 s, journal 115340 bytes sha256 643fc2ebcf7a69d3 r0 IDENTICAL
+chunk_10: proved 17.8 s, journal 136324 bytes sha256 8cdb7fb91d3c9012 r0 IDENTICAL
+chunk_11: proved 17.6 s, journal 187256 bytes sha256 7c5a302297a6ebaa r0 IDENTICAL
+chunk_12: proved 17.4 s, journal 197336 bytes sha256 e43173a8e2fffb4e r0 IDENTICAL
+chunk_13: proved 17.9 s, journal 197336 bytes sha256 7d62241799b85e64 r0 IDENTICAL
+chunk_14: proved 17.6 s, journal 197336 bytes sha256 77fa9a883884e0f1 r0 IDENTICAL
+chunk_15: proved 18.2 s, journal 197032 bytes sha256 e02469d220af9973 r0 IDENTICAL
+trie: proved 54.1 s, journal 100 bytes sha256 13b30678ea5a6303 r0 IDENTICAL
+aggregate (17 children verified in-guest): proved 68.5 s, journal 5284 bytes sha256 00bd9006f874370666528c34cd73addc07f4f6e3a28270047cda68183e09efd4; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 339.5 s + aggregate 68.5 s = 409.4 s; final proof verified in 0.03 s

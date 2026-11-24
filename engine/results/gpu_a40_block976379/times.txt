@@ -1,0 +1,3 @@
+prove-block rc=0 secs=412
+verify rc=0
+gpu util mean 49.7548
