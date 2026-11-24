@@ -4,11 +4,13 @@
 //! Group arithmetic on OpenVM's secp256k1 extension instead of risc0 bigint2 circuits. A call with no valid hint is
 //! checked DIRECTLY (u1·G + u2·Q) and returns 1 (valid) / 2 (invalid) — the libsecp hook (bench/ovm-secp/apply_hook.py)
 //! maps 2 to libsecp's own "invalid".
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use k256::{Secp256k1Coord as Fq, Secp256k1Point as P, Secp256k1Scalar as Fr};
 use openvm_algebra_guest::{DivUnsafe, IntMod, Reduce};
-use openvm_ecc_guest::{weierstrass::{IntrinsicCurve, WeierstrassPoint}, CyclicGroup, Group};
+use openvm_ecc_guest::{weierstrass::WeierstrassPoint, CyclicGroup, Group};
+
+#[path = "msm_ovm.rs"]
+mod msm;
 use risc0_zkvm::guest::env;
 use sha2::{Digest, Sha256};
 
@@ -58,7 +60,7 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     if (i + 1) * HINT_BYTES > h.len() || u32::from_le_bytes(h[i*HINT_BYTES..i*HINT_BYTES+4].try_into().unwrap()) != 1 {
         FALLBACK += 1;
         for v in [&a, &b] { v.assert_reduced(); }
-        let rp = <k256::Secp256k1 as IntrinsicCurve>::msm(&[a.clone(), b.clone()], &[<P as CyclicGroup>::GENERATOR, q]);
+        let rp = msm::msm(&[a.clone(), b.clone()], &[<P as CyclicGroup>::GENERATOR, q]);
         if rp == <P as Group>::IDENTITY { return 2; }
         return if accept_r(kind, rp.x().as_le_bytes(), rp.y().as_le_bytes(), &rr_s, &le(&rl)) { 1 } else { 2 };
     }
@@ -81,27 +83,36 @@ pub fn finish() -> bool {
     h.update(b"libzync/batch-sig/v2"); h.update((n as u32).to_le_bytes());
     for x in &d { h.update(&x.raw[..]); } for x in &d { h.update(x.kind.to_le_bytes()); }
     let seed = h.finalize();
-    let mut by_key: BTreeMap<[u8; 64], (P, Fr)> = BTreeMap::new();
+    // z_i from the transcript, in tuple order (unchanged); keys merged by their raw x||y as before, through a sorted
+    // index instead of a BTreeMap (the sum is the same in any order; the map moved 160-byte entries on every insert).
     let mut pts: Vec<P> = Vec::with_capacity(n + n / 2 + 1);
     let mut scs: Vec<Fr> = Vec::with_capacity(n + n / 2 + 1);
+    let mut zu2: Vec<Fr> = Vec::with_capacity(n);
     let mut g = Fr::ZERO;
     let mut zh = [0u8; 32];
-    for (i, x) in d.into_iter().enumerate() {
+    for (i, x) in d.iter().enumerate() {
         if i % 2 == 0 { let mut m = [0u8; 36]; m[..32].copy_from_slice(&seed); m[32..].copy_from_slice(&((i / 2) as u32).to_le_bytes()); zh = Sha256::digest(m); }
         let mut zb = [0u8; 32];
         zb[..16].copy_from_slice(if i % 2 == 0 { &zh[..16] } else { &zh[16..] });
         let z = Fr::from_le_bytes_unchecked(&zb);
         g = g + &z * &x.u1;
-        let zu2 = &z * &x.u2;
-        let mut key = [0u8; 64]; key.copy_from_slice(&x.raw[64..128]);
-        by_key.entry(key).and_modify(|e| e.1 = &e.1 + &zu2).or_insert((x.q, zu2));
-        pts.push(-x.r); scs.push(z);
+        zu2.push(&z * &x.u2);
+        pts.push(-&x.r); scs.push(z);
     }
-    for (_, (q, s)) in by_key { pts.push(q); scs.push(s); }
+    fn key(d: &[Deferred], i: u32) -> &[u8] { &d[i as usize].raw[64..128] }
+    let mut idx: Vec<u32> = (0..n as u32).collect();
+    idx.sort_unstable_by(|&a, &b| key(&d, a).cmp(key(&d, b)));
+    let mut k = 0;
+    while k < n {
+        let (first, mut s) = (idx[k], zu2[idx[k] as usize].clone());
+        k += 1;
+        while k < n && key(&d, idx[k]) == key(&d, first) { s = &s + &zu2[idx[k] as usize]; k += 1; }
+        pts.push(d[first as usize].q.clone()); scs.push(s);
+    }
     pts.push(<P as CyclicGroup>::GENERATOR); scs.push(g);
     for s in &scs { s.assert_reduced(); }
     let fb = unsafe { FALLBACK };
-    let ok = n == 0 || <k256::Secp256k1 as IntrinsicCurve>::msm(&scs, &pts) == <P as Group>::IDENTITY;
+    let ok = n == 0 || msm::msm(&scs, &pts) == <P as Group>::IDENTITY;
     env::log(&alloc::format!("batch: deferred={n} fallback={fb} ok={ok}"));
     ok
 }

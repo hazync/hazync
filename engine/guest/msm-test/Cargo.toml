@@ -1,0 +1,12 @@
+# Host test of ../msm_ovm.rs against openvm-ecc-guest's msm (both on OpenVM's software curve arithmetic off-zkvm).
+[package]
+name = "msm-test"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }
