@@ -1,0 +1,19 @@
+trie_part_00: proved 33.6 s (worker 1, done at 35.6 s), journal 136 bytes sha256 d786785ee7b1b258 r0 IDENTICAL
+trie_part_01: proved 30.8 s (worker 0, done at 32.9 s), journal 136 bytes sha256 bf4958a64d8706aa r0 IDENTICAL
+trie_part_02: proved 34.0 s (worker 2, done at 36.1 s), journal 136 bytes sha256 49ae158eb3d8c4fe r0 IDENTICAL
+trie_part_03: proved 30.5 s (worker 0, done at 63.4 s), journal 136 bytes sha256 7c9d1181190e37dd r0 IDENTICAL
+trie_combine: proved 38.1 s (worker 0, done at 101.5 s), journal 132 bytes sha256 5e5d6ebe656d465c r0 n/a
+chunk_00: proved 35.1 s (worker 1, done at 70.8 s), journal 182212 bytes sha256 5eff05b18f86bece r0 IDENTICAL
+chunk_01: proved 36.0 s (worker 2, done at 72.1 s), journal 218756 bytes sha256 2e70125df7ed04ac r0 IDENTICAL
+chunk_02: proved 30.6 s (worker 1, done at 101.4 s), journal 134484 bytes sha256 a8cdb70051e24c34 r0 IDENTICAL
+chunk_03: proved 32.0 s (worker 2, done at 104.2 s), journal 223252 bytes sha256 483366a8160d3a7c r0 IDENTICAL
+chunk_04: proved 33.7 s (worker 1, done at 135.1 s), journal 172964 bytes sha256 71d3675704d800b6 r0 IDENTICAL
+chunk_05: proved 33.8 s (worker 0, done at 135.3 s), journal 103112 bytes sha256 faa72d5fb8bddd57 r0 IDENTICAL
+chunk_06: proved 31.7 s (worker 2, done at 135.9 s), journal 178372 bytes sha256 1fa4b4a8eb842e9f r0 IDENTICAL
+chunk_07: proved 30.3 s (worker 1, done at 165.4 s), journal 209500 bytes sha256 6b1a7853aefd83a5 r0 IDENTICAL
+chunk_08: proved 33.3 s (worker 0, done at 168.6 s), journal 283584 bytes sha256 5196fcd7fe89b873 r0 IDENTICAL
+chunk_09: proved 32.6 s (worker 2, done at 168.5 s), journal 286976 bytes sha256 00f7047fc569c292 r0 IDENTICAL
+chunk_10: proved 17.9 s (worker 1, done at 183.3 s), journal 286312 bytes sha256 d9ea531a205e82d2 r0 IDENTICAL
+trie split: 4 parts + combine; combine journal = RISC Zero's whole update (old root, new root, list) + this image's id
+aggregate (12 children verified in-guest): proved 48.0 s, journal 5284 bytes sha256 d212dea4971ca6b97861ba8952e8d89781d80a642cf008831438d503d5ef99cd; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 190.3 s + aggregate 48.0 s = 239.2 s; final proof verified in 0.02 s

@@ -1,0 +1,13 @@
+trie_part_00: proved 32.9 s (worker 1, done at 34.8 s), journal 136 bytes sha256 d786785ee7b1b258 r0 IDENTICAL
+trie_part_01: proved 32.3 s (worker 2, done at 34.2 s), journal 136 bytes sha256 bf4958a64d8706aa r0 IDENTICAL
+trie_part_02: proved 33.0 s (worker 0, done at 35.0 s), journal 136 bytes sha256 49ae158eb3d8c4fe r0 IDENTICAL
+trie_part_03: proved 31.2 s (worker 2, done at 65.3 s), journal 136 bytes sha256 7c9d1181190e37dd r0 IDENTICAL
+trie_combine: proved 37.6 s (worker 2, done at 102.9 s), journal 132 bytes sha256 5e5d6ebe656d465c r0 n/a
+chunk_00: proved 66.9 s (worker 1, done at 101.7 s), journal 426760 bytes sha256 975daaf367bb3f04 r0 IDENTICAL
+chunk_01: proved 66.9 s (worker 0, done at 101.8 s), journal 399980 bytes sha256 423545ebf152b87c r0 IDENTICAL
+chunk_02: proved 64.2 s (worker 1, done at 165.8 s), journal 310180 bytes sha256 c677c75b74d775fb r0 IDENTICAL
+chunk_03: proved 63.9 s (worker 0, done at 165.8 s), journal 511580 bytes sha256 bf86604b4016615b r0 IDENTICAL
+chunk_04: proved 62.9 s (worker 2, done at 165.9 s), journal 630472 bytes sha256 775dee3327600f49 r0 IDENTICAL
+trie split: 4 parts + combine; combine journal = RISC Zero's whole update (old root, new root, list) + this image's id
+aggregate (6 children verified in-guest): proved 44.5 s, journal 5284 bytes sha256 d212dea4971ca6b97861ba8952e8d89781d80a642cf008831438d503d5ef99cd; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 170.6 s + aggregate 44.5 s = 215.7 s; final proof verified in 0.03 s
