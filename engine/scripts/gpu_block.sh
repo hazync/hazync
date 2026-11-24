@@ -13,8 +13,11 @@ KS="-i $HOME/.ssh/ghost_signet_ed25519 -o StrictHostKeyChecking=no -o UserKnownH
 export RP; rp(){ python3 "$RPY" "$@"; }
 gqlbal(){ curl -s -X POST -H 'Content-Type: application/json' -H 'User-Agent: hazync-libzync/1' -H "Authorization: Bearer $RP" -d '{"query":"query { myself { clientBalance } }"}' https://api.runpod.io/graphql; }
 say(){ echo "[$(date +%T)] $*"; }
-GPU="${GPU:-NVIDIA RTX A6000}"; PORT_TRIES=${PORT_TRIES:-60}
-ID=$(rp deploy hz-engine-block "$GPU" "$PUB") || { say "deploy failed"; exit 1; }
+# GPUS: tried in order until one deploys (A40 = the A6000's GA102 chip, same 48 GB; L40S the next class up)
+GPUS="${GPUS:-NVIDIA RTX A6000|NVIDIA A40|NVIDIA L40S}"; PORT_TRIES=${PORT_TRIES:-60}
+ID=""; IFS='|' read -ra GL <<< "$GPUS"
+for GPU in "${GL[@]}"; do ID=$(rp deploy hz-engine-block "$GPU" "$PUB") && [ -n "$ID" ] && break; say "no $GPU"; ID=""; done
+[ -n "$ID" ] || { say "deploy failed on every GPU type"; exit 1; }
 [ -n "$ID" ] || { say "deploy failed: no pod id"; exit 1; }
 echo "$ID" > pod_id.txt; say "pod $ID deployed ($GPU)"
 term(){ say "terminating $ID"; rp terminate "$ID" || say "TERMINATE FAILED for $ID: check the RunPod console"; }
