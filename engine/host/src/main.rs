@@ -11,6 +11,7 @@
 //!   baseline.json  the guest's verification baseline (program + initial memory commitments)
 //!   image.json     the guest's (exe, vm) commitments as the guest sees them, hex
 //! A proof `P` is two files: P.proof.json (VersionedVmStarkProof) and P.journal (its journal bytes).
+mod block;
 mod capture;
 mod engine;
 mod r0;
@@ -85,6 +86,18 @@ enum Cmd {
         #[arg(long)]
         journal: Option<PathBuf>,
     },
+    /// A whole block from `engine-export`: chunks, trie, and the aggregate verifying them all in-guest.
+    ProveBlock {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        export: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        /// Also verify every chunk/trie proof on its own (the aggregate verifies them anyway).
+        #[arg(long)]
+        verify_each: bool,
+    },
     /// Verify a proof: STARK against agg.vk + baseline, its public values against its journal, and its image.
     Verify {
         #[arg(long)]
@@ -103,6 +116,7 @@ fn main() -> Result<()> {
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
         Cmd::Execute { dir, input, journal } => r0::execute(&dir, &input, journal.as_deref()),
+        Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
     }
 }
