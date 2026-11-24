@@ -5,7 +5,8 @@
 #   2. format 1: the guest's file == hints_ref.py's (an independent generator from hintsfile.md), byte for byte;
 #   3. format 2: the guest's file == the hintsfile crate 0.2.0's own writer on hints_ref.py's indices, byte for byte, and
 #      the crate reads the guest's file back to the same indices;
-#   4. every negative case refused by the guest (and, where it gets that far, by the native derivation first).
+#   4. every negative case refused by the guest (and, where it gets that far, by the native derivation first); the
+#      handover positive control accepted.
 # usage: hints_test.sh <zyncapp> <hints-crate-ref> <block dir> <state_H.json> <H> <out dir>
 set -u
 ZA=$(readlink -f "$1"); CR=$(readlink -f "$2"); B=$(readlink -f "$3"); ST=$(readlink -f "$4"); H=$5; O=$6
@@ -39,11 +40,15 @@ rc=$(grab "$O/ref.log" counted); ru=$(grab "$O/ref.log" unspent); rv=$(grab "$O/
 [ "$c $u $v" = "$rc $ru $rv" ] && pass "counted / unspent / value == hints_ref.py ($c / $u / $v sat)" || fail "counts $c $u $v != ref $rc $ru $rv"
 sv=$(python3 -c "import json;print(json.load(open('$ST'))['utxo_value'])"); [ "$v" = "$sv" ] && pass "unspent value == the core state's utxo_value" || fail "value $v != state $sv"
 
-for c in spent_as_unspent unspent_as_spent wrong_spender tracked state undo header dup_tx dup_last drop_tx swap_tx witness_tx lineage pre_undo core_id format assumevalid; do
+for c in spent_as_unspent unspent_as_spent wrong_spender tracked state undo header dup_tx dup_last drop_tx swap_tx witness_tx lineage pre_undo core_id format assumevalid handover_pre_undo handover_list; do
   HINTS_TAMPER=$c "$ZA" hints-prove "$B" "$H" "$ST" "$O/neg" --execute > "$O/neg_$c.log" 2>&1; e=$?
   if [ $e = 3 ] && grep -q "^HINTS_GUEST_REFUSED $c" "$O/neg_$c.log"; then
     pass "refused: $c ($(sed -n "s/^HINTS_GUEST_REFUSED $c: //p" "$O/neg_$c.log" | cut -c1-110))"
   elif grep -q "^HINTS_TAMPER $c" "$O/neg_$c.log"; then fail "NOT refused: $c (exit $e)"; else echo "SKIP $c: $(grep -a -m1 -E 'zyncapp:|HINTS_TAMPER' "$O/neg_$c.log")"; fi
 done
+# the positive control of the handover cases (core_lineage.rs): a lineage of one undo-committing image, given as the
+# journal commits it, runs as a normal execution
+HINTS_TAMPER=handover "$ZA" hints-prove "$B" "$H" "$ST" "$O/neg" --execute > "$O/pos_handover.log" 2>&1; e=$?
+[ $e = 0 ] && grep -q '^HINTS_EXEC ' "$O/pos_handover.log" && pass "accepted: handover (a lineage of undo-committing images)"   || fail "handover NOT accepted (exit $e): $(grep -a -m1 -E 'GUEST|panicked|zyncapp:' "$O/pos_handover.log")"
 echo "HINTS_TEST $P passed, $F failed"
 [ $F = 0 ]

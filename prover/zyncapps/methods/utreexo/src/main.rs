@@ -97,6 +97,10 @@ mod handover_pin {
     include!("../../../../methods/guest/src/handover_pin.rs");
 }
 
+// A core chain with a handover: the lineage list is checked against the journal's digest (core_lineage.rs).
+#[path = "../../core_lineage.rs"]
+mod core_lineage;
+
 /// The networks' PINNED genesis anchors (swiftsync-verify IMAGES `genesis_anchor_hex`, HANDOVER.md).
 const MAINNET_ANCHOR: [u8; 32] = hex32("852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167");
 const SIGNET_ANCHOR: [u8; 32] = hex32("3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827");
@@ -199,7 +203,10 @@ fn main() {
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
     let anchor = if signet { &SIGNET_ANCHOR } else { &MAINNET_ANCHOR };
     facts::check_core_statement(&st, &core_id, 2, network, false, anchor).unwrap_or_else(|e| panic!("core statement: {e}"));
-    assert!(j.lineage == [0u8; 32], "the core chain has a handover: blocks below it may lack the undo commitment");
+    // every block 1..T carries the undo commitment: the lineage given is the journal's, and no image of the chain is
+    // one before the commitment (core_lineage.rs)
+    let core_lineage: Vec<core_lineage::Entry> = env::read();
+    core_lineage::check(&core_id, &j.lineage, &core_lineage).unwrap_or_else(|e| panic!("{e}"));
     assert!(!handover_pin::PRE_UNDO_IMAGES.contains(&core_id), "a pre-undo core image: its blocks carry no undo hash");
     assert!(stop <= j.height, "H must be at most the core height");
     let mut n = [0u32; 1];

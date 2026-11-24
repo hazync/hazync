@@ -171,6 +171,40 @@ struct ZyncCoin {
 }
 const KIND_ZYNC_COIN: u32 = 0x5A43_0002;
 
+/// One handover entry as the hints and utreexo guests read it (prover/zyncapps/methods/core_lineage.rs).
+type LineageEntry = ([u32; 8], u32, [u8; 32]);
+
+/// The handovers a core journal's `lineage` commits, for the hints and utreexo guests: none for a zero lineage, else
+/// the list of the built-in core image (swiftsync-verify IMAGES) whose id and lineage the journal names. The guest is
+/// the judge, not this: with no such image the list is empty, and the guest refuses the lineage.
+fn core_lineage_list(self_id: &[u32; 8], lineage: &[u8; 32]) -> Vec<LineageEntry> {
+    if *lineage == [0u8; 32] { return Vec::new(); }
+    match swiftsync_verify::IMAGES.iter().find(|i| swiftsync_verify::words(&i.method_id()) == *self_id && swiftsync_verify::lineage_of(i.lineage) == *lineage) {
+        Some(i) => i.lineage.iter().map(|h| (h.image, h.first_height, h.verifier)).collect(),
+        None => { eprintln!("zyncapp: the core lineage {} is no built-in image's: the guest will refuse it", hex(lineage)); Vec::new() }
+    }
+}
+
+/// The handover cases of the hints and utreexo guests (core_lineage.rs; execute only, the core journal from a state
+/// JSON): `handover`, a POSITIVE control, a lineage of one undo-committing image (46666b6f at block 2) given as the
+/// journal commits it, which the guest must accept; `handover_pre_undo`, the same with the pre-undo image 8888d59c;
+/// `handover_list`, the lineage committed and another list given. Sets the journal's lineage; returns the list to give.
+fn handover_case(c: &str, lineage: &mut [u8; 32]) -> Option<Vec<LineageEntry>> {
+    let id = |h: &str| swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(swiftsync_verify::hex32(h).unwrap()));
+    let undo = id("46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c");
+    let pre = id("8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4");
+    let digest = |l: &[LineageEntry]| swiftsync_verify::lineage_of(&l.iter().map(|&(image, first_height, verifier)|
+        swiftsync_verify::Handover { image, first_height, verifier }).collect::<Vec<_>>());
+    let (committed, given): (Vec<LineageEntry>, Vec<LineageEntry>) = match c {
+        "handover" => (vec![(undo, 2, [0u8; 32])], vec![(undo, 2, [0u8; 32])]),
+        "handover_pre_undo" => (vec![(pre, 2, [0u8; 32])], vec![(pre, 2, [0u8; 32])]),
+        "handover_list" => (vec![(undo, 2, [0u8; 32])], vec![(undo, 3, [0u8; 32])]),
+        _ => return None,
+    };
+    *lineage = digest(&committed);
+    Some(given)
+}
+
 fn die(m: &str) -> ! { eprintln!("zyncapp: {m}"); std::process::exit(1) }
 fn h32(s: &str) -> [u8; 32] {
     let v: Vec<u8> = (0..s.len()).step_by(2).map(|i| u8::from_str_radix(s.get(i..i + 2).unwrap_or("zz"), 16).unwrap_or_else(|_| die("bad hex"))).collect();
@@ -585,10 +619,11 @@ fn hints_prove(a: &[String]) {
     // HINTS_TAMPER=<case>: a negative test (execute only): the witness or the core journal changed so the guest must refuse
     let tc = std::env::var("HINTS_TAMPER").ok();
     if tc.is_some() && !execute { die("HINTS_TAMPER is an execute-only negative test"); }
-    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "format" | "assumevalid"));
+    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "format" | "assumevalid" | "handover" | "handover_pre_undo" | "handover_list"));
     let w = hints_host::witness(&rp, stop, format, signet, if jcase { None } else { tc.as_deref() }, |h| hints_host::read_block(dir, h)).unwrap_or_else(|e| die(&e));
     if let Some(e) = &w.native_error { println!("HINTS_NATIVE_REFUSED {e}"); }
     let (mut cs, mut journal, mut format) = (cs, journal, format);
+    let mut lineage_given = None;
     if jcase {
         if receipt.is_some() { die("a journal tamper case needs a state JSON (the claim is rebuilt from it)"); }
         match tc.as_deref().unwrap() {
@@ -596,7 +631,7 @@ fn hints_prove(a: &[String]) {
             "pre_undo" => cs.self_id = [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
             "assumevalid" => cs.profile |= 2,
             "format" => format = 3,
-            _ => {}
+            c => lineage_given = handover_case(c, &mut cs.lineage),
         }
         journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         println!("HINTS_TAMPER {}: the core journal / statement input changed", tc.as_deref().unwrap());
@@ -622,6 +657,7 @@ fn hints_prove(a: &[String]) {
     }
     b.write(&core_id_in).unwrap().write(&journal).unwrap().write(&signet).unwrap().write(&format).unwrap().write(&stop).unwrap()
         .write(&hints_host::genesis(signet).to_vec()).unwrap().write(&prof).unwrap()
+        .write(&lineage_given.unwrap_or_else(|| core_lineage_list(&cs.self_id, &cs.lineage))).unwrap()
         .write_slice(&w.frames).write_slice(&[cs.height - stop]).write_slice(&w.tail);
     let env = b.build().unwrap();
     let t1 = std::time::Instant::now();
@@ -631,7 +667,8 @@ fn hints_prove(a: &[String]) {
     };
     if execute {
         let res = risc0_zkvm::default_executor().execute(env, &elf);
-        if let Some(c) = &tc {
+        // `handover` is the positive control of the handover cases: it must run as a normal execution
+        if let Some(c) = tc.as_ref().filter(|c| c.as_str() != "handover") {
             match res {
                 Err(e) => { println!("HINTS_GUEST_REFUSED {c}: {}", e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
                 Ok(_) => { println!("HINTS_GUEST_ACCEPTED {c} (a negative test that passed: a BUG)"); std::process::exit(1) }
@@ -739,7 +776,7 @@ fn utreexo_prove(a: &[String]) {
     }
     let tc = std::env::var("UTREEXO_TAMPER").ok();
     if tc.is_some() && !execute { die("UTREEXO_TAMPER is an execute-only negative test"); }
-    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "assumevalid" | "state_bytes" | "prev_id"));
+    let jcase = matches!(tc.as_deref(), Some("lineage" | "pre_undo" | "core_id" | "assumevalid" | "state_bytes" | "prev_id" | "handover" | "handover_pre_undo" | "handover_list"));
     let mut blocks = Vec::new();
     let mut fr = Vec::with_capacity(stop as usize);
     for h in 1..=stop {
@@ -801,12 +838,13 @@ fn utreexo_prove(a: &[String]) {
     }
     // journal tamper cases
     let (mut cs, mut journal) = (cs, journal);
+    let mut lineage_given = None;
     if let Some(c) = tc.as_deref().filter(|_| jcase) {
         match c {
             "lineage" => cs.lineage[0] ^= 1,
             "pre_undo" => cs.self_id = [2631239816, 2674494539, 4198157524, 4069463800, 1375117754, 2714639643, 453263298, 4095025963],
             "assumevalid" => cs.profile |= 2,
-            _ => {}
+            c => lineage_given = handover_case(c, &mut cs.lineage),
         }
         if receipt.is_some() { die("a journal tamper case needs a state JSON"); }
         journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
@@ -848,12 +886,16 @@ fn utreexo_prove(a: &[String]) {
             }
         }
         b.write_slice(&words[off[lo as usize - 1]..off[hi as usize]]);
-        if last { b.write_slice(&[cs.height - stop]).write_slice(&tail_w); }
+        if last {
+            let l = lineage_given.clone().unwrap_or_else(|| core_lineage_list(&cs.self_id, &cs.lineage));
+            b.write(&l).unwrap().write_slice(&[cs.height - stop]).write_slice(&tail_w);
+        }
         let env = b.build().unwrap();
         let t1 = std::time::Instant::now();
         let (jb, rc) = if execute {
             let res = risc0_zkvm::default_executor().execute(env, &elf);
-            if let Some(c) = &tc {
+            // `handover` is the positive control of the handover cases: it must run as a normal execution
+            if let Some(c) = tc.as_ref().filter(|c| c.as_str() != "handover") {
                 match res {
                     Err(e) => { println!("UTREEXO_GUEST_REFUSED {c}: run {} ({lo}..{hi}): {}", i + 1, e.to_string().lines().next().unwrap_or("")); std::process::exit(3) }
                     Ok(info) => {

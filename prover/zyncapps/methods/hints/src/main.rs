@@ -85,6 +85,10 @@ mod handover_pin {
     include!("../../../../methods/guest/src/handover_pin.rs");
 }
 
+// A core chain with a handover: the lineage list is checked against the journal's digest (core_lineage.rs).
+#[path = "../../core_lineage.rs"]
+mod core_lineage;
+
 /// The networks' PINNED genesis anchors (swiftsync-verify IMAGES `genesis_anchor_hex`, HANDOVER.md): checked here so the
 /// statement itself says the core chain starts at genesis, not only the verifier (review H4).
 const MAINNET_ANCHOR: [u8; 32] = hex32("852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167");
@@ -127,6 +131,7 @@ fn main() {
     let stop: u32 = env::read();
     let genesis: Vec<u8> = env::read();
     let prof: u32 = env::read();
+    let core_lineage: Vec<core_lineage::Entry> = env::read();
     env::verify(core_id, &journal).expect("the core receipt does not verify under core_id");
     assert!(journal.len() % 4 == 0, "core journal is not whole words");
     let words: Vec<u32> = journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
@@ -135,8 +140,9 @@ fn main() {
     let net = if signet { facts::Network::Signet } else { facts::Network::Mainnet };
     let anchor = if signet { &SIGNET_ANCHOR } else { &MAINNET_ANCHOR };
     facts::check_core_statement(&st, &core_id, 2, net, false, anchor).unwrap_or_else(|e| panic!("core statement: {e}"));
-    // every block 1..T carries the undo-data commitment: one image since genesis, and not one before the commitment
-    assert!(j.lineage == [0u8; 32], "the core chain has a handover: blocks below it may lack the undo commitment");
+    // every block 1..T carries the undo-data commitment: the lineage given is the journal's, and no image of the chain
+    // (the core image, or one it hands over from) is one before the commitment (core_lineage.rs)
+    core_lineage::check(&core_id, &j.lineage, &core_lineage).unwrap_or_else(|e| panic!("{e}"));
     assert!(!handover_pin::PRE_UNDO_IMAGES.contains(&core_id), "a pre-undo core image: its blocks carry no undo hash");
     assert!(stop >= 1 && stop <= j.height, "H must be in 1..=the core height");
     let g: [u8; 80] = genesis.as_slice().try_into().expect("the genesis header is 80 bytes");
