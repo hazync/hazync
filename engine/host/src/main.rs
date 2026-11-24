@@ -119,6 +119,9 @@ enum Cmd {
         /// Also verify every chunk/trie proof on its own (the aggregate verifies them anyway).
         #[arg(long)]
         verify_each: bool,
+        /// Chunk + trie proofs on this many `serve` processes at once (sharing the GPU).
+        #[arg(long, default_value_t = 1)]
+        workers: usize,
     },
     /// Long-lived engine for the product host's prover backend: JSON requests on stdin, replies on stdout.
     Serve {
@@ -151,7 +154,7 @@ fn main() -> Result<()> {
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
         Cmd::Execute { dir, input, child, self_id, dry, journal, log } => r0::execute(&dir, &input, &child, self_id, dry, journal.as_deref(), log.as_deref()),
-        Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),
+        Cmd::ProveBlock { dir, export, out, verify_each, workers } => block::prove_block(&dir, &export, &out, verify_each, workers),
         Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::Image { dir, check } => {
             let img = engine::image_of(&engine::Engine::baseline(&dir)?);

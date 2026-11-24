@@ -21,7 +21,57 @@ fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
     c
 }
 
-pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool) -> Result<()> {
+/// `workers` > 1: the chunk and trie proofs run on that many `hzengine serve` processes at once (sharing the GPU),
+/// so one proof's host-side work overlaps another's GPU work; the aggregate then runs here.
+fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usize, report: &mut String) -> Result<()> {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::{Command, Stdio};
+    let me = std::env::current_exe()?;
+    let mut jobs: Vec<(String, PathBuf)> = (0..n).map(|i| (format!("chunk_{i:02}"), export.join(format!("chunk_{i:02}.in")))).collect();
+    jobs.push(("trie".into(), export.join("trie.in")));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let lines = std::sync::Mutex::new(Vec::<(usize, String)>::new());
+    let err = std::sync::Mutex::new(None::<String>);
+    std::thread::scope(|sc| {
+        for _ in 0..workers {
+            sc.spawn(|| {
+                let mut ch = match Command::new(&me).args(["serve", "--dir"]).arg(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
+                    Ok(c) => c, Err(e) => { *err.lock().unwrap() = Some(format!("spawn serve: {e}")); return; }
+                };
+                let mut stdin = ch.stdin.take().unwrap();
+                let mut rd = BufReader::new(ch.stdout.take().unwrap());
+                let mut l = String::new();
+                rd.read_line(&mut l).ok();
+                loop {
+                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    let Some((name, input)) = jobs.get(i) else { break };
+                    let t = Instant::now();
+                    let req = serde_json::json!({"op": "prove", "input": input, "children": [], "self_id": false, "out": out.join(name)});
+                    let _ = writeln!(stdin, "{req}").and_then(|_| stdin.flush());
+                    let mut r = String::new();
+                    rd.read_line(&mut r).ok();
+                    if !r.contains("\"ok\":true") { *err.lock().unwrap() = Some(format!("{name}: {r}")); break; }
+                    let journal = std::fs::read(crate::engine::with_ext(&out.join(name), "journal")).unwrap_or_default();
+                    let r0 = std::fs::read(input.with_extension("r0journal")).ok();
+                    let same = r0.map(|r| r == journal);
+                    if same == Some(false) { *err.lock().unwrap() = Some(format!("{name}: journal differs from RISC Zero's")); }
+                    lines.lock().unwrap().push((i, format!("{name}: proved {:.1} s (worker), journal {} bytes sha256 {} r0 {}\n",
+                        t.elapsed().as_secs_f64(), journal.len(), &hex::encode(Sha256::digest(&journal))[..16],
+                        match same { Some(true) => "IDENTICAL", Some(false) => "DIFFERENT", None => "n/a" })));
+                }
+                drop(stdin);
+                let _ = ch.wait();
+            });
+        }
+    });
+    if let Some(e) = err.into_inner().unwrap() { eyre::bail!("parallel leaves: {e}"); }
+    let mut ls = lines.into_inner().unwrap();
+    ls.sort();
+    for (_, l) in ls { eprint!("{l}"); report.push_str(&l); }
+    Ok(())
+}
+
+pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, workers: usize) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let e = Engine::load(dir)?;
     let exe = Engine::exe(dir)?;
@@ -56,15 +106,23 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool) -> 
         Ok((proof, journal))
     };
     let mut children = Vec::new();
-    for i in 0..n {
-        let (p, _) = leaf(format!("chunk_{i:02}"), export.join(format!("chunk_{i:02}.in")), &mut report)?;
-        if i == 0 && Engine::image(dir).is_err() {
-            record_image(dir, &e, &p)?;
+    if workers > 1 {
+        leaves_parallel(dir, export, out, n, workers, &mut report)?;
+        let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain(["trie".to_string()]).collect();
+        for nm in names {
+            children.push(crate::engine::read_proof(&e, &baseline, &out.join(nm))?.0);
         }
-        children.push(p);
+    } else {
+        for i in 0..n {
+            let (p, _) = leaf(format!("chunk_{i:02}"), export.join(format!("chunk_{i:02}.in")), &mut report)?;
+            if i == 0 && Engine::image(dir).is_err() {
+                record_image(dir, &e, &p)?;
+            }
+            children.push(p);
+        }
+        let (tp, _) = leaf("trie".into(), export.join("trie.in"), &mut report)?;
+        children.push(tp);
     }
-    let (tp, _) = leaf("trie".into(), export.join("trie.in"), &mut report)?;
-    children.push(tp);
     let t_leaves = t_all.elapsed().as_secs_f64();
 
     // the aggregate: this image's id where the product host wrote its METHOD_ID, then every child verified in-guest
