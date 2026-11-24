@@ -37,6 +37,22 @@ field/group patches (0005 0006 0008 0012 0013), and not 0103 (libsecp's SHA on t
 
 Fat LTO + codegen-units=1, as the product.
 
+## Split trie proofs (24.11.2026, in the shared guest source, so RISC Zero's image has them too)
+
+The block's trie update can be proved as parts plus a combine, instead of one proof (mode 17, unchanged and still
+the default):
+- **mode 19 (part):** one top-trie subtree at depth k. Its journal holds the depth, path prefix, old and new subtree
+  hashes, and a digest of exactly its updates.
+- **mode 20 (combine):** verifies every part as a proof of its own image id, then runs the update over the block's
+  witness, with each part's subtree replaced by `TAG_PART` and resolved from that part's journal. It commits mode 17's
+  fields plus that image id.
+- **the aggregate:** accepts a combine's journal only when that id is its own, then treats it as mode 17's.
+
+The host cuts the witness (`ttree::split_witness`), and libzync's random-trie test checks that split and whole updates
+give the same root (k = 0..4) and that a wrong part is refused. `engine-export` writes the split with
+`HAZYNC_TRIE_SPLIT=k`. Block 976,379 at k = 2: 4 parts costing 1.49–1.74B each, against 6.31B for the whole trie;
+every part journal is identical on both VMs.
+
 ## Commitments
 
 ChainState's `self_id` = the engine image id (above). Every other field means what it means in the product. The trie
