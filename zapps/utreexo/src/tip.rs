@@ -154,8 +154,8 @@ pub fn judge_tip_statement(z: TipStatement, id: &[u8; 32], base: &[u8; 32], img:
                                   network: net.to_string(), image_source: Some(tip_image_source(id)) };
     // a statement (or its base) resting on an earlier built-in core image of the chain (below a handover) is judged as
     // that image. The two may differ: block P is on the step's core chain (the hash links), so blocks 1..P are too
-    let base_img: &Image = swiftsync_verify::earlier_core_image(img, &z.base_core_id).unwrap_or(img);
-    let img: &Image = match swiftsync_verify::earlier_core_image(img, &z.core_id) {
+    let base_img: &Image = crate::earlier_core_image(img, &z.base_core_id).unwrap_or(img);
+    let img: &Image = match crate::earlier_core_image(img, &z.core_id) {
         Some(e) => {
             rep_check(&mut rep, true, format!("this step rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex));
             e

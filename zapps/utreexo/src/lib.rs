@@ -218,7 +218,7 @@ pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image,
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: net.to_string(), image_source: Some(image_source(id)) };
     // a statement resting on an earlier built-in core image of the chain (below a handover) is judged as that image
-    let img: &Image = match swiftsync_verify::earlier_core_image(img, &z.core_id) {
+    let img: &Image = match earlier_core_image(img, &z.core_id) {
         Some(e) => {
             rep.check(true, format!("the statement rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex));
             e
@@ -331,5 +331,51 @@ mod tests {
         assert_eq!(v.verdict, Verdict::Demo, "{:?}", v.checks);
         assert_eq!(v.statement.as_ref().unwrap().runs, 2);
         assert_eq!(v.statement.unwrap().roots, ok.statement.unwrap().roots, "one run and two runs give the same roots");
+    }
+}
+
+/// The earlier built-in core image a statement's `core_id` names, when the caller asked for its network's CURRENT
+/// built-in image (by id): a statement resting on the chain below a handover (or before a re-baseline) is judged as
+/// that image, with no `--core-image`, as the core verifier's `swiftsync_verify::earlier_image_named_by` does for a core
+/// receipt. Only images in the built-in table (`swiftsync_verify::IMAGES`) are ever substituted: an id the caller
+/// supplied, or one not in the table, is left to fail on its own. The same function is in `zapps/hints`; it is not
+/// in swiftsync-verify, whose WASM is pinned byte for byte (any edit there moves it).
+pub fn earlier_core_image(asked: &Image, core_id: &[u32; 8]) -> Option<&'static Image> {
+    let current = Image::by_network(asked.network)?;
+    if asked.method_id_hex != current.method_id_hex {
+        return None;
+    }
+    swiftsync_verify::IMAGES.iter().find(|i| i.network == asked.network && swiftsync_verify::words(&i.method_id()) == *core_id
+        && !std::ptr::eq(*i, current))
+}
+
+#[cfg(test)]
+mod earlier_core_image_tests {
+    use super::*;
+
+    /// a statement's core id names an earlier BUILT-IN image of the asked network's chain, and only then, and only
+    /// when the caller asked for the current image
+    #[test]
+    fn earlier_core_images_are_only_built_in_ones() {
+        let cur = Image::by_network("mainnet").unwrap();
+        let w = |i: &Image| swiftsync_verify::words(&i.method_id());
+        let mut n = 0;
+        for old in swiftsync_verify::IMAGES.iter().filter(|i| i.network == "mainnet" && !std::ptr::eq(*i, cur)) {
+            assert!(std::ptr::eq(earlier_core_image(cur, &w(old)).unwrap(), old), "{}: an earlier built-in image", old.method_id_hex);
+            // a modified copy of the current image (`--product`) is still the current image, by id
+            assert!(std::ptr::eq(earlier_core_image(cur.with_product(), &w(old)).unwrap(), old));
+            // an image the caller supplied (`--core-image`): never substituted
+            let mine = cur.with_method_id(&"ab".repeat(32)).unwrap();
+            assert!(earlier_core_image(mine, &w(old)).is_none(), "a caller-supplied image is never substituted");
+            // another network's chain
+            assert!(earlier_core_image(Image::by_network("signet").unwrap(), &w(old)).is_none(), "a mainnet image for signet");
+            n += 1;
+        }
+        assert!(n > 0, "the table has an earlier mainnet image to test with");
+        assert!(earlier_core_image(cur, &w(cur)).is_none(), "the current image itself");
+        assert!(earlier_core_image(cur, &[0xabab_abab; 8]).is_none(), "an id in no built-in table");
+        let mut near = w(cur);
+        near[0] ^= 1;
+        assert!(earlier_core_image(cur, &near).is_none(), "one bit from the current id");
     }
 }
