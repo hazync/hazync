@@ -52,7 +52,7 @@ for i in $(seq 1 180); do
   echo "$S" | grep -q 'SETUP_OK\|SETUP_FAIL' && break; sleep 20; done
 say "setup: $(echo $S | tr '\n' ' ')"
 echo "$S" | grep -q SETUP_OK || { rm -f pod_id.txt; harvest; term; exit 1; }
-ssh $K -p $P root@$IP "cd /workspace && (R0_BLOCKS='$R0_BLOCKS' setsid nohup bash $RUN > run.out 2>&1 < /dev/null &)"
+ssh $K -p $P root@$IP "cd /workspace && (R0_BLOCKS='$R0_BLOCKS' JOBS='$JOBS' setsid nohup bash $RUN > run.out 2>&1 < /dev/null &)"
 say "proving the block"
 for i in $(seq 1 $((DEADLINE_MIN*4))); do
   [ -f pod_id.txt ] || exit 1
