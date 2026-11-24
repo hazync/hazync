@@ -14,6 +14,7 @@ edited). Everything that differs is listed here, with the reason. Nothing here c
 | coin log (`libzync/src/coinlog.rs`) `compress_w` on `zkvm_sha256_impl` | OpenVM's SHA-256 in its native state layout: IVs as they are (no pre-swapped `IV_*_W`), one swap of the output into the digest's bytes; RISC Zero's `sys_sha_compress` is not defined anywhere in the engine |
 | `hz_fe_sqrt` defined in Rust | libsecp's sqrt hook: square root mod p on OpenVM's modular extension |
 | `openvm::init!()` | OpenVM's moduli/curve setup |
+| trie modes 17/19/20 and the aggregate read their witness / chunk journals with `env::read_slice_ref` (edits 8, 9; `agg_lite::validate_block_lite` takes `&[&[u32]]`) | the words are lent out of the input buffer instead of copied into a fresh Vec: same bytes, one copy and that much touched memory fewer (976,379: 5.2 MB witness, 2.3 MB of journals) |
 
 ## Platform (engine/platform)
 
@@ -21,7 +22,11 @@ edited). Everything that differs is listed here, with the reason. Nothing here c
 OpenVM deferred STARK verification of the proof named by the next control-chunk commitment; it requires
 sha256(exe || vm) of that proof = `image` and its public values = sha256(journal). The image id the guest carries
 (`self_id` in ChainState) is therefore sha256(app_exe_commit || app_vm_commit) instead of a RISC Zero image id.
-`env::cycle_count` returns 0 (it only feeds TXCYC diagnostics).
+`env::cycle_count` returns 0 (it only feeds TXCYC diagnostics). `env::read_slice_ref` (engine only) returns the next words
+of the stream as a slice of the input buffer, which is kept 4-byte aligned and never freed.
+
+`bench-noverify` (platform and guest feature, metering only): `env::verify` accepts without a proof, so an aggregate can be
+costed and profiled on CPU without its children. Such an image has its own image id, which no real image accepts.
 
 ## Consensus C/C++ (engine/guest/base.sh)
 

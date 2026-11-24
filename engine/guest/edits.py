@@ -37,6 +37,22 @@ pub unsafe extern "C" fn hz_fe_sqrt(a_be: *const u8, out_be: *mut u8) -> i32 {
 }
 openvm::init!();
 """
+# 8) Large word arrays read once are LENT out of the input buffer (env::read_slice_ref) instead of copied into a fresh
+#    zeroed Vec: the trie witness (976,379: 5.2 MB of a 6.5 MB stream) and the aggregate's chunk journals (2.3 MB).
+#    Same bytes, one copy fewer, and that much less memory touched (memory hashing was 25% of a trie part's cells).
+for m in ("let (nw, nm, ni, np) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize);",
+          "let (d, nw, nm, ni, np) = (h[0], h[1] as usize, h[2] as usize, h[3] as usize, h[4] as usize);",
+          "let (nw, nm, ni, np, nparts) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize, h[4] as usize);"):
+    rep(m + "\n    let mut wit = vec![0u32; nw];\n    env::read_slice(&mut wit);",
+        m + "\n    let wit: &'static [u32] = env::read_slice_ref(nw);   // ENGINE: lent, not copied")
+rep("let mut lite_journals: Vec<Vec<u32>> = Vec::with_capacity(k as usize);",
+    "let mut lite_journals: Vec<&'static [u32]> = Vec::with_capacity(k as usize);   // ENGINE: lent journals")
+rep("""            let mut words = vec![0u32; (n / 4) as usize];
+            env::read_slice(&mut words);
+            env::verify(self_id, &words).expect("chunk proof invalid");""",
+    """            let words: &'static [u32] = env::read_slice_ref((n / 4) as usize);   // ENGINE: lent, not copied
+            env::verify(self_id, words).expect("chunk proof invalid");""")
+rep("{ lite_journals.push(words); continue; }", "{ lite_journals.push(words.leak()); continue; }")
 open(p, "w").write(s); print("engine edits applied:", p)
 
 # 7) libzync's coin log (libzync/src/coinlog.rs) on OpenVM's SHA-256 in its native layout. The product calls RISC Zero's
@@ -84,4 +100,10 @@ rep('''    #[cfg(target_os = "zkvm")]
     compress_w(&IV_SPENT_W, c, s, out);''', '''    #[cfg(target_os = "zkvm")]
     compress_w(&IV_SPENT, c, s, out);''')
 assert "sys_sha_compress(" not in s
+open(p, "w").write(s); print("engine edits applied:", p)
+
+# 9) agg_lite::validate_block_lite takes the lent journals (edit 8) as slices.
+import os
+p = os.path.join(os.path.dirname(sys.argv[1]), "agg_lite.rs"); s = open(p).read()
+rep("journals: &[Vec<u32>],", "journals: &[&[u32]],   // ENGINE: lent journals (edits.py 8)")
 open(p, "w").write(s); print("engine edits applied:", p)

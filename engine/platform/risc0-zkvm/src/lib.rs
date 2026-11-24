@@ -43,7 +43,8 @@ pub mod guest {
         use crate::serde::{Deserializer, WordRead};
 
         struct State {
-            input: Vec<u8>,
+            /// the input stream, 4-byte aligned (`read_slice_ref` lends words out of it), never freed
+            input: &'static [u8],
             pos: usize,
             commits: Vec<[u8; 32]>,
             next_commit: usize,
@@ -68,12 +69,24 @@ pub mod guest {
                     let n = u32::from_le_bytes(ctl[4..8].try_into().unwrap()) as usize;
                     assert!(ctl.len() == 8 + 32 * n, "engine: control chunk length");
                     let commits = ctl[8..].chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
-                    let input = openvm::io::read_vec();
+                    let input = aligned(openvm::io::read_vec());
                     assert!(!dry || n == 0, "engine: a dry run takes no proofs");
                     STATE = Some(State { input, pos: 0, commits, next_commit: 0, emit, dry, journal: Vec::new(), finalized: false });
                 }
                 STATE.as_mut().unwrap()
             }
+        }
+
+        /// The stream as a 'static slice at a 4-byte aligned address (copied once if the allocator gave it less).
+        fn aligned(v: Vec<u8>) -> &'static [u8] {
+            if v.as_ptr() as usize % 4 == 0 {
+                return v.leak();
+            }
+            let n = v.len();
+            let w: &'static mut [u32] = alloc::vec![0u32; n.div_ceil(4)].leak();
+            let b: &'static mut [u8] = bytemuck::cast_slice_mut(w);
+            b[..n].copy_from_slice(&v);
+            &b[..n]
         }
 
         fn take(n: usize) -> &'static [u8] {
@@ -109,6 +122,21 @@ pub mod guest {
             let b: &mut [u8] = bytemuck::cast_slice_mut(buf);
             let n = b.len();
             b.copy_from_slice(take(n));
+        }
+
+        /// The next `n` values of the stream, lent out of the input buffer instead of copied: the same bytes
+        /// `read_slice` would write (engine-only, used by engine/guest/edits.py where a mode reads a large word array
+        /// once). Copies only if the position is not aligned for T.
+        pub fn read_slice_ref<T: bytemuck::Pod>(n: usize) -> &'static [T] {
+            let b = take(n * core::mem::size_of::<T>());
+            match bytemuck::try_cast_slice(b) {
+                Ok(t) => t,
+                Err(_) => {
+                    let v: &'static mut [T] = alloc::vec![T::zeroed(); n].leak();
+                    bytemuck::cast_slice_mut(v).copy_from_slice(b);
+                    v
+                }
+            }
         }
 
         #[derive(Debug)]
