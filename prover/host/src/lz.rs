@@ -1259,11 +1259,15 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         let t_sig = t0.elapsed().as_secs_f64();
         let mut chunks: Vec<Receipt> = Vec::with_capacity(bounds.len());
-        // the engine: every chunk at once on every GPU (HAZYNC_ENGINE_GPUS), in chunk order
-        let echunks: Vec<crate::engine_backend::EngineProof> = if eng {
-            crate::engine_backend::prove_many(out, bounds.iter().enumerate()
-                .map(|(ci, &(clo, chi))| (format!("b{h}_c{ci:02}"), chunk_stream(&w, clo, chi), Vec::new(), false)).collect())
-        } else { Vec::new() };
+        // The engine: each chunk EXECUTED now (with its signature hints) for its journal; the proofs come later, all at
+        // once with the trie's, on every GPU (HAZYNC_ENGINE_GPUS). The collect aggregate below runs DRY on these journals.
+        let estreams: Vec<Vec<u8>> = if eng { bounds.iter().map(|&(clo, chi)| chunk_stream(&w, clo, chi)).collect() } else { Vec::new() };
+        let ejournals: Vec<crate::engine_backend::JournalOnly> = estreams.iter().enumerate().map(|(ci, st)| {
+            let x = crate::engine_backend::with(out, |e| e.execute(&format!("b{h}_c{ci:02}_exec"), st, &[], false));
+            assert!(x.exit.is_none(), "block {h}: chunk {ci} did not commit (exit {:?})", x.exit);
+            crate::engine_backend::JournalOnly(x.journal.expect("chunk journal"))
+        }).collect();
+        let mut echunks: Vec<crate::engine_backend::EngineProof> = Vec::new();
         for &(clo, chi) in &bounds {
             if eng { continue; }
             let mut b = ExecutorEnv::builder();
@@ -1309,19 +1313,16 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         CL_WIT.lock().unwrap().clear();
         *TRIE_RCPT.lock().unwrap() = None;
         *crate::engine_backend::TRIE.lock().unwrap() = None;
+        let mut etrie_stream: Option<Vec<u8>> = None;
         let mut log = Vec::new();
         // the engine's aggregate stream (as env_for writes it), and its children in the guest's env::verify order:
         // the chunks, the trie (once proved), the previous block's proof (a recursive step)
-        let eng_agg = |prev: &ChainState| -> Vec<u8> {
-            let mut st = crate::sink::Stream::default();
-            write_aggregate_env_ex(&mut st, &echunks, prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
-            libzync_agg_tail(&mut st, &w);
-            st.0
-        };
         if eng {
-            let ch: Vec<&crate::engine_backend::EngineProof> = echunks.iter().chain(eprev.iter().filter(|_| step == 0)).collect();
-            let st = eng_agg(&prev);
-            let x = crate::engine_backend::with(out, |e| e.execute(&format!("b{h}_agg_collect"), &st, &ch, true));
+            // DRY: on the chunks' executed journals, no proofs (it can never commit); prev's journal is in the stream
+            let mut st = crate::sink::Stream::default();
+            write_aggregate_env_ex(&mut st, &ejournals, &prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
+            libzync_agg_tail(&mut st, &w);
+            let x = crate::engine_backend::with(out, |e| e.execute_ex(&format!("b{h}_agg_collect"), &st.0, &[], true, true));
             assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "block {h}: collect aggregate: exit {:?}, not a finished collect run", x.exit);
             log = x.log.into_bytes();
             rig_echo(&log);
@@ -1361,25 +1362,42 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             if eng {
                 let mut st = crate::sink::Stream::default();
                 crate::trie::trie_env(&mut st, &wit, &trie_lists.0, &trie_lists.1);
-                let p = crate::engine_backend::with(out, |e| e.prove(&format!("b{h}_trie"), &st.0, &[], false));
-                let j = crate::trie::trie_journal_words(&p.journal);
-                assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.trie_root)[..],
-                        "block {h}: the engine's trie proof is not from the previous trie root");
-                *crate::engine_backend::TRIE.lock().unwrap() = Some(p);
+                etrie_stream = Some(st.0);
             } else {
                 *TRIE_RCPT.lock().unwrap() = Some(crate::trie::trie_prove_wit(h, &wit, &trie_lists.0, &trie_lists.1, &prev, &opts));
             }
         }
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
+        // The engine: every chunk and the trie update proved at once (one job per GPU at a time), each against the
+        // journal its execution committed; the aggregate then verifies all of them in-guest.
+        if eng {
+            let mut jobs: Vec<crate::engine_backend::Job> = estreams.into_iter().zip(ejournals.into_iter()).enumerate()
+                .map(|(ci, (st, j))| (format!("b{h}_c{ci:02}"), st, Vec::new(), false, Some(j.0))).collect();
+            let nchunks = jobs.len();
+            if let Some(st) = etrie_stream.take() {
+                let x = crate::engine_backend::with(out, |e| e.execute(&format!("b{h}_trie_exec"), &st, &[], false));
+                let tj = x.journal.unwrap_or_else(|| panic!("block {h}: trie update did not commit (exit {:?})", x.exit));
+                let j = crate::trie::trie_journal_words(&tj);
+                assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.trie_root)[..],
+                        "block {h}: the engine's trie update is not from the previous trie root");
+                jobs.push((format!("b{h}_trie"), st, Vec::new(), false, Some(tj)));
+            }
+            let mut proofs = crate::engine_backend::prove_many(out, jobs);
+            let trie = if proofs.len() > nchunks { proofs.pop() } else { None };
+            echunks = proofs;
+            *crate::engine_backend::TRIE.lock().unwrap() = trie;
+        }
         let t_hints = t0.elapsed().as_secs_f64();
         let mut next_rcpt: Option<Receipt> = None;
         let st: ChainState = if eng {
             let trie = crate::engine_backend::TRIE.lock().unwrap().clone();
             let ch: Vec<&crate::engine_backend::EngineProof> =
                 echunks.iter().chain(trie.iter()).chain(eprev.iter().filter(|_| step == 0)).collect();
-            let stream = eng_agg(&prev);
-            let p = crate::engine_backend::with(out, |e| e.prove(&format!("b{h}_agg"), &stream, &ch, true));
+            let mut st = crate::sink::Stream::default();
+            write_aggregate_env_ex(&mut st, &echunks, &prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
+            libzync_agg_tail(&mut st, &w);
+            let p = crate::engine_backend::with(out, |e| e.prove(&format!("b{h}_agg"), &st.0, &ch, true));
             let p = crate::engine_backend::keep(&p, &format!("{out}/block_{h}.ovm"));
             let st = crate::engine_backend::decode_state(&p.journal);
             assert_eq!(st.height, h);

@@ -68,12 +68,14 @@ pub(crate) fn with<T>(work: &str, f: impl FnOnce(&mut Engine) -> T) -> T {
 
 /// Prove independent jobs (name, stream, children, self_id) on every GPU at once, results in job order: the main
 /// server (GPU 0) and HAZYNC_ENGINE_GPUS - 1 more. One GPU: in order on the main server.
-pub(crate) fn prove_many(work: &str, jobs: Vec<(String, Vec<u8>, Vec<EngineProof>, bool)>) -> Vec<EngineProof> {
+pub(crate) type Job = (String, Vec<u8>, Vec<EngineProof>, bool, Option<Vec<u8>>);
+
+pub(crate) fn prove_many(work: &str, jobs: Vec<Job>) -> Vec<EngineProof> {
     let n = gpus();
     if n == 1 || jobs.len() < 2 {
-        return jobs.into_iter().map(|(name, st, ch, sid)| {
+        return jobs.into_iter().map(|(name, st, ch, sid, known)| {
             let c: Vec<&EngineProof> = ch.iter().collect();
-            with(work, |e| e.prove(&name, &st, &c, sid))
+            with(work, |e| e.prove_known(&name, &st, &c, sid, known.as_deref()))
         }).collect();
     }
     with(work, |_| ()); // the main server exists (GPU 0)
@@ -92,9 +94,10 @@ pub(crate) fn prove_many(work: &str, jobs: Vec<(String, Vec<u8>, Vec<EngineProof
             let (jobs, next, out, pool) = (&jobs, &next, &out, &pool);
             sc.spawn(move || loop {
                 let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some((name, st, ch, sid)) = jobs.get(i) else { break };
+                let Some((name, st, ch, sid, known)) = jobs.get(i) else { break };
                 let c: Vec<&EngineProof> = ch.iter().collect();
-                let p = if slot == 0 { with(work, |e| e.prove(name, st, &c, *sid)) } else { pool[slot - 1].lock().unwrap().prove(name, st, &c, *sid) };
+                let p = if slot == 0 { with(work, |e| e.prove_known(name, st, &c, *sid, known.as_deref())) }
+                        else { pool[slot - 1].lock().unwrap().prove_known(name, st, &c, *sid, known.as_deref()) };
                 out.lock().unwrap()[i] = Some(p);
             });
         }
@@ -129,12 +132,17 @@ impl Engine {
     /// Execute (no proof). `children` are verified in-guest in env::verify order; `self_id` puts the engine's image
     /// id where the stream carries this host's METHOD_ID (bytes 4..36: an aggregate or a join).
     pub(crate) fn execute(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool) -> Exec {
+        self.execute_ex(name, stream, children, self_id, false)
+    }
+
+    /// `dry`: a collect run that skips in-guest verification (takes no proofs) and can never commit.
+    pub(crate) fn execute_ex(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool, dry: bool) -> Exec {
         let input = self.file(name, "in");
         std::fs::write(&input, stream).unwrap();
         let (log, journal) = (input.with_extension("log"), input.with_extension("journal"));
         let ch: Vec<String> = children.iter().map(|c| c.path.display().to_string()).collect();
         let r = self.req(serde_json::json!({"op": "execute", "input": input, "children": ch, "self_id": self_id,
-                                            "journal": journal, "log": log}));
+                                            "dry": dry, "journal": journal, "log": log}));
         let exit = r["exit"].as_str().map(|c| c.parse().expect("engine: exit code"));
         let out = Exec {
             exit,
@@ -147,11 +155,18 @@ impl Engine {
 
     /// Prove; the proof is kept in the work dir under `name`.
     pub(crate) fn prove(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool) -> EngineProof {
+        self.prove_known(name, stream, children, self_id, None)
+    }
+
+    /// `known`: the journal an execution of this same stream committed; the engine then skips its own execute pass
+    /// and checks the proof against it.
+    pub(crate) fn prove_known(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool, known: Option<&[u8]>) -> EngineProof {
         let input = self.file(name, "in");
         std::fs::write(&input, stream).unwrap();
         let out = input.with_extension("");
+        let kj = known.map(|j| { let p = input.with_extension("known"); std::fs::write(&p, j).unwrap(); p });
         let ch: Vec<String> = children.iter().map(|c| c.path.display().to_string()).collect();
-        let r = self.req(serde_json::json!({"op": "prove", "input": input, "children": ch, "self_id": self_id, "out": out}));
+        let r = self.req(serde_json::json!({"op": "prove", "input": input, "children": ch, "self_id": self_id, "journal": kj, "out": out}));
         println!("  engine: {name} proved in {:.1} s ({} children verified in-guest)", r["secs"].as_f64().unwrap_or(0.0), children.len());
         let journal = std::fs::read(with_ext(&out, "journal")).expect("engine: proof journal");
         let _ = std::fs::remove_file(&input);
@@ -184,6 +199,14 @@ pub(crate) trait Proven {
 impl Proven for risc0_zkvm::Receipt {
     fn journal_bytes(&self) -> &[u8] { &self.journal.bytes }
     fn assumption(&self) -> Option<risc0_zkvm::Receipt> { Some(self.clone()) }
+}
+
+/// A journal from an execution: what a collect aggregate's stream carries for a chunk not yet proved.
+pub(crate) struct JournalOnly(pub Vec<u8>);
+
+impl Proven for JournalOnly {
+    fn journal_bytes(&self) -> &[u8] { &self.0 }
+    fn assumption(&self) -> Option<risc0_zkvm::Receipt> { None }
 }
 
 impl Proven for EngineProof {
