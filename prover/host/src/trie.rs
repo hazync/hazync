@@ -42,7 +42,7 @@ pub(crate) fn trie_parse(text: &str) -> (Marks, Inserts) {
 
 /// Guest mode 17's input: [witness words, marks, inserts, perm length], the witness, marks ×24, inserts ×27, the
 /// update order (the guest checks it is a permutation and that the keys strictly increase in it).
-pub(crate) fn trie_env(b: &mut risc0_zkvm::ExecutorEnvBuilder, wit: &[u32], marks: &Marks, ins: &Inserts) {
+pub(crate) fn trie_env(b: &mut impl crate::sink::Sink, wit: &[u32], marks: &Marks, ins: &Inserts) {
     let ks: Vec<(W, W)> = marks.iter().map(|x| libzync::ttree::split(&x.0)).chain(ins.iter().map(|x| libzync::ttree::split(&x.0))).collect();
     let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
     perm.sort_by(|&a, &c| ks[a as usize].cmp(&ks[c as usize]));
@@ -52,7 +52,7 @@ pub(crate) fn trie_env(b: &mut risc0_zkvm::ExecutorEnvBuilder, wit: &[u32], mark
     let mut iw: Vec<u32> = Vec::with_capacity(ins.len() * 27);
     for (k, sp, v) in ins { iw.extend(kw(k)); iw.push(sp.is_some() as u32); iw.extend_from_slice(&sp.unwrap_or([0; 8])); iw.push(*v as u32); iw.push((*v >> 32) as u32); }
     b.segment_limit_po2(crate::seg_po2());
-    b.write(&17u32).unwrap();
+    b.write(&17u32);
     b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
     b.write_slice(wit);
     if !mw.is_empty() { b.write_slice(&mw); }

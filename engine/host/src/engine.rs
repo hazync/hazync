@@ -68,6 +68,9 @@ fn agg_params() -> AggregationSystemParams {
 /// A fresh SDK: the self-recursive deferral setup and the VM config built on it.
 fn new_sdk() -> Result<(Sdk, SdkVmConfig)> {
     let mut vm_config = SdkVmConfig::from_toml(BASE_CONFIG).wrap_err("base config")?;
+    // The SDK's default system config, as OpenVM's own examples build it: it reserves the deferral address space's
+    // cells, which a TOML without a [system] table leaves at zero (deferral's initial memory then has nowhere to go).
+    vm_config.system = Default::default();
     let memory_dimensions = vm_config.system.config.memory_config.memory_dimensions();
     let num_user_pvs = vm_config.system.config.num_public_values;
     let agg = agg_params();

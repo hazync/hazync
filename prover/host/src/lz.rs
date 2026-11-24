@@ -337,7 +337,7 @@ pub(crate) fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
 }
 
 pub(crate) fn write_aggregate_env(
-    b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
+    b: &mut impl crate::sink::Sink,
     receipts: &[risc0_zkvm::Receipt],
     anchor: &ChainState,
     w: &BlockWitness,
@@ -352,7 +352,7 @@ pub(crate) fn write_aggregate_env(
 /// state through this host's struct only round-trips while the layouts match, which is exactly what can change at a
 /// handover (review 11-03), and the guest's env::verify needs the receipt's own bytes.
 pub(crate) fn write_aggregate_env_ex(
-    b: &mut risc0_zkvm::ExecutorEnvBuilder<'_>,
+    b: &mut impl crate::sink::Sink,
     receipts: &[risc0_zkvm::Receipt],
     anchor: &ChainState,
     prev_journal: Option<&[u8]>,
@@ -361,9 +361,9 @@ pub(crate) fn write_aggregate_env_ex(
 ) {
     b.segment_limit_po2(seg_po2());
     for r in receipts { b.add_assumption(r.clone()); }
-    b.write(&5u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    b.write(&(receipts.len() as u32)).unwrap();
+    b.write(&5u32);
+    b.write(&METHOD_ID);
+    b.write(&(receipts.len() as u32));
     // #136's fix for the AGGREGATE (`agg-readslice`, part of the libzync profile): a length prefix then a
     // 4-byte-padded slice, exactly as write_chunk_inputs does.
     {
@@ -373,17 +373,17 @@ pub(crate) fn write_aggregate_env_ex(
             p
         }
         for r in receipts {
-            b.write(&(r.journal.bytes.len() as u32)).unwrap();
+            b.write(&(r.journal.bytes.len() as u32));
             b.write_slice(&padded(&r.journal.bytes));
         }
         let sj = prev_journal.map(|j| j.to_vec()).unwrap_or_else(|| state_journal_bytes(anchor));
-        b.write(&(sj.len() as u32)).unwrap();
+        b.write(&(sj.len() as u32));
         b.write_slice(&padded(&sj));
     }
-    b.write(w).unwrap();
+    b.write(w);
     // Negative-test hook (test-only, inert unless set): send is_base = 2, which the guest must refuse.
     let raw_base = if std::env::var("HAZYNC_TEST_ISBASE2").is_ok() { 2u32 } else { step };
-    b.write(&raw_base).unwrap();
+    b.write(&raw_base);
 }
 
 /// libzync: `agg-exec-fake` — the mode-5 aggregate in EXECUTE mode on a laptop, with no chunk proving.
@@ -427,6 +427,62 @@ pub(crate) fn agg_exec_fake() {
     report_agg_execute_only(b);
 }
 
+/// `engine-export <dir>`: agg-exec-fake's block, written out for the OpenVM engine (engine/): every chunk's input
+/// stream (chunk_NN.in), the trie update's (trie.in) and the aggregate's (agg.in), each exactly the bytes RISC Zero's
+/// guest reads, with RISC Zero's journal for each (*.r0journal) to compare against and this image's id (method_id).
+/// The aggregate stream carries this image's METHOD_ID at bytes 4..36; the engine puts its own image there.
+pub(crate) fn engine_export(dir: &str) {
+    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
+    use crate::sink::Stream;
+    std::fs::create_dir_all(dir).unwrap();
+    let put = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
+    let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
+    put("method_id", &idb);
+    let (anchor, mut w) = build_full();
+    let bounds = chunk_bounds(&w, nchunks_env());
+    let mut receipts = Vec::with_capacity(bounds.len());
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        let mut st = Stream::default();
+        {
+            use crate::sink::Sink;
+            st.write(&4u32);
+            st.write(&w.height);
+            st.write(&chunk_block_hash(&w.header));
+        }
+        write_chunk_inputs(&mut st, &w, lo, hi);
+        put(&format!("chunk_{i:02}.in"), &st.0);
+        let mut b = ExecutorEnv::builder();
+        b.segment_limit_po2(seg_po2());
+        b.write(&4u32).unwrap();
+        b.write(&w.height).unwrap();
+        b.write(&chunk_block_hash(&w.header)).unwrap();
+        write_chunk_inputs(&mut b, &w, lo, hi);
+        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
+            .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
+        require_committed(s.exit_code, &format!("chunk {i} execution"));
+        put(&format!("chunk_{i:02}.r0journal"), &s.journal.bytes);
+        println!("  chunk {i:>3} [{lo}..{hi}) exported: {} bytes in, {} cycles", st.0.len(), s.cycles());
+        let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
+        receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
+    }
+    libzync_agg_prep(&mut w);
+    let mut anchor = anchor;
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
+    if let Some(t) = TRIE_RCPT.lock().unwrap().as_ref() { put("trie.r0journal", &t.journal.bytes); }
+    let mut st = Stream::default();
+    write_aggregate_env(&mut st, &receipts, &anchor, &w);
+    libzync_agg_tail(&mut st, &w);
+    assert!(st.0[4..36] == idb[..], "aggregate stream: METHOD_ID is not at bytes 4..36");
+    put("agg.in", &st.0);
+    put("chunks", format!("{}\n", bounds.len()).as_bytes());
+    let mut b = ExecutorEnv::builder();
+    write_aggregate_env(&mut b, &receipts, &anchor, &w);
+    libzync_agg_tail(&mut b, &w);
+    std::env::set_var("HAZYNC_JOURNAL_DUMP", format!("{dir}/agg.r0journal"));
+    report_agg_execute_only(b);
+    println!("ENGINE_EXPORT_DONE {dir}: {} chunks, aggregate stream {} bytes", bounds.len(), st.0.len());
+}
+
 /// Coin log, single-block measurement (agg-exec-fake, agg-chunks): a collect run for the block's spends, then a
 /// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
 /// `prove`: the modelled trie update (mode 17) is PROVED (succinct), for an aggregate that will be proved for real
@@ -467,6 +523,11 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         let (root, tr) = libzync::trie_model::synth(&rem, &ink, addrs, sub, counts, 0x5eed + 1);
         let wit = libzync::trie_model::encode(counts, &root, &tr);
         if neg == "list" && !marks.is_empty() { marks[0].1[0] ^= 1; }
+        if let Ok(d) = std::env::var("HAZYNC_ENGINE_EXPORT") {
+            let mut st = crate::sink::Stream::default();
+            crate::trie::trie_env(&mut st, &wit, &marks, &ins);
+            std::fs::write(format!("{d}/trie.in"), &st.0).expect("engine export: trie.in");
+        }
         let mut b = ExecutorEnv::builder();
         crate::trie::trie_env(&mut b, &wit, &marks, &ins);
         b.segment_limit_po2(seg_po2()); // trie_env sets it too; restated for check_seg_guards.sh's 25-line window
@@ -515,18 +576,18 @@ pub(crate) fn libzync_agg_prep(w: &mut BlockWitness) {
 
 /// libzync: the aggregate's ONE hint block, after the witness: ECMH hints from the block's bundle
 /// ($HAZYNC_LZ_HINTS; none = the guest collects, logging ECMHREC lines).
-pub(crate) fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness) {
+pub(crate) fn libzync_agg_tail(b: &mut impl crate::sink::Sink, w: &BlockWitness) {
     let bundle = lz_bundle(w.height, &header_hash(&w.header));
     let words = libzync::wire::AggHints {
         ecmh_collect: bundle.is_none(),
         ecmh: bundle.as_ref().map(|b| b.ecmh.as_slice()).unwrap_or(&[]),
     }.encode();
-    b.write(&(words.len() as u32)).unwrap();
+    b.write(&(words.len() as u32));
     b.write_slice(&words);
     // coin log: the block's witness (empty in a collect run, which logs what the witness must cover)
     if methods::COINLOG {
         let wit = if bundle.is_none() { Vec::new() } else { CL_WIT.lock().unwrap().clone() };
-        b.write(&(wit.len() as u32)).unwrap();
+        b.write(&(wit.len() as u32));
         if !wit.is_empty() { b.write_slice(&wit); }
     }
     // txlog: the block's record order as (journal, record) pairs, from HAZYNC_TXLOG_ORDER (one "journal record" pair per
@@ -537,14 +598,14 @@ pub(crate) fn libzync_agg_tail(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Block
                 .map(|x| x.parse().unwrap_or_else(|_| panic!("{p}: not a number: {x}"))).collect()
         }).unwrap_or_default();
         assert!(order.len() % 2 == 0, "HAZYNC_TXLOG_ORDER: pairs");
-        b.write(&((order.len() / 2) as u32)).unwrap();
+        b.write(&((order.len() / 2) as u32));
         if !order.is_empty() { b.write_slice(&order); }
     }
     // E2: the trie receipt's journal (empty in a collect run), its receipt an assumption the aggregate verifies
     if methods::TRIE {
         let r = if bundle.is_none() { None } else { TRIE_RCPT.lock().unwrap().clone() };
         let tj: Vec<u32> = r.as_ref().map(|r| r.journal.bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()).unwrap_or_default();
-        b.write(&(tj.len() as u32)).unwrap();
+        b.write(&(tj.len() as u32));
         if !tj.is_empty() { b.write_slice(&tj); }
         if let Some(r) = r { b.add_assumption(r); }
     }

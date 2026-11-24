@@ -734,7 +734,7 @@ pub(crate) fn chunk_block_hash(header: &[u8]) -> [u8; 32] {
     if speculative() { [0; 32] } else { header_hash(header) }
 }
 
-pub(crate) fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &BlockWitness, lo: usize, hi: usize) {
+pub(crate) fn write_chunk_inputs(b: &mut impl crate::sink::Sink, w: &BlockWitness, lo: usize, hi: usize) {
     fn padded(v: &[u8]) -> Vec<u8> {
         let mut p = v.to_vec();
         p.resize(v.len().div_ceil(4) * 4, 0);
@@ -756,7 +756,7 @@ pub(crate) fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Blo
         "chunk inputs are not in (tx_idx, input_idx) order — grouping would reorder binds"
     );
 
-    b.write(&(groups.len() as u32)).unwrap();
+    b.write(&(groups.len() as u32));
 
     // libzync guest: ONE hint block (libzync/src/wire.rs) -- pubkey-Y hints, batch-signature hints from
     // the block's bundle ($HAZYNC_LZ_HINTS, or collect mode without one), and the block's MTP and time.
@@ -772,7 +772,7 @@ pub(crate) fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Blo
         sig_collect: sig.is_none(),
         sig: sig.unwrap_or(&[]),
     }.encode();
-    b.write(&(words.len() as u32)).unwrap();
+    b.write(&(words.len() as u32));
     b.write_slice(&words);
     match sig {
         Some(s) => eprintln!("  libzync: inputs {lo}..{hi}: {} pubkey hints, {} signature hints",
@@ -783,19 +783,19 @@ pub(crate) fn write_chunk_inputs(b: &mut risc0_zkvm::ExecutorEnvBuilder, w: &Blo
     for (tx_idx, gs, ge) in groups {
         let tx = &w.txs[tx_idx as usize].0;
         let prevouts = &w.tx_prevouts[tx_idx as usize].0;
-        b.write(&(tx.len() as u32)).unwrap();
-        b.write(&(prevouts.len() as u32)).unwrap();
-        b.write(&((ge - gs) as u32)).unwrap();
+        b.write(&(tx.len() as u32));
+        b.write(&(prevouts.len() as u32));
+        b.write(&((ge - gs) as u32));
         b.write_slice(&padded(tx));
         b.write_slice(&padded(prevouts));
         // Negative-test hook (test-only, inert unless set): send a coinbase coin's flag as 4, which the leaf
         // reads as "coinbase" and the old maturity test (== 1) did not (review 2).
         let cb2 = std::env::var("HAZYNC_TEST_CBFLAG2").is_ok();
         for inp in &w.inputs[gs..ge] {
-            b.write(&inp.input_idx).unwrap();
-            b.write(&inp.coin_height).unwrap();
-            b.write(&(if cb2 && inp.coin_is_coinbase == 1 { 4 } else { inp.coin_is_coinbase })).unwrap();
-            b.write(&inp.coin_mtp).unwrap();
+            b.write(&inp.input_idx);
+            b.write(&inp.coin_height);
+            b.write(&(if cb2 && inp.coin_is_coinbase == 1 { 4 } else { inp.coin_is_coinbase }));
+            b.write(&inp.coin_mtp);
         }
     }
 }

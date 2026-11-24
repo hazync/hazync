@@ -28,9 +28,15 @@ pub fn main() {
     }
 }
 
+pub fn sha256(b: &[u8]) -> [u8; 32] {
+    let mut h = openvm_sha2::Sha256::new();
+    h.update(b);
+    h.finalize()
+}
+
 /// Reveal sha256(journal) as the proof's public values.
 pub fn commit_journal(journal: &[u8]) {
-    openvm::io::reveal_bytes32(openvm_sha2::sha256(journal));
+    openvm::io::reveal_bytes32(sha256(journal));
     if unsafe { EMIT } {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut s = alloc::string::String::with_capacity(5 + 2 * journal.len());

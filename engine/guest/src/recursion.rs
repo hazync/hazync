@@ -36,7 +36,7 @@ pub fn verify_child(image: &Image, input_commit: &Commit, journal: &[u8]) {
     let out = verify_stark_unchecked::<VERIFY_STARK>(input_commit);
     assert!(out.app_exe_commit == image.exe, "child proof is not of this image (exe)");
     assert!(out.app_vm_commit == image.vm, "child proof is not of this image (vm)");
-    let want = openvm_sha2::sha256(journal);
+    let want = crate::sha256(journal);
     assert!(out.user_public_values.as_slice() == want.as_slice(), "child journal does not match its proof");
 }
 

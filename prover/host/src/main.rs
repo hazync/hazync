@@ -24,6 +24,7 @@ mod reforest;
 mod lz_coord;
 mod reorg;
 mod rewind;
+mod sink;
 
 use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
 use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd};
@@ -1278,6 +1279,12 @@ fn main() {
     }));
 
     let args: Vec<String> = std::env::args().collect();
+    if let Some(i) = args.iter().position(|a| a == "engine-export") {
+        let dir = args.get(i + 1).expect("engine-export <dir>").clone();
+        std::env::set_var("HAZYNC_ENGINE_EXPORT", &dir);
+        lz::engine_export(&dir);
+        return;
+    }
     if args.iter().any(|a| a == "agg-exec-fake") {
         agg_exec_fake();
         return;
