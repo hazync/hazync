@@ -17,7 +17,7 @@ sys.path.insert(0, CORE_SRC + "/test/functional")
 from test_framework.blocktools import add_witness_commitment, create_block, create_coinbase  # noqa: E402
 from test_framework.messages import COIN, COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut, hash256, ser_uint256  # noqa: E402
 from test_framework.key import ECKey, compute_xonly_pubkey, generate_privkey, sign_schnorr, tweak_add_privkey  # noqa: E402
-from test_framework.script import (CScript, LegacySignatureHash, OP_0, OP_1, OP_2, OP_3, OP_CHECKMULTISIG, OP_CHECKSIG, OP_DROP,  # noqa: E402
+from test_framework.script import (CScript, LegacySignatureHash, OP_0, OP_1, OP_2, OP_2DROP, OP_3, OP_3DUP, OP_CHECKMULTISIG, OP_CHECKSIG, OP_DROP,  # noqa: E402
                                    OP_CHECKLOCKTIMEVERIFY, OP_CHECKSEQUENCEVERIFY, OP_DUP, OP_ENDIF, OP_EQUAL, OP_EQUALVERIFY, OP_HASH160, OP_IF, OP_NOT, OP_RETURN, OP_TRUE, SIGHASH_ALL,
                                    SIGHASH_DEFAULT, SegwitV0SignatureHash, TaprootSignatureHash, hash160, sha256, taproot_construct)
 
@@ -384,6 +384,15 @@ def tap_script(c, parity=False, wrong_sig=False):
 def c_taproot_script(c): return tap_script(c)
 def c_taproot_tweak_parity(c): return tap_script(c, parity=True)
 def c_taproot_script_bad_sig(c): return tap_script(c, wrong_sig=True)
+# hazync#794: ONE tapscript input whose stack copies outgrow a bump-allocated guest heap. Tapscript has no opcode or script
+# size limit; OP_3DUP copies three 520-byte items twice each, and Core frees every copy. ~3.95 MB leaf, ~5 GB allocated in
+# total, a few MB live. Core accepts; an image whose C heap never reclaims aborts with "Out of memory!" (no split helps).
+def c_tap_heap_794(c):
+    x, _ = compute_xonly_pubkey(generate_privkey())
+    info = taproot_construct(x, [("s", CScript(bytes([OP_3DUP, OP_3DUP, OP_2DROP, OP_2DROP, OP_2DROP]) * 790_000 + bytes([OP_2DROP])))])
+    leaf = info.leaves["s"]; a, v = fund(c, info.scriptPubKey); t = spend(c, [(a.sha256, 0)], [out(v)])
+    cb = bytes([leaf.version + info.negflag]) + info.internal_pubkey + leaf.merklebranch
+    wit(t, [[bytes([1]) * 520, bytes([2]) * 520, bytes([3]) * 520, bytes(leaf.script), cb]]); return c.block([a, t])
 
 
 # ---- sigops through P2SH and witness, counted without ever executing -------------------------------------------
@@ -486,6 +495,7 @@ if os.environ.get("RIG_ONLY"):
 # A coin that does not exist fails at H under design B; a coin-log image (RIG_COINLOG=1) refuses it at the block.
 DEFERRED = set() if os.environ.get("RIG_COINLOG") == "1" else {"missing_coin"}
 TWO_CHUNKS = {"split_tx", "split_tx_bad"}
+SLOW = {"tap_heap_794"}   # ~5.5 G cycles in one chunk: ~6 min on a 16-core box, more on a CI runner
 
 
 def guest(c, name, b, height):
@@ -501,7 +511,7 @@ def guest(c, name, b, height):
     if name in TWO_CHUNKS:
         env["HAZYNC_CHUNK_PACK"] = "count"   # split by input count: 4 + 4, the bad lock in the second run
     r = subprocess.run([HOST, "libzync-prove-range", str(height), str(height), d, f"{BLOCKS}/anchor.json", o],
-                       env=env, capture_output=True, text=True, errors="replace", timeout=900)
+                       env=env, capture_output=True, text=True, errors="replace", timeout=3600 if name in SLOW else 900)
     t = r.stdout + r.stderr
     if name == "split_tx":
         assert ": 2 chunks" in t, "split_tx did not span two chunks: " + t[-300:]
