@@ -1,5 +1,5 @@
 #!/bin/bash
-# gpu_block.sh <bundle.tgz>: ⚠ SPENDS MONEY. One RunPod GPU (default RTX A6000, SECURE): build hzengine with CUDA,
+# gpu_block.sh <bundle.tgz>: ⚠ SPENDS MONEY. One RunPod pod, GPU_COUNT GPUs (default 1 RTX A6000, SECURE): build hzengine with CUDA,
 # prove a whole block with in-guest recursion (pod/run.sh), harvest, terminate. Pod handling as
 # scripts/zapp-regtest/gpu/gpu_run.sh: a watcher harvests then terminates at DEADLINE_MIN or a balance under $1.
 # The bundle holds host/ (engine/host source), keys/ (sdk.pk agg.vk openvm.toml guest.vmexe baseline.json) and
@@ -18,12 +18,12 @@ GPUS="${GPUS:-NVIDIA RTX A6000|NVIDIA A40|NVIDIA L40S}"; PORT_TRIES=${PORT_TRIES
 # DEPLOY_WAIT_MIN: keep retrying the list every 2 min until one deploys (default: one pass)
 ID=""; IFS='|' read -ra GL <<< "$GPUS"; DEND=$((SECONDS + ${DEPLOY_WAIT_MIN:-0}*60))
 while :; do
-  for GPU in "${GL[@]}"; do ID=$(rp deploy hz-engine-block "$GPU" "$PUB") && [ -n "$ID" ] && break 2; say "no $GPU"; ID=""; done
+  for GPU in "${GL[@]}"; do ID=$(rp deploy hz-engine-block "$GPU" "$PUB" "${GPU_COUNT:-1}") && [ -n "$ID" ] && break 2; say "no $GPU"; ID=""; done
   [ $SECONDS -lt $DEND ] || break; sleep 120
 done
 [ -n "$ID" ] || { say "deploy failed on every GPU type"; exit 1; }
 [ -n "$ID" ] || { say "deploy failed: no pod id"; exit 1; }
-echo "$ID" > pod_id.txt; say "pod $ID deployed ($GPU)"
+echo "$ID" > pod_id.txt; say "pod $ID deployed (${GPU_COUNT:-1}x $GPU)"
 term(){ say "terminating $ID"; rp terminate "$ID" || say "TERMINATE FAILED for $ID: check the RunPod console"; }
 harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
   [ -f conn.txt ] || return 0; read -r CIP CP < conn.txt; say "harvesting from $CIP:$CP"

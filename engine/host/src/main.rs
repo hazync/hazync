@@ -119,8 +119,8 @@ enum Cmd {
         /// Also verify every chunk/trie proof on its own (the aggregate verifies them anyway).
         #[arg(long)]
         verify_each: bool,
-        /// Chunk + trie proofs on this many `serve` processes at once (sharing the GPU). Default: 3 on a card of
-        /// 40 GiB or more, else 1 (engine::default_gpu_share).
+        /// Chunk + trie proofs on this many `serve` processes at once, spread over the visible GPUs (worker k on
+        /// GPU k mod GPUs). Default: GPUs x (3 on a card of 40 GiB or more, else 1) (engine::default_gpu_share).
         #[arg(long)]
         workers: Option<usize>,
     },
@@ -166,7 +166,7 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
         Cmd::Execute { dir, input, child, self_id, dry, journal, log } => r0::execute(&dir, &input, &child, self_id, dry, journal.as_deref(), log.as_deref()),
-        Cmd::ProveBlock { dir, export, out, verify_each, workers } => block::prove_block(&dir, &export, &out, verify_each, workers.unwrap_or_else(engine::default_gpu_share)),
+        Cmd::ProveBlock { dir, export, out, verify_each, workers } => block::prove_block(&dir, &export, &out, verify_each, workers.unwrap_or_else(|| engine::gpu_count() * engine::default_gpu_share())),
         Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::GpuShare => {
             println!("{}", engine::default_gpu_share());

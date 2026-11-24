@@ -117,6 +117,22 @@ pub fn gpu_mem_gib() -> Option<f64> {
     Some(mib / 1024.0)
 }
 
+/// GPUs visible to this process: HZ_GPUS, else nvidia-smi's count (within CUDA_VISIBLE_DEVICES when set). 1 on CPU.
+pub fn gpu_count() -> usize {
+    if let Some(n) = std::env::var("HZ_GPUS").ok().and_then(|v| v.parse::<usize>().ok()) {
+        return n.max(1);
+    }
+    if !cfg!(feature = "cuda") {
+        return 1;
+    }
+    if let Ok(v) = std::env::var("CUDA_VISIBLE_DEVICES") {
+        return v.split(',').filter(|x| !x.trim().is_empty()).count().max(1);
+    }
+    std::process::Command::new("nvidia-smi").arg("-L").output().ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).lines().filter(|l| l.starts_with("GPU ")).count())
+        .unwrap_or(1).max(1)
+}
+
 /// The cards the defaults below were measured on (A6000, 48 GB: results/gpu_a6000_tuning) and anything larger.
 const BIG_CARD_GIB: f64 = 40.0;
 

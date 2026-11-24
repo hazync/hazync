@@ -943,15 +943,15 @@ class RunPod:
 
     # -- pods --
 
-    def create_pod(self, name, gpu_type, ssh_pubkey, ports=("22/tcp",), disk_gb=40):
-        """POST /v2/pods: one on-demand 1-GPU pod of exactly this type. The v2 pod object (201)."""
+    def create_pod(self, name, gpu_type, ssh_pubkey, ports=("22/tcp",), disk_gb=40, gpu_count=1):
+        """POST /v2/pods: one on-demand pod with `gpu_count` GPUs of exactly this type. The v2 pod object (201)."""
         # ⛔ SECURE CLOUD, NOT COMMUNITY. Community hosts mostly never start -- RunPod accepts the deploy and
         # never publishes a port, so the caller waits out its full SSH timeout having paid for a pod that never
         # existed. Measured 2026-09-20 in tip_smoke.deploy_listening, where the split is by PRICE:
         #     $0.34/hr   1 of 6 started   (17%)
         #     $0.74/hr  14 of 14 started  (100%)
         # Every Python deploy path comes through here; test_pod_cloud_type.py checks every deploy path in the repo.
-        body = {"name": name, "cloud": "SECURE", "gpu": {"id": gpu_type, "count": 1},
+        body = {"name": name, "cloud": "SECURE", "gpu": {"id": gpu_type, "count": int(gpu_count)},
                 "image": IMAGE, "disk": int(disk_gb), "ports": list(ports),
                 "env": {"PUBLIC_KEY": ssh_pubkey}}
         return self._req("POST", "/pods", body)

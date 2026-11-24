@@ -31,12 +31,26 @@ fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usi
     let mut jobs: Vec<(String, PathBuf)> = (0..n).map(|i| (format!("chunk_{i:02}"), export.join(format!("chunk_{i:02}.in")))).collect();
     jobs.push(("trie".into(), export.join("trie.in")));
     let next = std::sync::atomic::AtomicUsize::new(0);
+    let gpus = crate::engine::gpu_count();
+    // provers per card: workers spread round-robin, so a card holds ceil(workers / gpus) of them
+    let share = workers.div_ceil(gpus);
+    // device names as this process sees them (a CUDA_VISIBLE_DEVICES subset keeps its own ids)
+    let devs: Vec<String> = match std::env::var("CUDA_VISIBLE_DEVICES") {
+        Ok(v) => v.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+        Err(_) => (0..gpus).map(|g| g.to_string()).collect(),
+    };
     let lines = std::sync::Mutex::new(Vec::<(usize, String)>::new());
     let err = std::sync::Mutex::new(None::<String>);
     std::thread::scope(|sc| {
-        for _ in 0..workers {
-            sc.spawn(|| {
-                let mut ch = match Command::new(&me).args(["serve", "--dir"]).arg(dir).env("HZ_GPU_SHARE", workers.to_string()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
+        for k in 0..workers {
+            let (me, next, lines, err, jobs, devs) = (&me, &next, &lines, &err, &jobs, &devs);
+            sc.spawn(move || {
+                let mut cmd = Command::new(me);
+                cmd.args(["serve", "--dir"]).arg(dir).env("HZ_GPU_SHARE", share.to_string());
+                if gpus > 1 {
+                    cmd.env("CUDA_VISIBLE_DEVICES", &devs[k % devs.len()]);
+                }
+                let mut ch = match cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
                     Ok(c) => c, Err(e) => { *err.lock().unwrap() = Some(format!("spawn serve: {e}")); return; }
                 };
                 let mut stdin = ch.stdin.take().unwrap();
