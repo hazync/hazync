@@ -88,3 +88,23 @@ proof, so no child proofs are needed; its own image id): **5.36B** with hz7's ba
 `Acc`, the live-coin hash's running sum, now adds in place and writes its limbs only when read). Both journals are
 RISC Zero's except the 32 image-id bytes. The aggregate is now the largest single proof of the block and runs alone
 after the leaves (hz8_and_agg.txt).
+
+### The trie, and lent reads (keys-hz9, 25.11.2026)
+
+A trie part's profile (prof of trie_part_00 at an 8 GiB cap; the whole trie's CPU profile outgrew the box's RAM):
+padded cells are 30% SHA-256 (two compressions per node: the old and the new root), 25% memory hashing (Poseidon2,
+memory Merkle, boundary) and only 34% RISC-V instructions, three quarters of those in the tree walk itself
+(`top_pass`/`top_node`/`sub_*`). The one plain waste: the witness (976,379: 1,304,744 words, 5.2 MB of a 6.5 MB
+stream) was copied out of the input buffer into a fresh vector, doubling its footprint. hz9 lends it instead
+(`env::read_slice_ref`, edits 8 and 9), and the aggregate's chunk journals (2.3 MB) the same way:
+
+| proof | hz8 cost | hz9 cost | change | journal |
+|---|---|---|---|---|
+| trie (whole) | 6.312B | 6.159B | −2.4% | identical to RISC Zero's |
+| trie part 0 | 1.552B | 1.514B | −2.5% | identical |
+| trie part 1 | 1.492B | 1.455B | −2.5% | identical |
+| chunk 0 | 3.2347B | 3.2346B | 0 | identical |
+| aggregate (metering images b8 / b9) | 5.106B | 5.038B | −1.3% | RISC Zero's but the 32 image-id bytes |
+
+(hz9_lent_reads.txt.) Most of the trie's cost is its hashing and memory, not instructions; beyond this the levers are the
+segment cap (results/gpu_a40_segcap: the trie's padded cells are 17.3B at 11 GiB, 15.5B at 16 GiB) and the format.

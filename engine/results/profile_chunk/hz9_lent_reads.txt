@@ -1,0 +1,14 @@
+97f2030e lend large word arrays out of the input buffer (env::read_slice_ref): trie witness and the aggregate's chunk journals no longer copied (edits 8, 9)
+hz9 build: 95.9 s; image exe 45832e2deda8d15ee7f5635c8680d034d58c5a0c245a615dc0e19d6858cbb443 vm 00e00077450a5a565
+b9 build: 87.6 s; image exe 10da8327771cd131da8357689bc54530f1f67c2c7bb7072b61a5e2331c85f774 vm 00e00077450a5a565
+trie hz8 IDENTICAL :: execute: 17.9 s, cost 6311995821, instructions 88521548, journal 100 bytes sha256 13b30678ea5a63035fd18450b2716486f214f67d93d436d753fca715e70b3f39
+trie hz9 IDENTICAL :: execute: 18.6 s, cost 6159338910, instructions 84607260, journal 100 bytes sha256 13b30678ea5a63035fd18450b2716486f214f67d93d436d753fca715e70b3f39
+trie_part_00 hz8 IDENTICAL :: execute: 16.0 s, cost 1551940097, instructions 21868008, journal 136 bytes sha256 d786785ee7b1b2587e98fad01e5c9fcc2315a75da0b6d529cb7d1377db37275c
+trie_part_00 hz9 IDENTICAL :: execute: 16.5 s, cost 1513914688, instructions 20892989, journal 136 bytes sha256 d786785ee7b1b2587e98fad01e5c9fcc2315a75da0b6d529cb7d1377db37275c
+trie_part_01 hz8 IDENTICAL :: execute: 18.4 s, cost 1492370140, instructions 20943225, journal 136 bytes sha256 bf4958a64d8706aaed297ecf8881cc3a2567f132d7d324cb0a75514cddee8085
+trie_part_01 hz9 IDENTICAL :: execute: 16.5 s, cost 1455364443, instructions 19994353, journal 136 bytes sha256 bf4958a64d8706aaed297ecf8881cc3a2567f132d7d324cb0a75514cddee8085
+chunk_00 hz8 IDENTICAL :: execute: 17.3 s, cost 3234670533, instructions 74944602, journal 426760 bytes sha256 975daaf367bb3f0432303f0a33f2f0b44cbe46691a5a99c2c5d21b89eb08376d
+chunk_00 hz9 IDENTICAL :: execute: 16.3 s, cost 3234631994, instructions 74948252, journal 426760 bytes sha256 975daaf367bb3f0432303f0a33f2f0b44cbe46691a5a99c2c5d21b89eb08376d
+agg b8 :: execute: 16.0 s, cost 5105537013, instructions 90276748, journal 5284 bytes sha256 ffc9b946d3c70b81db011f4df7a61f43a87d23926f2ee0a7ee1b5c168f88d807 :: vs r0 len/len/diff bytes 5284 5284 32
+agg b9 :: execute: 15.3 s, cost 5038200847, instructions 88551218, journal 5284 bytes sha256 479fc99554825028739e4e50a065eac32cc2f9d86ba8f682b7fc725d593c18d7 :: vs r0 len/len/diff bytes 5284 5284 32
+B9_DONE
