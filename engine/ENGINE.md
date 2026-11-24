@@ -64,6 +64,18 @@ Each lands only with its measurement, and with outputs checked against the produ
 - Product-host backend (prover/host/src/engine_backend.rs): `HAZYNC_ENGINE=<hzengine> HAZYNC_ENGINE_KEYS=<dir>`
   makes `libzync-prove-range` and `libzync-join` run every execution and proof on the engine (`hzengine serve`).
 
+## Defaults (from results/gpu_a6000_tuning, 24.11.2026)
+
+| setting | default | override | measured on block 976,379, one A6000 |
+|---|---|---|---|
+| chunks | sized by predicted cost, ~0.9B each, at most 16 (engine runs and `engine-export` only) | `HAZYNC_CHUNK_TARGET`, `HAZYNC_CHUNKS` | 5 chunks 240 s vs 16 chunks 289 s (one prover) |
+| provers per GPU | 3 on a card of 40 GiB or more, else 1 | `prove-block --workers`, `HAZYNC_ENGINE_PER_GPU` | 1: 240 s, 2: 194 s, 3: 183 s |
+| segment cap | round(GPU GiB / provers) − 4, at most 24 (A6000: 24 / 20 / 12); smaller cards and CPU: OpenVM's 15 | `HZ_SEG_MEM_GB` | 1 prover: 15 GiB 240 s, 24 GiB 221 s; 32 GiB refused by the prover |
+
+`hzengine gpu-share` prints the provers-per-GPU default for the card it sees. Cards under 40 GiB keep OpenVM's
+settings, because nothing has been measured on them yet. A `prove-block` aggregate runs alone on the card, so it gets
+the 1-prover cap.
+
 ## Layout
 
 | path | what |
