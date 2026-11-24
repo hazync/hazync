@@ -31,6 +31,8 @@ openvm-stark-sdk = { git = "https://github.com/openvm-org/stark-backend.git", ta
 [features]
 default = []
 cuda = ["openvm-sdk/cuda", "openvm-verify-stark-circuit/cuda"]
+# Guest profiling (HZ_METRICS=<file.json>): instruction counts by guest function stack, from OpenVM's perf-metrics.
+profile = ["openvm-sdk/perf-metrics", "openvm-sdk/metrics", "openvm-stark-sdk/metrics"]
 
 [profile.release]
 debug = 1

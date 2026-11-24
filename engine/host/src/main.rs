@@ -145,8 +145,17 @@ enum Cmd {
 }
 
 fn main() -> Result<()> {
+    // HZ_METRICS=<file.json> (a `--features profile` build): metrics, incl. guest instruction counts by function stack.
+    if std::env::var("HZ_METRICS").is_ok() {
+        let cli = Cli::parse();
+        return openvm_stark_sdk::bench::run_with_metric_collection("HZ_METRICS", || run(cli));
+    }
     openvm_stark_sdk::utils::setup_tracing();
-    match Cli::parse().cmd {
+    run(Cli::parse())
+}
+
+fn run(cli: Cli) -> Result<()> {
+    match cli.cmd {
         Cmd::Keygen { dir } => engine::keygen(&dir),
         Cmd::Build { dir, guest } => engine::build(&dir, &guest),
         Cmd::SelftestLeaf { dir, value, out } => selftest::leaf(&dir, value, &out),
