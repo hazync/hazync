@@ -123,6 +123,11 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     s.write_bytes(&stream);
     e.attach_children(&baseline, &mut s, &proofs)?;
     let t = std::time::Instant::now();
+    if std::env::var("HZ_SEGMENTS").is_ok() {
+        // how the prover would segment this run (HZ_SEG_MEM_GB changes it)
+        let (_, segs) = crate::capture::stdout_of(|| e.sdk.execute_metered(exe.clone(), s.clone())).0?;
+        eprintln!("segments: {}", segs.len());
+    }
     let (r, out) = crate::capture::stdout_of(|| e.sdk.execute_metered_cost(exe.clone(), s));
     if let Some(p) = log {
         std::fs::write(p, out.lines().filter(|l| !l.starts_with("HZJ:")).collect::<Vec<_>>().join("\n") + "\n")?;

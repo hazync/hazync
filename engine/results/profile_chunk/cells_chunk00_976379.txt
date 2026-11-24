@@ -1,0 +1,40 @@
+## metered_main_cells_unpadded: 2,450,103,577
+ 38.97%  Poseidon2PeripheryAir<BabyBearParameters>, 1>
+ 20.25%  VmAirWrapper<Rv32LoadStoreAdapterAir, LoadStoreCoreAir<4>
+ 16.45%  VmAirWrapper<Rv32BaseAluAdapterAir, BaseAluCoreAir<4, 8>
+  4.89%  Sha2BlockHasherVmAir<Sha256Config>
+  4.05%  VmAirWrapper<Rv32BaseAluAdapterAir, ShiftCoreAir<4, 8>
+  2.76%  VmAirWrapper<Rv32BranchAdapterAir, BranchEqualCoreAir<4>
+  2.46%  MemoryMerkleAir<8>
+  1.72%  VmAirWrapper<Rv32BranchAdapterAir, BranchLessThanCoreAir<4, 8>
+  1.16%  PersistentBoundaryAir<8>
+  0.98%  VmAirWrapper<Rv32BaseAluAdapterAir, LessThanCoreAir<4, 8>
+  0.90%  VmAirWrapper<Rv32LoadStoreAdapterAir, LoadSignExtendCoreAir<4, 8>
+  0.83%  VmAirWrapper<Rv32VecHeapAdapterAir<2, 16, 16, 4, 4>, FieldExpressionCoreAir>
+## metered_main_cells_padding: 1,063,095,503
+ 43.35%  Poseidon2PeripheryAir<BabyBearParameters>, 1>
+ 18.03%  VmAirWrapper<Rv32LoadStoreAdapterAir, LoadStoreCoreAir<4>
+ 11.81%  VmAirWrapper<Rv32BaseAluAdapterAir, BaseAluCoreAir<4, 8>
+  5.60%  Sha2BlockHasherVmAir<Sha256Config>
+  3.89%  VmAirWrapper<Rv32BranchAdapterAir, BranchEqualCoreAir<4>
+  3.73%  VmAirWrapper<Rv32BaseAluAdapterAir, ShiftCoreAir<4, 8>
+  3.29%  MemoryMerkleAir<8>
+  1.75%  ProgramAir
+  1.64%  VmAirWrapper<Rv32VecHeapAdapterAir<2, 16, 16, 4, 4>, FieldExpressionCoreAir>
+  1.56%  VmAirWrapper<Rv32BranchAdapterAir, BranchLessThanCoreAir<4, 8>
+  1.46%  PersistentBoundaryAir<8>
+  0.93%  VmAirWrapper<Rv32BaseAluAdapterAir, LessThanCoreAir<4, 8>
+## metered_interaction_cells_unpadded: 627,464,457
+ 35.68%  VmAirWrapper<Rv32BaseAluAdapterAir, BaseAluCoreAir<4, 8>
+ 32.79%  VmAirWrapper<Rv32LoadStoreAdapterAir, LoadStoreCoreAir<4>
+  7.16%  VmAirWrapper<Rv32BaseAluAdapterAir, ShiftCoreAir<4, 8>
+  4.57%  VmAirWrapper<Rv32BranchAdapterAir, BranchEqualCoreAir<4>
+  2.73%  VmAirWrapper<Rv32BranchAdapterAir, BranchLessThanCoreAir<4, 8>
+  2.58%  VmAirWrapper<Rv32VecHeapAdapterAir<2, 16, 16, 4, 4>, FieldExpressionCoreAir>
+  1.87%  VmAirWrapper<Rv32BaseAluAdapterAir, LessThanCoreAir<4, 8>
+  1.75%  VmAirWrapper<Rv32LoadStoreAdapterAir, LoadSignExtendCoreAir<4, 8>
+  1.35%  VmAirWrapper<Rv32JalrAdapterAir, Rv32JalrCoreAir>
+  1.21%  Sha2BlockHasherVmAir<Sha256Config>
+  1.18%  VmAirWrapper<Rv32IsEqualModAdapterAir<2, 8, 4, 32>, ModularIsEqualCoreAir<32, 4, 8>
+  1.16%  MemoryMerkleAir<8>
+segments: ['0', '1', '2', '3', '4', '5']

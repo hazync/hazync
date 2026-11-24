@@ -113,8 +113,15 @@ pub struct Engine {
 
 impl Engine {
     pub fn load(dir: &Path) -> Result<Self> {
-        let cached: SdkCachedProvingKey<SdkVmConfig> =
+        let mut cached: SdkCachedProvingKey<SdkVmConfig> =
             read_object_from_file(dir.join("sdk.pk")).wrap_err("sdk.pk (run keygen)")?;
+        // HZ_SEG_MEM_GB: the prover's per-segment trace memory cap (OpenVM default 15 GiB, sized for 24 GB cards).
+        // Fewer, larger segments hash each touched memory page fewer times (Poseidon2 was 39% of a chunk's trace cells,
+        // results/profile_chunk). Prover-side only: not serialized, not in any key or commitment.
+        if let Some(gb) = std::env::var("HZ_SEG_MEM_GB").ok().and_then(|v| v.parse::<usize>().ok()) {
+            std::sync::Arc::get_mut(&mut cached.app_pk.app_vm_pk).expect("sdk.pk: unshared key").vm_config.system.config.segmentation_max_memory = gb << 30;
+            eprintln!("segmentation max memory: {gb} GiB");
+        }
         let sdk = Sdk::from_deferral_cached_proving_key(cached)?;
         let agg_vk = sdk.agg_vk();
         Ok(Engine { sdk, agg_vk })
