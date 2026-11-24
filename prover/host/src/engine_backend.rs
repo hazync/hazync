@@ -152,3 +152,20 @@ pub(crate) fn decode_state(j: &[u8]) -> crate::ChainState {
     let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     risc0_zkvm::serde::from_slice(&w).expect("engine: ChainState")
 }
+
+/// The engine image id as the guest commits it (ChainState.self_id): sha256(exe || vm) of `<keys>/image.json`'s
+/// commitments, as 8 little-endian words.
+pub(crate) fn image_id_words(keys: &str) -> [u32; 8] {
+    use sha2::Digest;
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(format!("{keys}/image.json"))
+        .unwrap_or_else(|e| panic!("{keys}/image.json: {e} (the engine records it with its first proof)"))).expect("image.json");
+    let mut pre = hex_bytes(v["exe"].as_str().expect("image.json exe"));
+    pre.extend(hex_bytes(v["vm"].as_str().expect("image.json vm")));
+    assert!(pre.len() == 64, "image.json: two 32-byte commitments");
+    let d = sha2::Sha256::digest(&pre);
+    core::array::from_fn(|i| u32::from_le_bytes(d[4 * i..4 * i + 4].try_into().unwrap()))
+}
+
+fn hex_bytes(h: &str) -> Vec<u8> {
+    (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex")).collect()
+}

@@ -150,6 +150,24 @@ pub(crate) fn node_block_hash(cmd: &str, height: u32) -> Result<String, String> 
 
 pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Option<&str>, mempool: Option<&str>, cli: Option<&str>) {
     libzync_verify_fail_hook(); // also installed by the dispatcher, before the arguments are read
+    let mut fails = 0;
+    let mut check = |ok: bool, what: &str| {
+        println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
+        if !ok { fails += 1; }
+    };
+    // HAZYNC_ENGINE: `receipt` is an engine proof (P.proof.json + P.journal). The proof itself is checked by the engine
+    // (STARK against its keys, public values = sha256(journal), the recorded image); everything after is the same
+    // ChainState check, with self_id = the engine's image id.
+    let (cs, my_id): (ChainState, [u32; 8]) = if crate::engine_backend::active() {
+        let bin = std::env::var("HAZYNC_ENGINE").unwrap();
+        let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS");
+        let o = std::process::Command::new(&bin).args(["verify", "--dir", &keys, "--proof", receipt]).output()
+            .unwrap_or_else(|e| panic!("HAZYNC_ENGINE={bin}: {e}"));
+        check(o.status.success(), &format!("engine proof verifies (STARK vs {keys}/agg.vk + baseline, public values = sha256(journal), recorded image){}",
+            if o.status.success() { String::new() } else { format!(": {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")) }));
+        let j = std::fs::read(format!("{receipt}.journal")).unwrap_or_else(|e| panic!("{receipt}.journal: {e}"));
+        (crate::engine_backend::decode_state(&j), crate::engine_backend::image_id_words(&keys))
+    } else {
     let raw = std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}"));
     // Refuse a composite receipt BEFORE decoding it (it nests without bound: a hostile one overflows the stack; cold
     // review 11-06). bincode's first u32 is the InnerReceipt variant: 1 succinct, 2 Groth16.
@@ -163,11 +181,6 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         println!("LIBZYNC_VERIFY_FAIL: {}", e.escape_debug());
         std::process::exit(1)
     } };
-    let mut fails = 0;
-    let mut check = |ok: bool, what: &str| {
-        println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
-        if !ok { fails += 1; }
-    };
     // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in the verifier's environment (review 2), so
     // refuse both: a dev-mode receipt is never a proof, whatever this shell has exported.
     let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
@@ -183,8 +196,10 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         println!("LIBZYNC_VERIFY_FAIL: the journal does not decode as a ChainState");
         std::process::exit(1)
     } };
+    (cs, METHOD_ID)
+    };
     // A later version only appends fields (HANDOVER.md §2): this reader checks the prefix it knows.
-    check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == METHOD_ID,
+    check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == my_id,
           &format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
     // The profile is committed by the image itself (bits from the compiled code, never from input), so the
     // proof states what was checked; it must also be what this verifier was built to accept.
