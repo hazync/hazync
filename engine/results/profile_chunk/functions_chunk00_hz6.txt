@@ -1,0 +1,63 @@
+total 90,983,067
+SELF
+ 39.08  39.08  memcpy
+  7.90  29.04  <k256[334582f20be06cfe]::Secp256k1 as openvm_ecc_guest[4488b033dc9d43a1]::weierstrass::IntrinsicCurve>::msm
+  4.79   4.79  memmove
+  3.00   3.00  memset
+  2.60   2.60  _ZN12_GLOBAL__N_19ripemd1609TransformEPmPKh
+  2.55   2.55  memcmp
+  2.09   5.25  hazync_batch_defer
+  2.09   5.12  _ZN7CSHA2565WriteEPKhj
+  1.98   2.41  hazync_engine_guest[3dfdc962df9af696]::agg_lite::push_hash
+  1.90 100.00  hazync_engine_guest[3dfdc962df9af696]::main
+  1.87  30.65  _Z10EvalScriptRSt6vectorIS_IhSaIhEESaIS1_EERK7CScriptjRK20BaseSignatureChecker10SigVersionR19ScriptExecutionDataP13ScriptError_t
+  1.75   1.75  secp256k1_scalar_set_b32
+  1.52   1.66  _Z11GetScriptOpRN9prevectorILj28EhmlE14const_iteratorES1_R10opcodetypePSt6vectorIhSaIhEE
+  1.51  39.08  hazync_engine_guest[3dfdc962df9af696]::batch_ecdsa::finish
+  1.37   4.29  _ZN7CSHA2568FinalizeEPh
+  1.37   1.37  secp256k1_fe_mul_inner
+  1.14   1.14  malloc
+  0.92   4.46  _Z13SignatureHashI12CTransactionE7uint256RK7CScriptRKT_jiRKx10SigVersionPK26PrecomputedTransactionData
+  0.86   1.84  _ZNSt6vectorIS_IhSaIhEESaIS1_EE9push_backERKS1_
+  0.85   0.85  secp256k1_fe_sqr_inner
+  0.83   1.55  <sha2[80f963e01a63c042]::Sha256 as sha2[80f963e01a63c042]::Digest>::finalize
+  0.76   0.76  zkvm_sha256_impl
+  0.73   1.17  hz_fe_limbs
+  0.62   0.86  hz_fe_sqrt
+  0.56   1.67  _Znwj
+  0.49   0.59  _ZNK7CScript16IsWitnessProgramERiRSt6vectorIhSaIhEE
+  0.46   6.06  _ZL9cached_txPKhj
+  0.44   0.44  secp256k1_fe_impl_get_b32
+  0.41   2.27  _Z22UnserializeTransactionI12ParamsStreamIR10MiniReader20TransactionSerParamsE19CMutableTransactionEvRT0_RT_RKS3_.isra.0
+  0.40   0.40  <k256[334582f20be06cfe]::internal::Secp256k1Scalar as openvm_algebra_guest[cd35af4c028807f0]::Reduce>::reduce_le_bytes
+INCLUSIVE
+100.00  __start
+100.00  hazync_engine_guest[3dfdc962df9af696]::main
+ 44.23  verify_inputs_batch_once
+ 39.08  hazync_engine_guest[3dfdc962df9af696]::batch_ecdsa::finish
+ 39.08  memcpy
+ 34.15  _Z12VerifyScriptRK7CScriptS1_PK14CScriptWitnessjRK20BaseSignatureCheckerP13ScriptError_t
+ 30.65  _Z10EvalScriptRSt6vectorIS_IhSaIhEESaIS1_EERK7CScriptjRK20BaseSignatureChecker10SigVersionR19ScriptExecutionDataP13ScriptError_t
+ 29.04  <k256[334582f20be06cfe]::Secp256k1 as openvm_ecc_guest[4488b033dc9d43a1]::weierstrass::IntrinsicCurve>::msm
+ 23.83  _ZL20VerifyWitnessProgramRK14CScriptWitnessiRKSt6vectorIhSaIhEEjRK20BaseSignatureCheckerP13ScriptError_tb
+ 22.38  _ZL20ExecuteWitnessScriptRK4SpanIKSt6vectorIhSaIhEEERK7CScriptj10SigVersionRK20BaseSignatureCheckerR19ScriptExecutionDataP13ScriptError_t.isra.0
+ 20.44  _ZNK34GenericTransactionSignatureCheckerI12CTransactionE19CheckECDSASignatureERKSt6vectorIhSaIhEES6_RK7CScript10SigVersion
+ 15.46  _ZNK7CPubKey6VerifyERK7uint256RKSt6vectorIhSaIhEE
+  9.39  _Z10EvalScriptRSt6vectorIS_IhSaIhEESaIS1_EERK7CScriptjRK20BaseSignatureChecker10SigVersionP13ScriptError_t
+  7.50  secp256k1_ecdsa_verify
+  6.38  secp256k1_ecdsa_sig_verify
+  6.06  _ZL9cached_txPKhj
+  5.25  hazync_batch_defer
+  5.12  _ZN7CSHA2565WriteEPKhj
+  4.79  memmove
+  4.46  _Z13SignatureHashI12CTransactionE7uint256RK7CScriptRKT_jiRKx10SigVersionPK26PrecomputedTransactionData
+  4.31  secp256k1_ec_pubkey_parse
+  4.29  _ZN7CSHA2568FinalizeEPh
+  3.76  secp256k1_ge_set_xo_var
+  3.52  hz_tx_rules_c
+  3.05  _Z11hz_tx_rulesRK12CTransactionRKSt6vectorI6CTxOutSaIS3_EEjjPKmS9_S9_ixxmbPxSA_SA_
+  3.00  memset
+  2.88  _ZN10CRIPEMD1605WriteEPKhj
+  2.86  _ZN10CRIPEMD1608FinalizeEPh
+  2.61  _ZL7hz_leafPhPKhmyS1_jmmm.part.0
+  2.60  _ZN12_GLOBAL__N_19ripemd1609TransformEPmPKh

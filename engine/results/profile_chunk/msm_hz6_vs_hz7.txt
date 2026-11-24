@@ -1,0 +1,13 @@
+5e4e2de0 batch check: copy-free signed-digit msm (msm_ovm.rs, host-tested against openvm's msm) + sorted-index key merge; chunk profile showed openvm's msm at 31% of instruction cells, mostly memcpy
+build: 83.6 s; image exe c959bb2a4341292171e6785effa67f32df445a1188aa2562109a771ec728664b vm 00e00077450a5a5657b99e459ec4ec4fa56ca81d6becbb26bec94a0b9f97c64c
+chunk_00 hz6 IDENTICAL :: execute: 16.2 s, cost 4247915706, instructions 101225360, journal 426760 bytes sha256 975daaf367bb3f0432303f0a33f2f0b44cbe46691a5a99c2c5d21b89eb08376d 
+chunk_00 hz7 IDENTICAL :: execute: 15.5 s, cost 3383730727, instructions 78009783, journal 426760 bytes sha256 975daaf367bb3f0432303f0a33f2f0b44cbe46691a5a99c2c5d21b89eb08376d 
+chunk_01 hz6 IDENTICAL :: execute: 17.1 s, cost 4400662092, instructions 103442308, journal 399980 bytes sha256 423545ebf152b87c0a9b64a0968c38f32dcbe713990015a6b9e38c3744b58ded 
+chunk_01 hz7 IDENTICAL :: execute: 16.7 s, cost 3476577528, instructions 78622165, journal 399980 bytes sha256 423545ebf152b87c0a9b64a0968c38f32dcbe713990015a6b9e38c3744b58ded 
+chunk_02 hz6 IDENTICAL :: execute: 15.2 s, cost 3741282311, instructions 88687648, journal 310180 bytes sha256 c677c75b74d775fb6946803358d46797735ec1fa450bc90af7e14e24e29170de 
+chunk_02 hz7 IDENTICAL :: execute: 15.8 s, cost 2819760800, instructions 64166032, journal 310180 bytes sha256 c677c75b74d775fb6946803358d46797735ec1fa450bc90af7e14e24e29170de 
+chunk_03 hz6 IDENTICAL :: execute: 16.3 s, cost 4216070076, instructions 99440838, journal 511580 bytes sha256 bf86604b4016615b3a637c0a983b9d74f9d6233fdec00cdeddba1de52703bb24 
+chunk_03 hz7 IDENTICAL :: execute: 16.3 s, cost 3414809879, instructions 78177088, journal 511580 bytes sha256 bf86604b4016615b3a637c0a983b9d74f9d6233fdec00cdeddba1de52703bb24 
+chunk_04 hz6 IDENTICAL :: execute: 17.0 s, cost 4306652895, instructions 101392339, journal 630472 bytes sha256 775dee3327600f498404080158ff6a34b38ef549b172dfbbe8892646173bb637 
+chunk_04 hz7 IDENTICAL :: execute: 19.8 s, cost 3897721374, instructions 90489269, journal 630472 bytes sha256 775dee3327600f498404080158ff6a34b38ef549b172dfbbe8892646173bb637 
+MSM7_DONE

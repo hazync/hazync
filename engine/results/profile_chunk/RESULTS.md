@@ -32,3 +32,36 @@ change, which would need a soundness review of its own. Not pursued.
 
 (Segment counts here come from CPU metering. They don't match the GPU prover's counts for the same cap (chunk 0 was
 8 segments on the A40), so compare them only with each other.)
+
+## Function-level profile and the batch check's msm (24.11.2026, CPU, block 976,379, 5-chunk export)
+
+The earlier runs had no function names because the guest executable was transpiled by a non-profiling `hzengine`,
+which drops the ELF's function bounds. Transpiling with the `--features profile` build (and `GUEST_SYMBOLS_PATH` set)
+keeps them; the image is unchanged (same exe commit). `scripts/prof_names.py <metrics>.folded <guest.syms>` names the
+functions. Chunk 0 on keys-hz6 (functions_chunk00_hz6.txt): 91.0M instructions; by instruction cells (cells_used,
+which carry the function stack):
+
+| inclusive | function |
+|---|---|
+| 43.6% | Core's `verify_inputs_batch_once` (scripts, sighash, libsecp parsing) |
+| 40.1% | `batch_ecdsa::finish` (the batch signature equation) |
+| 30.8% | of which openvm-ecc-guest's generic `msm` |
+| 37.9% | `memcpy`, self (most of it under the msm, moving 64-byte points) |
+
+The curve circuit itself (FieldExpression, EcAddNe) is about 2% of cells: the msm's cost was RISC-V glue. keys-hz7
+replaces it with `guest/msm_ovm.rs`: signed-digit Pippenger with every digit computed once, each point negated once,
+in-place complete additions (`add_assign_impl`), one reused bucket buffer, window size from a cost estimate. Host
+test (`guest/msm-test`) checks it against openvm's `msm` on random inputs and edge cases (zero/one/n-1 scalars,
+identity, equal and opposite bases, exact cancellation); a broken carry fails it. `finish` also merges keys through a
+sorted index instead of a BTreeMap. Same batch equation, same transcript, same result for every input.
+
+| chunk | hz6 cost | hz7 cost | change | hz6 instr. | hz7 instr. | journal vs RISC Zero |
+|---|---|---|---|---|---|---|
+| 0 | 4.248B | 3.384B | −20.3% | 101.2M | 78.0M | identical (both) |
+| 1 | 4.401B | 3.477B | −21.0% | 103.4M | 78.6M | identical |
+| 2 | 3.741B | 2.820B | −24.6% | 88.7M | 64.2M | identical |
+| 3 | 4.216B | 3.415B | −19.0% | 99.4M | 78.2M | identical |
+| 4 | 4.307B | 3.898B | −9.5% | 101.4M | 90.5M | identical |
+| sum | 20.91B | 16.99B | **−18.7%** | | | |
+
+(msm_hz6_vs_hz7.txt. Metered cost, not GPU time; the GPU run is pending.)
