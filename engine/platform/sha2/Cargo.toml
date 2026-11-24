@@ -1,0 +1,13 @@
+[package]
+name = "hazync-engine-sha2"
+version = "0.1.0"
+edition = "2021"
+description = "The slice of RustCrypto sha2 Hazync's guest uses, on OpenVM's SHA-256 extension"
+
+[lib]
+name = "sha2"
+
+[features]
+compress = []
+
+[dependencies]

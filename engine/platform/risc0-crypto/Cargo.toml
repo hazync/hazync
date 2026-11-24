@@ -1,0 +1,12 @@
+[package]
+name = "hazync-engine-crypto"
+version = "0.1.0"
+edition = "2021"
+description = "The slice of risc0-crypto Hazync's live-coin hash uses (secp256k1 Fq), on OpenVM's modular extension"
+
+[lib]
+name = "risc0_crypto"
+
+[dependencies]
+openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }

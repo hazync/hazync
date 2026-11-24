@@ -1,0 +1,16 @@
+[package]
+name = "hazync-engine-platform"
+version = "0.1.0"
+edition = "2021"
+description = "The RISC Zero guest API Hazync's guest uses, on OpenVM 2.1 (linked as `risc0_zkvm`)"
+license = "Apache-2.0"
+
+[lib]
+name = "risc0_zkvm"
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["alloc"] }
+bytemuck = { version = "1", features = ["derive"] }
+openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", features = ["std"] }
+openvm-sha2 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-verify-stark-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
