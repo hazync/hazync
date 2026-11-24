@@ -56,6 +56,14 @@ pub mod guest {
 
         static mut STATE: Option<State> = None;
 
+        /// Metering builds only: the bump allocator's position (one 1-byte allocation), to report heap use.
+        #[cfg(feature = "bench-noverify")]
+        static mut HEAP0: usize = 0;
+        #[cfg(feature = "bench-noverify")]
+        fn heap_pos() -> usize {
+            unsafe { alloc::alloc::alloc(core::alloc::Layout::from_size_align(1, 1).unwrap()) as usize }
+        }
+
         #[allow(static_mut_refs)]
         fn st() -> &'static mut State {
             // SAFETY: the guest is single-threaded; this is the only access path.
@@ -69,6 +77,8 @@ pub mod guest {
                     let n = u32::from_le_bytes(ctl[4..8].try_into().unwrap()) as usize;
                     assert!(ctl.len() == 8 + 32 * n, "engine: control chunk length");
                     let commits = ctl[8..].chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
+                    #[cfg(feature = "bench-noverify")]
+                    { HEAP0 = heap_pos(); }
                     let input = aligned(openvm::io::read_vec());
                     assert!(!dry || n == 0, "engine: a dry run takes no proofs");
                     STATE = Some(State { input, pos: 0, commits, next_commit: 0, emit, dry, journal: Vec::new(), finalized: false });
@@ -204,6 +214,8 @@ pub mod guest {
             s.finalized = true;
             assert!(s.next_commit == s.commits.len(), "engine: {} proofs supplied, {} verified", s.commits.len(), s.next_commit);
             openvm::io::reveal_bytes32(crate::sha256(&s.journal));
+            #[cfg(feature = "bench-noverify")]
+            openvm::io::println(alloc::format!("HZHEAP: {} bytes allocated (input {} bytes)", heap_pos() - unsafe { HEAP0 }, s.input.len()));
             if s.emit {
                 const HEX: &[u8; 16] = b"0123456789abcdef";
                 let mut o = alloc::string::String::with_capacity(5 + 2 * s.journal.len());
