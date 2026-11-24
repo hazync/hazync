@@ -126,14 +126,17 @@ fn from_p(p: &P) -> Pt {
     let mut o = [0u32; 16]; o[..8].copy_from_slice(&limbs(p.x().as_le_bytes())); o[8..].copy_from_slice(&limbs(p.y().as_le_bytes())); o
 }
 pub fn neg_pt(p: &Pt) -> Pt { from_p(&-to_p(p)) }
-/// Running sum of points; `get` is None at the identity.
-pub struct Acc { p: Option<P>, cache: Pt }
+/// Running sum of points; `get` is None at the identity. The sum is kept as a curve point and added to in place (a
+/// complete addition, so cancelling to the identity is exact); its limbs are written only when `get` reads them.
+pub struct Acc { p: P, cache: core::cell::UnsafeCell<Pt> }
 impl Acc {
-    pub const ID: Acc = Acc { p: None, cache: [0; 16] };
-    pub fn get(&self) -> Option<&Pt> { self.p.as_ref().map(|_| &self.cache) }
+    pub const ID: Acc = Acc { p: <P as WeierstrassPoint>::IDENTITY, cache: core::cell::UnsafeCell::new([0; 16]) };
+    pub fn get(&self) -> Option<&Pt> {
+        if self.p == <P as Group>::IDENTITY { return None; }
+        // SAFETY: the guest is single-threaded and no reference from an earlier `get` outlives the borrow of self.
+        unsafe { *self.cache.get() = from_p(&self.p); Some(&*self.cache.get()) }
+    }
     pub fn add(&mut self, q: &Pt) {
-        let qp = to_p(q);
-        let s = match self.p.take() { None => qp, Some(a) => a + qp };
-        if s == <P as Group>::IDENTITY { self.p = None; self.cache = [0; 16]; } else { self.cache = from_p(&s); self.p = Some(s); }
+        self.p.add_assign_impl::<true>(&to_p(q));
     }
 }

@@ -14,3 +14,8 @@ bytemuck = { version = "1", features = ["derive"] }
 openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", features = ["std"] }
 openvm-sha2 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-verify-stark-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+
+[features]
+# METERING ONLY (results/*: cost and profile runs of an aggregate without child proofs): env::verify accepts without a
+# proof. An image built with it has its own image id, which no real image accepts as a child; never prove with it.
+bench-noverify = []

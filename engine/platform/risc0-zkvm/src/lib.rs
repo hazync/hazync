@@ -14,6 +14,9 @@
 //! (image id = sha256(app_exe_commit || app_vm_commit)), and its public values must be sha256(journal). That is the
 //! statement `env::verify` makes on RISC Zero: a valid proof of that image with that journal exists.
 //!
+//! `bench-noverify` (a METERING-ONLY build, never proved with): every `env::verify` accepts without a proof, so an
+//! aggregate's cost and profile can be measured on CPU without its children's proofs. Its image id is its own.
+//!
 //! A DRY run (flag bit 1) skips every `env::verify` and can never commit: `finalize` refuses it. It exists for the
 //! host's collect runs (which end in env::exit before committing anything), so a block's collect aggregate can run
 //! before its chunk proofs exist. No proof of a dry run can carry a journal, so skipping the checks proves nothing.
@@ -114,7 +117,7 @@ pub mod guest {
         /// See the crate doc. Panics rather than returning Err on a mismatch: no caller continues after a failure.
         pub fn verify<T: bytemuck::Pod>(image_id: [u32; 8], journal: &[T]) -> Result<(), VerifyError> {
             let s = st();
-            if s.dry {
+            if s.dry || cfg!(feature = "bench-noverify") {
                 let _ = (image_id, journal);
                 return Ok(());
             }

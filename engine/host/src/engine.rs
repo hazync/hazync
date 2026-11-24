@@ -298,7 +298,12 @@ pub struct ChildCall {
 pub fn build(dir: &Path, guest: &Path) -> Result<()> {
     let e = Engine::load(dir)?;
     let t = std::time::Instant::now();
-    let elf = e.sdk.build(GuestOptions::default(), guest, &None, None)?;
+    // HZ_GUEST_FEATURES (comma-separated): extra guest features, e.g. the metering-only `bench-noverify`
+    let feats: Vec<String> = std::env::var("HZ_GUEST_FEATURES").map(|v| v.split(',').filter(|f| !f.is_empty()).map(str::to_string).collect()).unwrap_or_default();
+    if !feats.is_empty() {
+        eprintln!("guest features: {}", feats.join(","));
+    }
+    let elf = e.sdk.build(GuestOptions::default().with_features(feats), guest, &None, None)?;
     let exe = e.sdk.convert_to_exe(elf)?;
     let prover = e.sdk.prover(exe.clone())?;
     let baseline = prover.generate_baseline();

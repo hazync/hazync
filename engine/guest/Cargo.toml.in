@@ -38,6 +38,8 @@ txlog = ["libzync"]
 test-lineage = ["coinlog"]
 xver-v3_0_5 = []
 xver-v3_1_0 = []
+# metering only, see the platform crate (hzengine build with HZ_GUEST_FEATURES=bench-noverify)
+bench-noverify = ["risc0-zkvm/bench-noverify"]
 
 [dependencies]
 risc0-zkvm = { path = "@ENGINE@/platform/risc0-zkvm", package = "hazync-engine-platform" }

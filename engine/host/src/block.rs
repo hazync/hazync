@@ -150,13 +150,13 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         jobs.push(Job { name: "trie_combine".into(), input: export.join("trie_combine.in"), children: pn, self_id: true, deps: (0..parts).collect() });
         "trie_combine"
     } else {
+        // the whole update first: it is the largest leaf (976,379: 6.3B against ~3.4B per chunk), so starting it
+        // first keeps it off the end of the leaf phase
+        jobs.push(Job { name: "trie".into(), input: export.join("trie.in"), children: vec![], self_id: false, deps: vec![] });
         "trie"
     };
     for i in 0..n {
         jobs.push(Job { name: format!("chunk_{i:02}"), input: export.join(format!("chunk_{i:02}.in")), children: vec![], self_id: false, deps: vec![] });
-    }
-    if parts == 0 {
-        jobs.push(Job { name: "trie".into(), input: export.join("trie.in"), children: vec![], self_id: false, deps: vec![] });
     }
     let workers = workers.min(jobs.len()); // no more provers than leaf proofs (a 1-chunk block has 2)
     if workers > 1 || parts > 0 {
