@@ -1,0 +1,2 @@
+NVIDIA RTX A6000, 46068 MiB
+gpu util mean 47.7612
