@@ -1,0 +1,60 @@
+  engine: /root/engine/host/target/release/hzengine serving keys /root/engine/keys-hz2; work dir /root/engine/chain/a/engine/s0
+  engine: b1_trie proved in 136.7 s (0 children verified in-guest)
+  engine: b1_agg proved in 360.5 s (1 children verified in-guest)
+  block 1: 0 chunks, proved in 554.3 s (base on anchor), forest 1 live_set 1  [554 s total]
+  engine: b2_trie proved in 155.2 s (0 children verified in-guest)
+  engine: b2_agg proved in 398.8 s (2 children verified in-guest)
+  block 2: 0 chunks, proved in 572.1 s (verifies prev), forest 2 live_set 1  [1126 s total]
+LZ_PROVE_RANGE_DONE 1..=2 in 1126 s; final receipt /root/engine/chain/a/block_2.rcpt
+  engine: /root/engine/host/target/release/hzengine serving keys /root/engine/keys-hz2; work dir /root/engine/chain/b/engine/s0
+  engine: b3_trie proved in 116.9 s (0 children verified in-guest)
+  engine: b3_agg proved in 290.1 s (1 children verified in-guest)
+  block 3: 0 chunks, proved in 465.0 s (base on anchor), forest 3 live_set 1  [465 s total]
+LZ_PROVE_RANGE_DONE 3..=3 in 465 s; final receipt /root/engine/chain/b/block_3.rcpt
+JOURNAL_SHA256 ca1c4fa1ef20f7b8fa159b33fd7d9b4768e9e8c2ca87ad8251b130a1554275fa
+JOINED left tip 2 + right tip 3 -> /root/engine/chain/join_1_3.ovm (engine), 286.0 s
+== libzync-verify a/block_1.ovm
+  [ok] engine proof verifies (STARK vs /root/engine/keys-hz2/agg.vk + baseline, public values = sha256(journal), recorded image)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile in the proof 0x71 == this verifier's 0x71 (libzync, scripts checked, mainnet, coin log), counting trie, live-coin hash
+  [ok] time-too-new: largest block time 1231469665 <= this clock 1795514421 + 7200 s
+  [ok] anchor_id is genesis
+  [ok] live-coin hash unused in this image (live_set == 0)
+  [ok] trie root unused in this image (zero)
+  [ok] block forest has one leaf per block (2 leaves at height 1)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) pinned)
+LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
+== libzync-verify a/block_2.ovm
+  [ok] engine proof verifies (STARK vs /root/engine/keys-hz2/agg.vk + baseline, public values = sha256(journal), recorded image)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile in the proof 0x71 == this verifier's 0x71 (libzync, scripts checked, mainnet, coin log), counting trie, live-coin hash
+  [ok] time-too-new: largest block time 1231469744 <= this clock 1795514456 + 7200 s
+  [ok] anchor_id is genesis
+  [ok] live-coin hash unused in this image (live_set == 0)
+  [ok] trie root unused in this image (zero)
+  [ok] block forest has one leaf per block (3 leaves at height 2)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) pinned)
+LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 2, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
+== libzync-verify join_1_3.ovm
+  [ok] engine proof verifies (STARK vs /root/engine/keys-hz2/agg.vk + baseline, public values = sha256(journal), recorded image)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile in the proof 0x71 == this verifier's 0x71 (libzync, scripts checked, mainnet, coin log), counting trie, live-coin hash
+  [ok] time-too-new: largest block time 1231470173 <= this clock 1795514488 + 7200 s
+  [ok] anchor_id is genesis
+  [ok] live-coin hash unused in this image (live_set == 0)
+  [ok] trie root unused in this image (zero)
+  [ok] block forest has one leaf per block (4 leaves at height 3)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) pinned)
+LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 3, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
+== b/block_3.ovm (base on S(2): anchored, not genesis)
+  [ok] engine proof verifies (STARK vs /root/engine/keys-hz2/agg.vk + baseline, public values = sha256(journal), recorded image)
+  [ok] journal is a ChainState v2 committed by this image (kind, version, self_id)
+  [ok] profile in the proof 0x71 == this verifier's 0x71 (libzync, scripts checked, mainnet, coin log), counting trie, live-coin hash
+  [ok] time-too-new: largest block time 1231470173 <= this clock 1795514521 + 7200 s
+  [ok] anchor_id is the GIVEN anchor at height 2 ("/root/engine/chain/a/state_2.json") -- NOT genesis
+  [ok] live-coin hash unused in this image (live_set == 0)
+  [ok] trie root unused in this image (zero)
+  [ok] block forest has one leaf per block (4 leaves at height 3)
+  [ok] lineage 0000000000000000000000000000000000000000000000000000000000000000 is this image's (0 handover(s) pinned)
+LIBZYNC_VERIFY_DEMO: a valid chain to height 3 FROM THE GIVEN ANCHOR ONLY -- not a proof from genesis
+CHAIN_CPU_DONE
