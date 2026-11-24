@@ -1,8 +1,8 @@
 // The engine guest's C/C++ consensus path: Bitcoin Core v28.0 + patches 0001 0002 0009 0010 libzync/0101, Hazync's
 // verify_input.cpp / core_tx_rules.cpp / core_block_rules.cpp / cshims.c, and libsecp v0.5.1 with the engine's batch +
 // sqrt hooks, all laid out by engine/guest/base.sh at HZ_BASE. Same riscv32 gcc/g++ 13.2 and flags as
-// prover/methods/guest/build.rs; the risc0 SHA syscall the patches call (sys_sha_compress) is supplied in Rust
-// on OpenVM's SHA-256 extension.
+// prover/methods/guest/build.rs. SHA-256 (Core via core-0201, libsecp via secp-0202) calls OpenVM's
+// zkvm_sha256_impl in its native state layout; there is no sys_sha_compress.
 use std::process::Command;
 fn lib_dir(gcc: &str, q: &str) -> String {
     let o = Command::new(gcc).args(["-march=rv32im", "-mabi=ilp32", q]).output().unwrap();
@@ -34,6 +34,7 @@ fn main() {
     // modular extension. The engine has no other key lift, so the sqrt hook is unconditional.
     if feat("BATCH_ECDSA") { s.define("HAZYNC_BATCH_ECDSA", "1"); }
     s.define("HAZYNC_LIFTX_OVM", "1");
+    s.define("HAZYNC_SHA_OVM", "1");   // secp-0202: libsecp's SHA-256 compression on OpenVM's extension
     s.compile("secp256k1");
 
     let tus = ["script/interpreter.cpp", "script/script.cpp", "script/script_error.cpp", "primitives/transaction.cpp",

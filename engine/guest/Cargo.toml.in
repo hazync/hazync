@@ -7,8 +7,9 @@ edition = "2021"
 [workspace]
 
 [profile.release]
-# No fat LTO (the product's guest has it, worth -0.7% there): the bitcode linker refuses the duplicate sys_sha_compress
-# (OpenVM's std PAL stub + the engine's). Goes away with native SHA (no sys_sha_compress at all).
+# As the product's guest. (Fat LTO was off while the engine defined RISC Zero's sys_sha_compress next to OpenVM's std
+# PAL stub of the same name; with native SHA, core-0201/secp-0202 + edits.py, the engine defines no such symbol.)
+lto = "fat"
 codegen-units = 1
 
 [features]
