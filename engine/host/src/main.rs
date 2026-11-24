@@ -63,6 +63,17 @@ enum Cmd {
         #[arg(long)]
         out: PathBuf,
     },
+    /// M1 negative control: a node over tampered inputs must be refused in-guest (execute only).
+    SelftestNegative {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        left: PathBuf,
+        #[arg(long)]
+        right: PathBuf,
+        #[arg(long)]
+        tamper: String,
+    },
     /// Prove Hazync's guest from a RISC Zero input stream; `--child` proofs are verified in-guest, in env::verify order.
     Prove {
         #[arg(long)]
@@ -114,6 +125,7 @@ fn main() -> Result<()> {
         Cmd::Build { dir, guest } => engine::build(&dir, &guest),
         Cmd::SelftestLeaf { dir, value, out } => selftest::leaf(&dir, value, &out),
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
+        Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
         Cmd::Execute { dir, input, journal } => r0::execute(&dir, &input, journal.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),

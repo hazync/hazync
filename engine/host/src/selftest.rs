@@ -35,6 +35,40 @@ pub fn leaf(dir: &Path, value: u64, out: &Path) -> Result<()> {
     write_proof(out, proof, &journal)
 }
 
+/// Negative controls (execute only; the guest must refuse): `tamper` = "journal" flips a byte of the left child's
+/// journal, "image" flips a byte of the image the node is told it is. The host's own pre-checks are skipped.
+pub fn negative(dir: &Path, left: &Path, right: &Path, tamper: &str) -> Result<()> {
+    let e = Engine::load(dir)?;
+    let exe = Engine::exe(dir)?;
+    let baseline = Engine::baseline(dir)?;
+    let img = Engine::image(dir)?;
+    let (lp, mut lj) = read_proof(&e, &baseline, left)?;
+    let (rp, rj) = read_proof(&e, &baseline, right)?;
+    let mut exe_c = img.exe_bytes();
+    match tamper {
+        "journal" => lj[70] ^= 1,
+        "image" => exe_c[5] ^= 1,
+        _ => eyre::bail!("tamper: journal | image"),
+    }
+    let children = vec![lp, rp];
+    let calls = e.child_calls(&baseline, &children)?;
+    let mut s = stdin_head(MODE_NODE, false);
+    s.write(&exe_c);
+    s.write(&img.vm_bytes());
+    s.write(&calls[0].input_commit);
+    s.write_bytes(&lj);
+    s.write(&calls[1].input_commit);
+    s.write_bytes(&rj);
+    e.attach_children(&baseline, &mut s, &children)?;
+    match e.sdk.execute(exe, s) {
+        Ok(_) => eyre::bail!("NEGATIVE CONTROL FAILED: the guest accepted a tampered {tamper}"),
+        Err(err) => {
+            eprintln!("negative control ({tamper}): refused as it must be: {err}");
+            Ok(())
+        }
+    }
+}
+
 pub fn node(dir: &Path, left: &Path, right: &Path, out: &Path) -> Result<()> {
     let e = Engine::load(dir)?;
     let exe = Engine::exe(dir)?;

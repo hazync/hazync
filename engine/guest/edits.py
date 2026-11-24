@@ -38,6 +38,15 @@ pub unsafe extern "C" fn sys_sha_compress(out: *mut u32, inp: *const u32, b1: *c
     zkvm_sha256_impl(st.as_ptr() as *const u8, blk.as_ptr(), o.as_mut_ptr() as *mut u8);
     for i in 0..8 { *out.add(i) = o[i].swap_bytes(); }
 }
+/// ENGINE: libsecp's sqrt hook (HAZYNC_LIFTX_OVM, secp-0201): square root mod p on OpenVM's modular extension (hinted,
+/// checked by squaring in the extension). 1 = a square (out set), 0 = not a square.
+#[no_mangle]
+pub unsafe extern "C" fn hz_fe_sqrt(a_be: *const u8, out_be: *mut u8) -> i32 {
+    use openvm_algebra_guest::{IntMod, Sqrt};
+    let a = core::slice::from_raw_parts(a_be, 32);
+    let Some(x) = k256::Secp256k1Coord::from_be_bytes(a) else { return 0 };
+    match x.sqrt() { Some(y) => { core::slice::from_raw_parts_mut(out_be, 32).copy_from_slice(&y.to_be_bytes()); 1 } None => 0 }
+}
 openvm::init!();
 """
 open(p, "w").write(s); print("engine edits applied:", p)
