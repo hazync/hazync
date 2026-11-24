@@ -27,31 +27,79 @@ pub(crate) struct Engine {
 }
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
+/// HAZYNC_ENGINE_GPUS=n (n > 1): n more servers, one per GPU (CUDA_VISIBLE_DEVICES=i), for `prove_many`.
+static POOL: Mutex<Vec<Mutex<Engine>>> = Mutex::new(Vec::new());
 
 /// Whether this run proves on the engine (HAZYNC_ENGINE set).
 pub(crate) fn active() -> bool {
     std::env::var("HAZYNC_ENGINE").is_ok()
 }
 
-/// The engine, started on first use. `work` holds the streams and the proofs it makes.
+fn start(work: &str, gpu: Option<usize>, tag: &str) -> Engine {
+    let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
+    let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS: the engine's key directory");
+    let mut cmd = Command::new(&bin);
+    cmd.args(["serve", "--dir", &keys]).stdin(Stdio::piped()).stdout(Stdio::piped());
+    if let Some(g) = gpu { cmd.env("CUDA_VISIBLE_DEVICES", g.to_string()); }
+    let mut child = cmd.spawn().unwrap_or_else(|e| panic!("HAZYNC_ENGINE={bin}: {e}"));
+    let stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut l = String::new();
+    stdout.read_line(&mut l).expect("engine: no ready line");
+    assert!(l.contains("\"ready\":true"), "engine did not start: {l}");
+    let work = PathBuf::from(work).join("engine").join(tag);
+    std::fs::create_dir_all(&work).unwrap();
+    println!("  engine: {bin} serving keys {keys}{}; work dir {}", gpu.map(|g| format!(" on GPU {g}")).unwrap_or_default(), work.display());
+    Engine { _child: child, stdin, stdout, work, seq: 0 }
+}
+
+fn gpus() -> usize {
+    std::env::var("HAZYNC_ENGINE_GPUS").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1)
+}
+
+/// The engine, started on first use (GPU 0 when HAZYNC_ENGINE_GPUS > 1). `work` holds the streams and its proofs.
 pub(crate) fn with<T>(work: &str, f: impl FnOnce(&mut Engine) -> T) -> T {
     let mut g = ENGINE.lock().unwrap();
     if g.is_none() {
-        let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
-        let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS: the engine's key directory");
-        let mut child = Command::new(&bin).args(["serve", "--dir", &keys]).stdin(Stdio::piped()).stdout(Stdio::piped())
-            .spawn().unwrap_or_else(|e| panic!("HAZYNC_ENGINE={bin}: {e}"));
-        let stdin = child.stdin.take().unwrap();
-        let mut stdout = BufReader::new(child.stdout.take().unwrap());
-        let mut l = String::new();
-        stdout.read_line(&mut l).expect("engine: no ready line");
-        assert!(l.contains("\"ready\":true"), "engine did not start: {l}");
-        let work = PathBuf::from(work).join("engine");
-        std::fs::create_dir_all(&work).unwrap();
-        println!("  engine: {bin} serving keys {keys}; work dir {}", work.display());
-        *g = Some(Engine { _child: child, stdin, stdout, work, seq: 0 });
+        *g = Some(start(work, (gpus() > 1).then_some(0), "s0"));
     }
     f(g.as_mut().unwrap())
+}
+
+/// Prove independent jobs (name, stream, children, self_id) on every GPU at once, results in job order: the main
+/// server (GPU 0) and HAZYNC_ENGINE_GPUS - 1 more. One GPU: in order on the main server.
+pub(crate) fn prove_many(work: &str, jobs: Vec<(String, Vec<u8>, Vec<EngineProof>, bool)>) -> Vec<EngineProof> {
+    let n = gpus();
+    if n == 1 || jobs.len() < 2 {
+        return jobs.into_iter().map(|(name, st, ch, sid)| {
+            let c: Vec<&EngineProof> = ch.iter().collect();
+            with(work, |e| e.prove(&name, &st, &c, sid))
+        }).collect();
+    }
+    with(work, |_| ()); // the main server exists (GPU 0)
+    {
+        let mut p = POOL.lock().unwrap();
+        while p.len() < n - 1 {
+            let g = p.len() + 1;
+            p.push(Mutex::new(start(work, Some(g), &format!("s{g}"))));
+        }
+    }
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let out: Mutex<Vec<Option<EngineProof>>> = Mutex::new(vec![None; jobs.len()]);
+    let pool = POOL.lock().unwrap();
+    std::thread::scope(|sc| {
+        for slot in 0..n {
+            let (jobs, next, out, pool) = (&jobs, &next, &out, &pool);
+            sc.spawn(move || loop {
+                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let Some((name, st, ch, sid)) = jobs.get(i) else { break };
+                let c: Vec<&EngineProof> = ch.iter().collect();
+                let p = if slot == 0 { with(work, |e| e.prove(name, st, &c, *sid)) } else { pool[slot - 1].lock().unwrap().prove(name, st, &c, *sid) };
+                out.lock().unwrap()[i] = Some(p);
+            });
+        }
+    });
+    out.into_inner().unwrap().into_iter().map(|p| p.expect("engine: a job produced no proof")).collect()
 }
 
 pub(crate) struct Exec {

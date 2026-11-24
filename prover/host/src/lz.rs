@@ -1259,13 +1259,13 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         let t_sig = t0.elapsed().as_secs_f64();
         let mut chunks: Vec<Receipt> = Vec::with_capacity(bounds.len());
-        let mut echunks: Vec<crate::engine_backend::EngineProof> = Vec::new();
-        for (ci, &(clo, chi)) in bounds.iter().enumerate() {
-            if eng {
-                let st = chunk_stream(&w, clo, chi);
-                echunks.push(crate::engine_backend::with(out, |e| e.prove(&format!("b{h}_c{ci:02}"), &st, &[], false)));
-                continue;
-            }
+        // the engine: every chunk at once on every GPU (HAZYNC_ENGINE_GPUS), in chunk order
+        let echunks: Vec<crate::engine_backend::EngineProof> = if eng {
+            crate::engine_backend::prove_many(out, bounds.iter().enumerate()
+                .map(|(ci, &(clo, chi))| (format!("b{h}_c{ci:02}"), chunk_stream(&w, clo, chi), Vec::new(), false)).collect())
+        } else { Vec::new() };
+        for &(clo, chi) in &bounds {
+            if eng { continue; }
             let mut b = ExecutorEnv::builder();
             b.segment_limit_po2(seg_po2());
             b.write(&4u32).unwrap();
