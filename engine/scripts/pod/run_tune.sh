@@ -1,13 +1,15 @@
 #!/bin/bash
 # On the pod: prove-block over (export, workers, segment GiB) to measure chunk sizing, GPU sharing and segment size.
 # JOBS="name:workers:segGiB ..." (segGiB = HZ_SEG_MEM_GB; OpenVM's default is 15). A bare "name": no flags, the
-# engine's own defaults (ENGINE.md, Defaults).
+# engine's own defaults (ENGINE.md, Defaults). "name@n": on the first n GPUs only.
 cd /workspace; source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
 mkdir -p out; H=host/target/release/hzengine; T=out/times.tsv
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader > out/gpu.txt
 for j in ${JOBS:-}; do
-  IFS=: read -r x w g <<< "$j"
-  if [ -z "$w" ]; then tag=${x}_default; else g=${g:-15}; tag=${x}_w${w}_s$g; fi
+  IFS=: read -r x w g <<< "$j"; ng=""
+  case $x in *@*) ng=${x#*@}; x=${x%@*};; esac
+  if [ -n "$ng" ]; then export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((ng-1))); else unset CUDA_VISIBLE_DEVICES; fi
+  if [ -z "$w" ]; then tag=${x}_default${ng:+_g$ng}; else g=${g:-15}; tag=${x}_w${w}_s$g${ng:+_g$ng}; fi
   ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 1 > out/smi_$tag.log ) & SMI=$!
   s=$(date +%s)
   if [ -z "$w" ]; then $H prove-block --dir keys --export export/$x --out out/$tag > out/$tag.log 2>&1; rc=$?
