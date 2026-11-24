@@ -503,19 +503,6 @@ pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Ima
     IMAGES.iter().find(|i| i.network == asked.network && i.method_id_hex == hex && !std::ptr::eq(*i, current))
 }
 
-/// The same rule for a zAPP statement that rests on a core receipt (its `core_id`): when the caller asked for its
-/// network's CURRENT built-in image (by id), the earlier built-in image of the chain that `core_id` names, so a zAPP
-/// proof resting on the chain below a handover (or before a re-baseline) keeps verifying with no `--core-image`. Only
-/// images in the built-in table are ever substituted: an id the caller supplied, or one not in the table, is left to
-/// fail on its own.
-pub fn earlier_core_image(asked: &Image, core_id: &[u32; 8]) -> Option<&'static Image> {
-    let current = Image::by_network(asked.network)?;
-    if asked.method_id_hex != current.method_id_hex {
-        return None;
-    }
-    IMAGES.iter().find(|i| i.network == asked.network && words(&i.method_id()) == *core_id && !std::ptr::eq(*i, current))
-}
-
 pub fn verify(inp: &Inputs) -> Report {
     if let Ok(r) = decode_receipt(inp.receipt) {
         if let Some(e) = earlier_image_named_by(&r, inp.image) {
@@ -1612,29 +1599,6 @@ mod tests {
         }
     }
 
-    /// earlier_core_image: a zAPP statement's core id names an earlier BUILT-IN image of the asked network's chain, and
-    /// only then, and only when the caller asked for the current image.
-    #[test]
-    fn earlier_core_images_are_only_built_in_ones() {
-        let cur = Image::by_network("mainnet").unwrap();
-        let w = |i: &Image| words(&i.method_id());
-        for old in IMAGES.iter().filter(|i| i.network == "mainnet" && !std::ptr::eq(*i, cur)) {
-            assert!(std::ptr::eq(earlier_core_image(cur, &w(old)).unwrap(), old), "{}: an earlier built-in image", old.method_id_hex);
-            // a modified copy of the current image (`--product`) is still the current image, by id
-            assert!(std::ptr::eq(earlier_core_image(cur.with_product(), &w(old)).unwrap(), old));
-            // an image the caller supplied (`--core-image`): never substituted
-            let mine = cur.with_method_id(&"ab".repeat(32)).unwrap();
-            assert!(earlier_core_image(mine, &w(old)).is_none(), "a caller-supplied image is never substituted");
-            // another network's chain
-            assert!(earlier_core_image(Image::by_network("signet").unwrap(), &w(old)).is_none(), "a mainnet image for signet");
-        }
-        assert!(earlier_core_image(cur, &w(cur)).is_none(), "the current image itself");
-        assert!(earlier_core_image(cur, &[0xabab_abab; 8]).is_none(), "an id in no built-in table");
-        let mut near = w(cur);
-        near[0] ^= 1;
-        assert!(earlier_core_image(cur, &near).is_none(), "one bit from the current id");
-    }
-
     #[test]
     fn chain_identity() {
         // mainnet genesis: display order vs internal order
@@ -2229,5 +2193,48 @@ mod receipt_hardening_tests {
             let e = decode_receipt(&std::fs::read(format!("{dir}/{f}")).unwrap()).unwrap_err();
             assert!(e.contains(want), "{f}: {e}");
         }
+    }
+}
+
+// Placed last, after every item the verifier builds already had: a line moved above them changes the panic locations
+// compiled into the core WASM (and every zAPP WASM on it), whose sha256 is pinned (swiftsync-verify-wasm/README.md).
+/// [`earlier_image_named_by`]'s rule for a zAPP statement that rests on a core receipt (its `core_id`): when the caller asked for its
+/// network's CURRENT built-in image (by id), the earlier built-in image of the chain that `core_id` names, so a zAPP
+/// proof resting on the chain below a handover (or before a re-baseline) keeps verifying with no `--core-image`. Only
+/// images in the built-in table are ever substituted: an id the caller supplied, or one not in the table, is left to
+/// fail on its own.
+pub fn earlier_core_image(asked: &Image, core_id: &[u32; 8]) -> Option<&'static Image> {
+    let current = Image::by_network(asked.network)?;
+    if asked.method_id_hex != current.method_id_hex {
+        return None;
+    }
+    IMAGES.iter().find(|i| i.network == asked.network && words(&i.method_id()) == *core_id && !std::ptr::eq(*i, current))
+}
+
+#[cfg(test)]
+mod earlier_core_image_tests {
+    use super::*;
+
+    /// earlier_core_image: a zAPP statement's core id names an earlier BUILT-IN image of the asked network's chain, and
+    /// only then, and only when the caller asked for the current image.
+    #[test]
+    fn earlier_core_images_are_only_built_in_ones() {
+        let cur = Image::by_network("mainnet").unwrap();
+        let w = |i: &Image| words(&i.method_id());
+        for old in IMAGES.iter().filter(|i| i.network == "mainnet" && !std::ptr::eq(*i, cur)) {
+            assert!(std::ptr::eq(earlier_core_image(cur, &w(old)).unwrap(), old), "{}: an earlier built-in image", old.method_id_hex);
+            // a modified copy of the current image (`--product`) is still the current image, by id
+            assert!(std::ptr::eq(earlier_core_image(cur.with_product(), &w(old)).unwrap(), old));
+            // an image the caller supplied (`--core-image`): never substituted
+            let mine = cur.with_method_id(&"ab".repeat(32)).unwrap();
+            assert!(earlier_core_image(mine, &w(old)).is_none(), "a caller-supplied image is never substituted");
+            // another network's chain
+            assert!(earlier_core_image(Image::by_network("signet").unwrap(), &w(old)).is_none(), "a mainnet image for signet");
+        }
+        assert!(earlier_core_image(cur, &w(cur)).is_none(), "the current image itself");
+        assert!(earlier_core_image(cur, &[0xabab_abab; 8]).is_none(), "an id in no built-in table");
+        let mut near = w(cur);
+        near[0] ^= 1;
+        assert!(earlier_core_image(cur, &near).is_none(), "one bit from the current id");
     }
 }
