@@ -11,7 +11,7 @@
 //! batch check's accept/reject cannot differ from openvm's `msm`. Scalars are read as their stored little-endian
 //! bytes (as openvm's `msm` reads them; callers assert them reduced).
 use alloc::vec::Vec;
-use k256::{Secp256k1Point as P, Secp256k1Scalar as Fr};
+use k256::{Secp256k1Coord as Fq, Secp256k1Point as P, Secp256k1Scalar as Fr};
 use openvm_algebra_guest::IntMod;
 use openvm_ecc_guest::weierstrass::WeierstrassPoint;
 
@@ -50,71 +50,166 @@ fn cost(bits: &[usize], c: usize) -> usize {
     digits + w * ((1usize << c) + c) + w * bits.len() / 8
 }
 
+/// `a += p` for a NON-identity `p`, with `a`'s identity tracked by `filled` (false = identity). Complete: equal x
+/// is a doubling or the identity, as in openvm's `add_assign_impl`. `double_assign_nonidentity` is sound here because
+/// secp256k1's group has prime order (no point of order 2), so 2a != O for every a != O.
+#[inline(always)]
+fn add_into(a: &mut P, filled: &mut bool, p: &P) {
+    if !*filled {
+        *a = p.clone();
+        *filled = true;
+        return;
+    }
+    // SAFETY: the curve (and its coordinate field) are set up at the top of `msm`; a and p are non-identity and,
+    // in the add_ne branch, have different x (so a != +-p).
+    unsafe {
+        if a.x().eq_impl::<false>(p.x()) {
+            if a.y() + p.y() == <Fq as IntMod>::ZERO {
+                *filled = false; // a = -p
+            } else {
+                a.double_assign_nonidentity::<false>(); // a = p
+            }
+        } else {
+            a.add_ne_assign_nonidentity::<false>(p);
+        }
+    }
+}
+
+/// Signed digits of a scalar of `b` bits at window size `c`, low window first, into `out` (see `msm`).
+fn digits(s: &[u8], b: usize, c: usize, mut out: impl FnMut(usize, i32)) {
+    let half = 1i32 << (c - 1);
+    let mut carry = 0i32;
+    for w in 0..windows(b, c) {
+        let mut d = bits_at(s, w * c, c) as i32 + carry;
+        carry = 0;
+        if d > half {
+            d -= 1 << c;
+            carry = 1;
+        }
+        out(w, d);
+    }
+    debug_assert!(carry == 0);
+}
+
+/// Up to this many points: Straus (interleaved windows, a table of multiples per point, all on the stack).
+const STRAUS_MAX: usize = 4;
+const STRAUS_C: usize = 4;
+
 pub fn msm(coeffs: &[Fr], bases: &[P]) -> P {
     assert_eq!(coeffs.len(), bases.len(), "msm requires matching scalar/base lengths");
     <P as WeierstrassPoint>::set_up_once();
-    let n = bases.len();
-    let sc: Vec<&[u8]> = coeffs.iter().map(|s| s.as_le_bytes_unchecked()).collect();
+    let id = <P as WeierstrassPoint>::IDENTITY;
+    // identity bases contribute nothing; every point below is non-identity
+    let live: Vec<usize> = (0..bases.len()).filter(|&i| bases[i] != id).collect();
+    let sc: Vec<&[u8]> = live.iter().map(|&i| coeffs[i].as_le_bytes_unchecked()).collect();
     let bits: Vec<usize> = sc.iter().map(|s| bit_len(s)).collect();
+    let n = live.len();
+    if n <= STRAUS_MAX {
+        return straus(&live.iter().map(|&i| &bases[i]).collect::<Vec<_>>(), &sc, &bits);
+    }
     let c = (1..=16usize).min_by_key(|&c| cost(&bits, c)).unwrap();
     let nw = bits.iter().map(|&b| windows(b, c)).max().unwrap_or(0);
     if nw == 0 {
-        return <P as WeierstrassPoint>::IDENTITY;
+        return id;
     }
 
     // Signed digits, window-major: s = Σ_w d_w·2^(c·w) with d_w in [-(2^(c-1) - 1), 2^(c-1)]. A raw window plus the
     // carry is in [0, 2^c]; above 2^(c-1) it becomes d - 2^c and carries 1. The top window of a b-bit scalar holds at
     // most c-1 bits (b < c·(b/c + 1)), so raw + carry <= 2^(c-1) there and no carry is left over.
-    let half = 1i32 << (c - 1);
+    let half = 1usize << (c - 1);
     let mut dig: Vec<i16> = alloc::vec![0; nw * n];
     let mut any_neg = false;
     for i in 0..n {
-        let mut carry = 0i32;
-        for w in 0..windows(bits[i], c) {
-            let mut d = bits_at(sc[i], w * c, c) as i32 + carry;
-            carry = 0;
-            if d > half {
-                d -= 1 << c;
-                carry = 1;
-            }
+        digits(sc[i], bits[i], c, |w, d| {
             any_neg |= d < 0;
             dig[w * n + i] = d as i16;
-        }
-        debug_assert!(carry == 0);
+        });
     }
-    let negs: Vec<P> = if any_neg { bases.iter().map(|p| -p).collect() } else { Vec::new() };
+    let pts: Vec<&P> = live.iter().map(|&i| &bases[i]).collect();
+    let negs: Vec<P> = if any_neg { pts.iter().map(|p| -*p).collect() } else { Vec::new() };
 
-    let mut buckets: Vec<P> = alloc::vec![<P as WeierstrassPoint>::IDENTITY; half as usize];
-    let mut acc = <P as WeierstrassPoint>::IDENTITY;
+    let mut buckets: Vec<P> = alloc::vec![id.clone(); half];
+    let mut full: Vec<bool> = alloc::vec![false; half];
+    let (mut acc, mut acc_f) = (id.clone(), false);
     for w in (0..nw).rev() {
-        if w + 1 != nw {
+        if w + 1 != nw && acc_f {
             for _ in 0..c {
-                acc.double_assign_impl::<false>();
+                // SAFETY: acc is non-identity (acc_f) and the group has no point of order 2
+                unsafe { acc.double_assign_nonidentity::<false>() };
             }
         }
         let row = &dig[w * n..(w + 1) * n];
-        let mut top = 0usize; // buckets[..top] may be non-identity
+        let mut top = 0usize; // buckets[top..] are all empty
         for i in 0..n {
             let d = row[i] as i32;
-            if d > 0 {
-                let k = (d - 1) as usize;
-                buckets[k].add_assign_impl::<false>(&bases[i]);
-                if k >= top { top = k + 1; }
-            } else if d < 0 {
-                let k = (-d - 1) as usize;
-                buckets[k].add_assign_impl::<false>(&negs[i]);
-                if k >= top { top = k + 1; }
+            if d != 0 {
+                let (k, p) = if d > 0 { ((d - 1) as usize, pts[i]) } else { ((-d - 1) as usize, &negs[i]) };
+                add_into(&mut buckets[k], &mut full[k], p);
+                if k >= top {
+                    top = k + 1;
+                }
             }
         }
         // Σ_k (k+1)·buckets[k] by parts: running = Σ_{j>=k} buckets[j], window sum = Σ_k running_k.
-        let mut run = <P as WeierstrassPoint>::IDENTITY;
-        let mut win = <P as WeierstrassPoint>::IDENTITY;
+        let (mut run, mut run_f) = (id.clone(), false);
+        let (mut win, mut win_f) = (id.clone(), false);
         for k in (0..top).rev() {
-            run.add_assign_impl::<false>(&buckets[k]);
-            win.add_assign_impl::<false>(&run);
-            buckets[k] = <P as WeierstrassPoint>::IDENTITY;
+            if full[k] {
+                add_into(&mut run, &mut run_f, &buckets[k]);
+                full[k] = false;
+            }
+            if run_f {
+                add_into(&mut win, &mut win_f, &run);
+            }
         }
-        acc.add_assign_impl::<false>(&win);
+        if win_f {
+            add_into(&mut acc, &mut acc_f, &win);
+        }
     }
-    acc
+    if acc_f { acc } else { id }
+}
+
+/// Σ sᵢ·Pᵢ for a few non-identity points: one shared accumulator, STRAUS_C-bit signed windows, a table of 1..8
+/// multiples of each point and their negations.
+fn straus(pts: &[&P], sc: &[&[u8]], bits: &[usize]) -> P {
+    const H: usize = 1 << (STRAUS_C - 1);
+    const MAXW: usize = 256 / STRAUS_C + 1;
+    let id = <P as WeierstrassPoint>::IDENTITY;
+    let n = pts.len();
+    let nw = bits.iter().map(|&b| windows(b, STRAUS_C)).max().unwrap_or(0);
+    let mut dig = [[0i8; MAXW]; STRAUS_MAX];
+    let mut tab: [[P; H]; STRAUS_MAX] = core::array::from_fn(|_| core::array::from_fn(|_| id.clone()));
+    let mut neg: [[P; H]; STRAUS_MAX] = core::array::from_fn(|_| core::array::from_fn(|_| id.clone()));
+    // tab[i][k] = (k+1)·P_i; never the identity (k+1 < n, the group order), so the table is all non-identity
+    let mut tab_f = [[false; H]; STRAUS_MAX];
+    for i in 0..n {
+        digits(sc[i], bits[i], STRAUS_C, |w, d| dig[i][w] = d as i8);
+        let mut f = false;
+        let mut t = id.clone();
+        for k in 0..H {
+            add_into(&mut t, &mut f, pts[i]);
+            tab_f[i][k] = f;
+            tab[i][k] = t.clone();
+            neg[i][k] = -&t;
+        }
+    }
+    let (mut acc, mut acc_f) = (id.clone(), false);
+    for w in (0..nw).rev() {
+        if acc_f {
+            for _ in 0..STRAUS_C {
+                // SAFETY: as in msm
+                unsafe { acc.double_assign_nonidentity::<false>() };
+            }
+        }
+        for i in 0..n {
+            let d = dig[i][w] as i32;
+            if d != 0 {
+                let k = (d.unsigned_abs() - 1) as usize;
+                if tab_f[i][k] {
+                    add_into(&mut acc, &mut acc_f, if d > 0 { &tab[i][k] } else { &neg[i][k] });
+                }
+            }
+        }
+    }
+    if acc_f { acc } else { id }
 }

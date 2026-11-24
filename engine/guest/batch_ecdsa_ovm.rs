@@ -28,9 +28,11 @@ static mut DEFERRED: Vec<Deferred> = Vec::new();
 pub fn install(collect: bool, hints: Vec<u8>) {
     unsafe { DEFERRED = Vec::with_capacity(hints.len() / HINT_BYTES); COLLECT = collect; HINTS = hints; NEXT = 0; FALLBACK = 0; }
 }
-fn le(l: &[u32; 8]) -> [u8; 32] { let mut b = [0u8; 32]; for k in 0..8 { b[4*k..4*k+4].copy_from_slice(&l[k].to_le_bytes()); } b }
+// The guest is little-endian (riscv32): 8 little-endian limbs ARE their 32 little-endian bytes.
+const _: () = assert!(cfg!(target_endian = "little"));
+fn le(l: &[u32; 8]) -> [u8; 32] { unsafe { core::mem::transmute::<[u32; 8], [u8; 32]>(*l) } }
 fn be_to_le(b: &[u8]) -> [u8; 32] { let mut o = [0u8; 32]; for k in 0..32 { o[k] = b[31 - k]; } o }
-fn limbs(b: &[u8]) -> [u32; 8] { let mut l = [0u32; 8]; for k in 0..8 { l[k] = u32::from_le_bytes(b[4*k..4*k+4].try_into().unwrap()); } l }
+fn limbs(b: &[u8]) -> [u32; 8] { let a: [u8; 32] = b.try_into().unwrap(); unsafe { core::mem::transmute::<[u8; 32], [u32; 8]>(a) } }
 fn accept_r(kind: i32, xb: &[u8], yb: &[u8], r_s: &Fr, r_le: &[u8; 32]) -> bool {
     match kind {
         0 => Fr::reduce_le_bytes(xb) == *r_s,
@@ -55,7 +57,8 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     }
     let i = NEXT; NEXT += 1;
     let h = &*core::ptr::addr_of!(HINTS);
-    let (Some(qxf), Some(qyf)) = (Fq::from_le_bytes(&le(&qxl)), Fq::from_le_bytes(&le(&qyl))) else { FALLBACK += 1; return 0; };
+    let (qxb, qyb) = (le(&qxl), le(&qyl));
+    let (Some(qxf), Some(qyf)) = (Fq::from_le_bytes(&qxb), Fq::from_le_bytes(&qyb)) else { FALLBACK += 1; return 0; };
     let q = unsafe { P::from_xy_unchecked(qxf, qyf) };   // libsecp parsed and validated Q
     if (i + 1) * HINT_BYTES > h.len() || u32::from_le_bytes(h[i*HINT_BYTES..i*HINT_BYTES+4].try_into().unwrap()) != 1 {
         FALLBACK += 1;
@@ -70,7 +73,7 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     if !accept_r(kind, x.as_le_bytes(), y.as_le_bytes(), &rr_s, &le(&rl)) { FALLBACK += 1; return 0; }
     let mut raw = [0u8; 160];
     raw[..32].copy_from_slice(a.as_le_bytes()); raw[32..64].copy_from_slice(b.as_le_bytes());
-    raw[64..96].copy_from_slice(&le(&qxl)); raw[96..128].copy_from_slice(&le(&qyl)); raw[128..].copy_from_slice(x.as_le_bytes());
+    raw[64..96].copy_from_slice(&qxb); raw[96..128].copy_from_slice(&qyb); raw[128..].copy_from_slice(x.as_le_bytes());
     (*core::ptr::addr_of_mut!(DEFERRED)).push(Deferred { u1: a, u2: b, q, r: rp, raw, kind: kind as u32 });
     1
 }
