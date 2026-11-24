@@ -570,6 +570,30 @@ pub(crate) fn chunk_bounds(w: &BlockWitness, nchunks: usize) -> Vec<(usize, usiz
     out
 }
 
+/// Where to cut chunk `lo..hi` in two when it ran out of guest memory (#794; lz::resplit_on_oom). The cut is the
+/// chunk's cost midpoint (`pack_chunks` into 2 runs over `costs[lo..hi]`), moved out of a tracked transaction as
+/// `chunk_bounds` does (the guest's `tracked_tx` needs it whole in one chunk): to that transaction's end, else its start.
+/// Err(why) when no cut is possible. A function of the block's inputs and their costs only, so the same block always
+/// re-splits the same way. Chunk widths are host-side: the image is unchanged.
+pub(crate) fn split_chunk(inputs: &[crate::BlockInput], costs: &[u64], lo: usize, hi: usize) -> Result<usize, &'static str> {
+    let txs: Vec<(u32, bool)> = inputs.iter().map(|i| (i.tx_idx, i.coin_is_coinbase & 2 != 0)).collect();
+    split_cut(costs, &txs, lo, hi)
+}
+
+/// `split_chunk` on plain data: per input its cost and (tx_idx, coin tracked). A transaction is tracked when every one
+/// of its inputs is (as `chunk_bounds` and the guest's `tracked_tx`).
+pub(crate) fn split_cut(costs: &[u64], txs: &[(u32, bool)], lo: usize, hi: usize) -> Result<usize, &'static str> {
+    if costs.len() != txs.len() || hi > txs.len() || lo >= hi { return Err("the chunk does not match the block's inputs") }
+    if hi == lo + 1 { return Err("a single input") }
+    let mid = lo + pack_chunks(&costs[lo..hi], 2, None).first().map_or((hi - lo) / 2, |r| r.1);
+    if mid <= lo || mid >= hi { return Err("the cost split is degenerate") }
+    let t = txs[mid].0;
+    let tracked = txs.iter().filter(|x| x.0 == t).all(|x| x.1);
+    if txs[mid - 1].0 != t || !tracked { return Ok(mid) }
+    (mid..hi).find(|&e| txs[e].0 != t).or_else(|| (lo + 1..mid).rev().find(|&e| txs[e - 1].0 != t))
+        .ok_or("one tracked transaction")
+}
+
 pub(crate) fn chunk_bounds_raw(w: &BlockWitness, nchunks: usize) -> Vec<(usize, usize)> {
     let n = w.inputs.len();
     if std::env::var("HAZYNC_CHUNK_PACK").as_deref() == Ok("count") {
