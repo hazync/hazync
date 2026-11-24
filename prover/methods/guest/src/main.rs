@@ -2238,6 +2238,13 @@ fn aggregate() {
         if n > 0 {
             env::read_slice(&mut tj);
             env::verify(self_id, &tj).expect("trie proof invalid");
+            // a split update's combine (mode 20): its parts must have been verified as proofs of THIS image
+            if tj.first() == Some(&ttree::KIND_TRIE_SPLIT) {
+                assert!(tj.len() == ttree::SPLIT_JOURNAL_WORDS && tj[ttree::TRIE_JOURNAL_WORDS..] == self_id[..],
+                        "trie: the split proof verified its parts against another image");
+                tj.truncate(ttree::TRIE_JOURNAL_WORDS);
+                tj[0] = ttree::KIND_TRIE;
+            }
         }
         agg_lite::set_trie_journal(tj);
     }
@@ -2400,9 +2407,11 @@ fn main() {
     // from them under this image id would attest something the libzync design never checked
     // (review 2026-10-30). 8/9/10 are self-tests that commit nothing a chain proof consumes. 18 joins two adjacent chain
     // proofs of this image (ROADMAP H-B). 17 is the trie update (E2),
-    // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag.
+    // whose journal starts with KIND_TRIE and is consumed only by the aggregate, which checks that tag. 19 / 20 are the
+    // same update split (a part, a combine; ttree's KIND_TRIE_PART / KIND_TRIE_SPLIT): a part is consumed only by a
+    // combine, a combine only by the aggregate, each checking its tag.
     #[cfg(feature = "libzync")]
-    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
+    assert!(matches!(mode, 4 | 5 | 8 | 9 | 10 | 16 | 17 | 18 | 19 | 20), "libzync image: mode {mode} is not available (chunks + trie + aggregate + join only)");
     match mode {
         1 => block_proof(),
         2 => chain_step(),
@@ -2419,6 +2428,10 @@ fn main() {
         12 => validate_block_stages(),
         #[cfg(feature = "trie")]
         17 => trie_update(),
+        #[cfg(feature = "trie")]
+        19 => trie_part(),
+        #[cfg(feature = "trie")]
+        20 => trie_combine(),
         // Mode 16 (signet): Core's CheckSignetBlockSolution on (header, coinbase, other txids) ALONE, with no
         // merkle or PoW check in front of it, so a test can show the signature check itself rejects.
         #[cfg(feature = "signet")]
@@ -2446,6 +2459,63 @@ fn trie_update() {
     let (nw, nm, ni, np) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize);
     let mut wit = vec![0u32; nw];
     env::read_slice(&mut wit);
+    let (marks, ins, perm) = trie_lists(nm, ni, np);
+    // The product trie hashes values and counts (balances). The mode is the witness's first word, and an empty trie's
+    // root is zero in both modes, so without this a chain could be proved from genesis with no values committed.
+    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
+    let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
+    let new = ttree::apply_stream_perm(&wit, &marks, &ins, Some(&perm)).expect("trie update");
+    env::commit_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));
+}
+
+/// Mode 19: one PART of a split trie update (ttree::apply_part). Input (read_slice words): [depth, witness words, marks,
+/// inserts, order words], the subtree's witness words (a slice of the block's witness at that depth), then the lists as
+/// mode 17. Commits the part journal (depth, path prefix, old and new subtree hashes, digest of its updates).
+#[cfg(feature = "trie")]
+fn trie_part() {
+    let mut h = [0u32; 5];
+    env::read_slice(&mut h);
+    let (d, nw, nm, ni, np) = (h[0], h[1] as usize, h[2] as usize, h[3] as usize, h[4] as usize);
+    let mut wit = vec![0u32; nw];
+    env::read_slice(&mut wit);
+    let (marks, ins, perm) = trie_lists(nm, ni, np);
+    env::commit_slice(&ttree::apply_part(&wit, d, &marks, &ins, &perm).expect("trie part"));
+}
+
+/// Mode 20: the COMBINE of a split trie update. Input: this image's id (env::read, as an aggregate's), then
+/// (read_slice words) [witness words, marks, inserts, order words, parts], the block's witness with each part's subtree
+/// replaced by ttree::TAG_PART, the block's whole lists as mode 17, then each part's journal. Every part is verified
+/// (a proof of this image), then used once at its node. Commits mode 17's journal fields plus the image id
+/// (KIND_TRIE_SPLIT), which the aggregate requires to be its own.
+#[cfg(feature = "trie")]
+fn trie_combine() {
+    let self_id: [u32; 8] = env::read();
+    let mut h = [0u32; 5];
+    env::read_slice(&mut h);
+    let (nw, nm, ni, np, nparts) = (h[0] as usize, h[1] as usize, h[2] as usize, h[3] as usize, h[4] as usize);
+    let mut wit = vec![0u32; nw];
+    env::read_slice(&mut wit);
+    let (marks, ins, perm) = trie_lists(nm, ni, np);
+    let mut parts = vec![[0u32; ttree::PART_JOURNAL_WORDS]; nparts];
+    for p in parts.iter_mut() {
+        env::read_slice(p);
+        assert!(p[0] == ttree::KIND_TRIE_PART, "trie combine: not a part journal");
+        env::verify(self_id, &p[..]).expect("trie part proof invalid");
+    }
+    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
+    let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
+    let new = ttree::apply_stream_parts(&wit, &marks, &ins, Some(&perm), &parts).expect("trie combine");
+    let mut j = [0u32; ttree::SPLIT_JOURNAL_WORDS];
+    j[..ttree::TRIE_JOURNAL_WORDS].copy_from_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));
+    j[0] = ttree::KIND_TRIE_SPLIT;
+    j[ttree::TRIE_JOURNAL_WORDS..].copy_from_slice(&self_id);
+    env::commit_slice(&j);
+}
+
+/// The trie update lists (modes 17, 19, 20): marks ×24 words, inserts ×27, then the order.
+#[cfg(feature = "trie")]
+#[allow(clippy::type_complexity)]
+fn trie_lists(nm: usize, ni: usize, np: usize) -> (Vec<(ttree::Key, coinlog::W)>, Vec<(ttree::Key, Option<coinlog::W>, u64)>, Vec<u32>) {
     let mut mw = vec![0u32; nm.checked_mul(24).expect("trie: marks")];
     env::read_slice(&mut mw);
     let mut iw = vec![0u32; ni.checked_mul(27).expect("trie: inserts")];
@@ -2460,12 +2530,7 @@ fn trie_update() {
     let marks: Vec<(ttree::Key, coinlog::W)> = mw.chunks_exact(24).map(|c| (key(&c[..16]), c[16..24].try_into().unwrap())).collect();
     let ins: Vec<(ttree::Key, Option<coinlog::W>, u64)> = iw.chunks_exact(27)
         .map(|c| (key(&c[..16]), (c[16] == 1).then(|| c[17..25].try_into().unwrap()), c[25] as u64 | (c[26] as u64) << 32)).collect();
-    // The product trie hashes values and counts (balances). The mode is the witness's first word, and an empty trie's
-    // root is zero in both modes, so without this a chain could be proved from genesis with no values committed.
-    assert!(wit.first() == Some(&1), "trie: the witness is not in counts mode");
-    let old: coinlog::W = wit.get(1..9).expect("trie: witness header").try_into().unwrap();
-    let new = ttree::apply_stream_perm(&wit, &marks, &ins, Some(&perm)).expect("trie update");
-    env::commit_slice(&ttree::trie_journal(&old, &new, &ttree::list_digest(&marks, &ins)));
+    (marks, ins, perm)
 }
 
 // Mode 8: isolated exerciser for the real Core-derived maturity/BIP68 relative-lock check

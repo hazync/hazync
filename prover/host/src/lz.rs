@@ -545,6 +545,29 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
             let mut st = crate::sink::Stream::default();
             crate::trie::trie_env(&mut st, &wit, &marks, &ins);
             std::fs::write(format!("{d}/trie.in"), &st.0).expect("engine export: trie.in");
+            // HAZYNC_TRIE_SPLIT=k: also the split update (parts at depth k of the top trie + the combine), each part
+            // executed on RISC Zero too, its journal checked against the one the combine's stream carries
+            if let Some(k) = std::env::var("HAZYNC_TRIE_SPLIT").ok().and_then(|v| v.parse::<u32>().ok()) {
+                match crate::trie::trie_split(&wit, &marks, &ins, k) {
+                    None => println!("  trie split at depth {k}: no part (left whole)"),
+                    Some((parts, comb)) => {
+                        for (i, (st, j)) in parts.iter().enumerate() {
+                            std::fs::write(format!("{d}/trie_part_{i:02}.in"), &st.0).expect("engine export: trie part");
+                            let words: Vec<u32> = st.0.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+                            let mut b = ExecutorEnv::builder();
+                            b.write_slice(&words);
+                            let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie part (mode 19)", &e)));
+                            let jb: Vec<u8> = j.iter().flat_map(|x| x.to_le_bytes()).collect();
+                            assert!(t.journal.bytes == jb, "trie part {i}: RISC Zero's journal != the host's");
+                            std::fs::write(format!("{d}/trie_part_{i:02}.r0journal"), &t.journal.bytes).expect("engine export: part journal");
+                            println!("  trie part {i}: {} bytes in, {} cycles", st.0.len(), t.cycles);
+                        }
+                        std::fs::write(format!("{d}/trie_combine.in"), &comb.0).expect("engine export: trie_combine.in");
+                        std::fs::write(format!("{d}/trie_parts"), format!("{}\n", parts.len())).expect("engine export: trie_parts");
+                        println!("  trie split at depth {k}: {} parts, combine {} bytes in", parts.len(), comb.0.len());
+                    }
+                }
+            }
         }
         let mut b = ExecutorEnv::builder();
         crate::trie::trie_env(&mut b, &wit, &marks, &ins);

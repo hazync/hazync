@@ -41,6 +41,21 @@ pub fn trie_journal(old: &W, new: &W, digest: &[u8; 32]) -> [u32; TRIE_JOURNAL_W
     j
 }
 
+/// Split trie proofs (engine, 24.11.2026): the block's update cut at depth k of the top trie, each subtree there with
+/// updates proved on its own (guest mode 19, a PART), the rest by a COMBINE (mode 20) that verifies the parts.
+///
+/// Part journal: [KIND_TRIE_PART, depth d, path prefix (the top d bits of S, the rest zero) 8, old subtree hash 8, new
+/// subtree hash 8, `ups_digest` of exactly the updates it applied (its bytes as little-endian words) 8].
+/// Combine journal: [KIND_TRIE_SPLIT, old root 8, new root 8, `list_digest` 8, the image id it verified the parts
+/// against 8]: `trie_journal`'s fields plus that id, which the aggregate requires to be its own. Without it a combine
+/// could take parts proved by another image.
+pub const KIND_TRIE_PART: u32 = 0xC4A1_0019;
+pub const KIND_TRIE_SPLIT: u32 = 0xC4A1_0020;
+pub const PART_JOURNAL_WORDS: usize = 34;
+pub const SPLIT_JOURNAL_WORDS: usize = TRIE_JOURNAL_WORDS + 8;
+/// The witness tag of a subtree proved by a part (combine witnesses only).
+pub const TAG_PART: u32 = 7;
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TErr {
     /// the witness's old root is not the one given
@@ -82,7 +97,14 @@ const ZERO: W = [0; 8];
 #[derive(Clone, Copy)]
 pub struct Up { pub s: W, pub o: W, pub k: u32 }
 
-struct Cx<'x> { marks: &'x [(Key, W)], ins: &'x [(Key, Option<W>, u64)], counts: bool }
+struct Cx<'x> {
+    marks: &'x [(Key, W)],
+    ins: &'x [(Key, Option<W>, u64)],
+    counts: bool,
+    /// part journals for TAG_PART nodes, used in witness order (empty: no TAG_PART allowed)
+    parts: &'x [[u32; PART_JOURNAL_WORDS]],
+    next: core::cell::Cell<usize>,
+}
 impl Cx<'_> {
     #[inline(always)]
     fn mark(&self, u: &Up) -> Option<&W> { if u.k >> 31 == 0 { Some(&self.marks[u.k as usize].1) } else { None } }
@@ -352,6 +374,20 @@ fn top_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
             let lv = *lref;
             build_top(d, &ups[..lo], &ups[hi..], Some((s0, &lv)), cx, new)
         }
+        TAG_PART => {
+            // a subtree proved by a part: the next part journal must be of this depth, this path (every update reaching
+            // here shares it: they were split by its bits) and exactly these updates; its hashes stand for the subtree
+            let i = cx.next.get();
+            let p = cx.parts.get(i).ok_or(TErr::Witness)?;
+            cx.next.set(i + 1);
+            let (f, l) = (ups.first().ok_or(TErr::Witness)?, ups.last().ok_or(TErr::Witness)?);
+            let pre = prefix_of(&f.s, d);
+            if p[0] != KIND_TRIE_PART || p[1] != d || p[2..10] != pre[..] || prefix_of(&l.s, d) != pre { return Err(TErr::Witness); }
+            if p[26..34] != digest_words(&ups_digest(ups, cx))[..] { return Err(TErr::Witness); }
+            old.copy_from_slice(&p[10..18]);
+            new.copy_from_slice(&p[18..26]);
+            Ok(())
+        }
         _ => Err(TErr::Witness),
     }
 }
@@ -367,9 +403,11 @@ pub fn apply_stream(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u
 /// order — which also refuses a repeated key — instead of sorting. None: sort here.
 pub fn apply_stream_perm(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: Option<&[u32]>)
                          -> Result<W, TErr> {
-    let mut r = Rs { w, i: 0 };
-    let counts = r.word()? == 1;
-    let root = *r.hash()?;
+    apply_stream_parts(w, marks, inserts, perm, &[])
+}
+
+/// The updates in key order (checking a supplied order, else sorting); a repeated key is refused.
+fn make_ups(marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: Option<&[u32]>) -> Result<Vec<Up>, TErr> {
     let keys: Vec<(W, W)> = marks.iter().map(|x| split(&x.0)).chain(inserts.iter().map(|x| split(&x.0))).collect();
     if keys.len() >= 1 << 31 { return Err(TErr::Witness); }
     let idx: Vec<u32> = match perm {
@@ -396,12 +434,170 @@ pub fn apply_stream_perm(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<
         Up { s: k.0, o: k.1, k: if i < nm { i } else { (i - nm) | 1 << 31 } }
     }).collect();
     if perm.is_none() && ups.windows(2).any(|p| p[0].s == p[1].s && p[0].o == p[1].o) { return Err(TErr::Duplicate); }
-    let cx = Cx { marks, ins: inserts, counts };
+    Ok(ups)
+}
+
+/// The combine's update (mode 20): `apply_stream_perm` over a witness whose TAG_PART nodes are subtrees proved by
+/// `parts` (their journals, already verified), each used exactly once, in witness order.
+pub fn apply_stream_parts(w: &[u32], marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: Option<&[u32]>,
+                          parts: &[[u32; PART_JOURNAL_WORDS]]) -> Result<W, TErr> {
+    let mut r = Rs { w, i: 0 };
+    let counts = r.word()? == 1;
+    let root = *r.hash()?;
+    let ups = make_ups(marks, inserts, perm)?;
+    let cx = Cx { marks, ins: inserts, counts, parts, next: core::cell::Cell::new(0) };
     let (mut old, mut new) = (ZERO, ZERO);
     top_pass(&mut r, 0, &ups, &cx, &mut old, &mut new)?;
-    if r.i != w.len() { return Err(TErr::Witness); }
+    if r.i != w.len() || cx.next.get() != parts.len() { return Err(TErr::Witness); }
     if old != root { return Err(TErr::OldRoot); }
     Ok(new)
+}
+
+/// A part's update (mode 19): `w` is ONE top-trie subtree at depth `d` (a slice of the block's witness, no header;
+/// counts mode), every update under one path prefix. Returns the part journal.
+pub fn apply_part(w: &[u32], d: u32, marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: &[u32])
+                  -> Result<[u32; PART_JOURNAL_WORDS], TErr> {
+    if d >= 256 { return Err(TErr::Witness); }
+    let ups = make_ups(marks, inserts, Some(perm))?;
+    let (f, l) = (ups.first().ok_or(TErr::Witness)?, ups.last().ok_or(TErr::Witness)?);
+    let pre = prefix_of(&f.s, d);
+    if prefix_of(&l.s, d) != pre { return Err(TErr::Witness); }
+    let cx = Cx { marks, ins: inserts, counts: true, parts: &[], next: core::cell::Cell::new(0) };
+    let mut r = Rs { w, i: 0 };
+    let (mut old, mut new) = (ZERO, ZERO);
+    top_pass(&mut r, d, &ups, &cx, &mut old, &mut new)?;
+    if r.i != w.len() { return Err(TErr::Witness); }
+    let mut j = [0u32; PART_JOURNAL_WORDS];
+    j[0] = KIND_TRIE_PART;
+    j[1] = d;
+    j[2..10].copy_from_slice(&pre);
+    j[10..18].copy_from_slice(&old);
+    j[18..26].copy_from_slice(&new);
+    j[26..34].copy_from_slice(&digest_words(&ups_digest(&ups, &cx)));
+    Ok(j)
+}
+
+/// The top `d` bits of `s`, the rest zero.
+fn prefix_of(s: &W, d: u32) -> W {
+    let mut p = ZERO;
+    for (i, x) in p.iter_mut().enumerate() {
+        let lo = 32 * i as u32;
+        *x = if d >= lo + 32 { s[i] } else if d <= lo { 0 } else { s[i] & !(u32::MAX >> (d - lo)) };
+    }
+    p
+}
+
+fn digest_words(d: &[u8; 32]) -> [u32; 8] { core::array::from_fn(|i| u32::from_le_bytes(d[4 * i..4 * i + 4].try_into().unwrap())) }
+
+/// SHA-256 over a run of updates in key order: [count u32 LE], then each: S and O (words LE), then a mark: 0, its
+/// spender (words LE); an insert: 1, spent flag, spender or zero (words LE), value u64 LE.
+fn ups_digest(ups: &[Up], cx: &Cx) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut b: Vec<u8> = Vec::with_capacity(4 + ups.len() * 109);
+    b.extend_from_slice(&(ups.len() as u32).to_le_bytes());
+    for u in ups {
+        for x in u.s.iter().chain(u.o.iter()) { b.extend_from_slice(&x.to_le_bytes()); }
+        match (cx.mark(u), cx.ins(u)) {
+            (Some(sp), _) => { b.push(0); for x in sp { b.extend_from_slice(&x.to_le_bytes()); } }
+            (None, Some((sp, v))) => {
+                b.push(1);
+                b.push(sp.is_some() as u8);
+                for x in sp.copied().unwrap_or(ZERO) { b.extend_from_slice(&x.to_le_bytes()); }
+                b.extend_from_slice(&v.to_le_bytes());
+            }
+            (None, None) => unreachable!("an update is a mark or an insert"),
+        }
+    }
+    Sha256::digest(&b).into()
+}
+
+/// One part of a split witness: the subtree at depth `d`, words `w` of the block's witness, updates `ups` (positions
+/// in key order).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PartSpan { pub d: u32, pub w: core::ops::Range<usize>, pub ups: core::ops::Range<usize> }
+
+/// Host: cut a block's witness at depth `k` of the top trie. Every node there with updates becomes a part (TAG_PART in
+/// the combine's witness); nodes above it, and paths that end above it, stay in the combine. `s_sorted`: each
+/// update's S in key order. Parts come in witness order, which is the order the combine uses them.
+pub fn split_witness(w: &[u32], s_sorted: &[W], k: u32) -> Result<(Vec<u32>, Vec<PartSpan>), TErr> {
+    if w.len() < 9 { return Err(TErr::Witness); }
+    let mut out = w[..9].to_vec();
+    let mut parts = Vec::new();
+    let mut i = 9;
+    split_walk(w, &mut i, 0, 0, s_sorted.len(), s_sorted, k, &mut out, &mut parts)?;
+    if i != w.len() { return Err(TErr::Witness); }
+    Ok((out, parts))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn split_walk(w: &[u32], i: &mut usize, d: u32, lo: usize, hi: usize, s: &[W], k: u32, out: &mut Vec<u32>,
+              parts: &mut Vec<PartSpan>) -> Result<(), TErr> {
+    if d == k && lo < hi {
+        let st = *i;
+        skip_top(w, i)?;
+        parts.push(PartSpan { d, w: st..*i, ups: lo..hi });
+        out.push(TAG_PART);
+        return Ok(());
+    }
+    let t = *w.get(*i).ok_or(TErr::Witness)?;
+    match t {
+        2 => {
+            if d >= 256 { return Err(TErr::Witness); }
+            out.push(2);
+            *i += 1;
+            let m = lo + s[lo..hi].partition_point(|x| !bit(x, d));
+            split_walk(w, i, d + 1, lo, m, s, k, out, parts)?;
+            split_walk(w, i, d + 1, m, hi, s, k, out, parts)
+        }
+        5 | 6 => {
+            out.extend_from_slice(w.get(*i..*i + 9).ok_or(TErr::Witness)?);
+            *i += 9;
+            split_walk(w, i, d + 1, lo, hi, s, k, out, parts)
+        }
+        _ => { let st = *i; skip_top(w, i)?; out.extend_from_slice(&w[st..*i]); Ok(()) }
+    }
+}
+
+/// Host: one part's update lists and order: the updates at key-order positions `r` of `perm` (the block's order over
+/// marks then inserts), as marks and inserts in key order, with the part's own order over them.
+#[allow(clippy::type_complexity)]
+pub fn part_lists(marks: &[(Key, W)], inserts: &[(Key, Option<W>, u64)], perm: &[u32], r: core::ops::Range<usize>)
+                  -> (Vec<(Key, W)>, Vec<(Key, Option<W>, u64)>, Vec<u32>) {
+    let nm = marks.len() as u32;
+    let sel = &perm[r];
+    let pm: Vec<(Key, W)> = sel.iter().filter(|&&i| i < nm).map(|&i| marks[i as usize]).collect();
+    let pi: Vec<(Key, Option<W>, u64)> = sel.iter().filter(|&&i| i >= nm).map(|&i| inserts[(i - nm) as usize]).collect();
+    let (mut a, mut b) = (0u32, pm.len() as u32);
+    let order = sel.iter().map(|&i| if i < nm { a += 1; a - 1 } else { b += 1; b - 1 }).collect();
+    (pm, pi, order)
+}
+
+fn skip_top(w: &[u32], i: &mut usize) -> Result<(), TErr> {
+    let t = *w.get(*i).ok_or(TErr::Witness)?;
+    match t {
+        0 => *i += 1,
+        1 => *i += 9,
+        2 => { *i += 1; skip_top(w, i)?; skip_top(w, i)?; }
+        5 | 6 => { *i += 9; skip_top(w, i)?; }
+        3 => { *i += 13; skip_sub(w, i)?; }
+        _ => return Err(TErr::Witness),
+    }
+    if *i > w.len() { return Err(TErr::Witness); }
+    Ok(())
+}
+
+fn skip_sub(w: &[u32], i: &mut usize) -> Result<(), TErr> {
+    let t = *w.get(*i).ok_or(TErr::Witness)?;
+    match t {
+        0 => *i += 1,
+        1 => *i += 9,
+        2 => { *i += 1; skip_sub(w, i)?; skip_sub(w, i)?; }
+        5 | 6 => { *i += 9; skip_sub(w, i)?; }
+        4 => *i += 20,
+        _ => return Err(TErr::Witness),
+    }
+    if *i > w.len() { return Err(TErr::Witness); }
+    Ok(())
 }
 
 /// Split mode (E1 measurement): the digest of one block's update list, which the trie receipt commits and the aggregate

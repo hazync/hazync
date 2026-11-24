@@ -440,6 +440,7 @@ mod tests {
     fn stream_matches_apply_on_random_blocks() {
         let mut x = 0x9e3779b97f4a7c15u64;
         let mut rnd = move || { x ^= x << 13; x ^= x >> 7; x ^= x << 17; x };
+        let mut nparts = 0usize;
         for round in 0..300u64 {
             let counts = round % 2 == 0;
             // a few addresses, several coins each: marks on some, inserts on others (new and existing addresses)
@@ -471,7 +472,34 @@ mod tests {
                 assert!(apply_stream_perm(&w, &m, &i, Some(&rep)).is_err());
             }
             if round == 0 { assert!(w.iter().any(|&x| x == 5 || x == 6), "the witness uses one-sided tags"); }
+            // split proofs (parts at depth k + a combine) give the same root; a part over other updates is refused
+            if counts && want.is_ok() {
+                let ss: Vec<W> = p.iter().map(|&j| keys[j as usize].0).collect();
+                for k in 0..5u32 {
+                    let (cw, spans) = crate::ttree::split_witness(&w, &ss, k).expect("split");
+                    let parts: Vec<[u32; crate::ttree::PART_JOURNAL_WORDS]> = spans.iter().map(|sp| {
+                        let (pm, pi, po) = crate::ttree::part_lists(&m, &i, &p, sp.ups.clone());
+                        crate::ttree::apply_part(&w[sp.w.clone()], sp.d, &pm, &pi, &po).expect("part")
+                    }).collect();
+                    assert_eq!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &parts), want, "round {round} k {k}");
+                    nparts += parts.len();
+                    if let Some(first) = parts.first() {
+                        let mut bad = parts.clone();
+                        bad[0][27] ^= 1;
+                        assert_eq!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &bad), Err(TErr::Witness), "digest");
+                        let mut bad = parts.clone();
+                        bad[0][1] += 1;
+                        assert_eq!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &bad), Err(TErr::Witness), "depth");
+                        assert!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &parts[1..]).is_err(), "a missing part");
+                        let mut extra = parts.clone();
+                        extra.push(*first);
+                        assert!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &extra).is_err(), "an unused part");
+                        assert!(crate::ttree::apply_stream_perm(&cw, &m, &i, Some(&p)).is_err(), "TAG_PART without parts");
+                    }
+                }
+            }
         }
+        assert!(nparts > 300, "parts exercised: {nparts}");
     }
 
     #[test]

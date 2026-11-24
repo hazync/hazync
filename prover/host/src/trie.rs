@@ -43,21 +43,76 @@ pub(crate) fn trie_parse(text: &str) -> (Marks, Inserts) {
 /// Guest mode 17's input: [witness words, marks, inserts, perm length], the witness, marks ×24, inserts ×27, the
 /// update order (the guest checks it is a permutation and that the keys strictly increase in it).
 pub(crate) fn trie_env(b: &mut impl crate::sink::Sink, wit: &[u32], marks: &Marks, ins: &Inserts) {
+    let perm = trie_perm(marks, ins);
+    let (mw, iw) = list_words(marks, ins);
+    b.segment_limit_po2(crate::seg_po2());
+    b.write(&17u32);
+    b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
+    b.write_slice(wit);
+    write_lists(b, &mw, &iw, &perm);
+}
+
+/// The update order the guest checks: indices (marks, then inserts) by key.
+pub(crate) fn trie_perm(marks: &Marks, ins: &Inserts) -> Vec<u32> {
     let ks: Vec<(W, W)> = marks.iter().map(|x| libzync::ttree::split(&x.0)).chain(ins.iter().map(|x| libzync::ttree::split(&x.0))).collect();
     let mut perm: Vec<u32> = (0..ks.len() as u32).collect();
     perm.sort_by(|&a, &c| ks[a as usize].cmp(&ks[c as usize]));
+    perm
+}
+
+/// Marks ×24 words, inserts ×27 (the guest's trie_lists layout).
+fn list_words(marks: &Marks, ins: &Inserts) -> (Vec<u32>, Vec<u32>) {
     let kw = |k: &Key| -> Vec<u32> { k.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect() };
     let mut mw: Vec<u32> = Vec::with_capacity(marks.len() * 24);
     for (k, sp) in marks { mw.extend(kw(k)); mw.extend_from_slice(sp); }
     let mut iw: Vec<u32> = Vec::with_capacity(ins.len() * 27);
     for (k, sp, v) in ins { iw.extend(kw(k)); iw.push(sp.is_some() as u32); iw.extend_from_slice(&sp.unwrap_or([0; 8])); iw.push(*v as u32); iw.push((*v >> 32) as u32); }
-    b.segment_limit_po2(crate::seg_po2());
-    b.write(&17u32);
-    b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
-    b.write_slice(wit);
-    if !mw.is_empty() { b.write_slice(&mw); }
-    if !iw.is_empty() { b.write_slice(&iw); }
-    if !perm.is_empty() { b.write_slice(&perm); }
+    (mw, iw)
+}
+
+fn write_lists(b: &mut impl crate::sink::Sink, mw: &[u32], iw: &[u32], perm: &[u32]) {
+    if !mw.is_empty() { b.write_slice(mw); }
+    if !iw.is_empty() { b.write_slice(iw); }
+    if !perm.is_empty() { b.write_slice(perm); }
+}
+
+/// A split trie update (guest modes 19 + 20): the witness cut at depth `k` of the top trie. Returns each part's input
+/// stream with the journal its proof will carry (computed here by the guest's own code, libzync::ttree), and the
+/// combine's input stream, which carries this host's METHOD_ID as its image id at bytes 4..36 (the engine puts its own
+/// there, as for an aggregate). None when the cut yields no part (a trie with no node at depth k on any update's path).
+#[allow(clippy::type_complexity)]
+pub(crate) fn trie_split(wit: &[u32], marks: &Marks, ins: &Inserts, k: u32)
+                         -> Option<(Vec<(crate::sink::Stream, [u32; libzync::ttree::PART_JOURNAL_WORDS])>, crate::sink::Stream)> {
+    use crate::sink::{Sink, Stream};
+    use libzync::ttree;
+    let perm = trie_perm(marks, ins);
+    let ks: Vec<W> = perm.iter().map(|&i| {
+        let k = if (i as usize) < marks.len() { &marks[i as usize].0 } else { &ins[i as usize - marks.len()].0 };
+        ttree::split(k).0
+    }).collect();
+    let (cw, spans) = ttree::split_witness(wit, &ks, k).expect("trie split: the witness does not parse");
+    if spans.is_empty() { return None; }
+    let mut parts = Vec::with_capacity(spans.len());
+    for sp in &spans {
+        let (pm, pi, po) = ttree::part_lists(marks, ins, &perm, sp.ups.clone());
+        let j = ttree::apply_part(&wit[sp.w.clone()], sp.d, &pm, &pi, &po).expect("trie split: a part does not apply");
+        let (mw, iw) = list_words(&pm, &pi);
+        let mut st = Stream::default();
+        st.write(&19u32);
+        st.write_slice(&[sp.d, sp.w.len() as u32, pm.len() as u32, pi.len() as u32, po.len() as u32]);
+        st.write_slice(&wit[sp.w.clone()]);
+        write_lists(&mut st, &mw, &iw, &po);
+        parts.push((st, j));
+    }
+    let (mw, iw) = list_words(marks, ins);
+    let mut st = Stream::default();
+    st.write(&20u32);
+    st.write(&methods::METHOD_ID);
+    st.write_slice(&[cw.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32, parts.len() as u32]);
+    st.write_slice(&cw);
+    write_lists(&mut st, &mw, &iw, &perm);
+    for (_, j) in &parts { st.write_slice(j); }
+    Some((parts, st))
 }
 
 /// The trie receipt's journal as words: [KIND_TRIE, old root, new root, digest].

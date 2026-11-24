@@ -21,16 +21,20 @@ fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
     c
 }
 
-/// `workers` > 1: the chunk and trie proofs run on that many `hzengine serve` processes at once (sharing the GPU),
-/// so one proof's host-side work overlaps another's GPU work; the aggregate then runs here, alone on the GPU (its
-/// segment cap is this process's: share 1).
-fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usize, report: &mut String) -> Result<()> {
+/// One leaf-level proof for `leaves_parallel`: `children` (names of earlier jobs, verified in-guest in that order) and
+/// `self_id` as the serve request's; it starts once every job in `deps` is proved.
+struct Job { name: String, input: PathBuf, children: Vec<String>, self_id: bool, deps: Vec<usize> }
+
+/// The chunk and trie proofs on `workers` `hzengine serve` processes at once, spread over the visible GPUs, so one
+/// proof's host-side work overlaps another's GPU work; the aggregate then runs here, alone on GPU 0 (its segment cap is
+/// this process's: share 1). Each worker takes the first job whose dependencies are done (a split trie's combine
+/// waits for its parts and goes before the chunks still queued).
+fn leaves_parallel(dir: &Path, out: &Path, jobs: &[Job], workers: usize, report: &mut String) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
     let me = std::env::current_exe()?;
-    let mut jobs: Vec<(String, PathBuf)> = (0..n).map(|i| (format!("chunk_{i:02}"), export.join(format!("chunk_{i:02}.in")))).collect();
-    jobs.push(("trie".into(), export.join("trie.in")));
-    let next = std::sync::atomic::AtomicUsize::new(0);
+    // 0 queued, 1 running, 2 done
+    let state = std::sync::Mutex::new(vec![0u8; jobs.len()]);
     let gpus = crate::engine::gpu_count();
     // provers per card: workers spread round-robin, so a card holds ceil(workers / gpus) of them
     let share = workers.div_ceil(gpus);
@@ -41,9 +45,10 @@ fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usi
     };
     let lines = std::sync::Mutex::new(Vec::<(usize, String)>::new());
     let err = std::sync::Mutex::new(None::<String>);
+    let t0 = Instant::now();
     std::thread::scope(|sc| {
         for k in 0..workers {
-            let (me, next, lines, err, jobs, devs) = (&me, &next, &lines, &err, &jobs, &devs);
+            let (me, state, lines, err, devs) = (&me, &state, &lines, &err, &devs);
             sc.spawn(move || {
                 let mut cmd = Command::new(me);
                 cmd.args(["serve", "--dir"]).arg(dir).env("HZ_GPU_SHARE", share.to_string());
@@ -58,20 +63,30 @@ fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usi
                 let mut l = String::new();
                 rd.read_line(&mut l).ok();
                 loop {
-                    let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    let Some((name, input)) = jobs.get(i) else { break };
+                    if err.lock().unwrap().is_some() { break; }
+                    let pick = {
+                        let mut st = state.lock().unwrap();
+                        if st.iter().all(|&x| x != 0) { break; }
+                        let i = (0..jobs.len()).find(|&i| st[i] == 0 && jobs[i].deps.iter().all(|&d| st[d] == 2));
+                        if let Some(i) = i { st[i] = 1; }
+                        i
+                    };
+                    let Some(i) = pick else { std::thread::sleep(std::time::Duration::from_millis(100)); continue };
+                    let j = &jobs[i];
                     let t = Instant::now();
-                    let req = serde_json::json!({"op": "prove", "input": input, "children": [], "self_id": false, "out": out.join(name)});
+                    let children: Vec<PathBuf> = j.children.iter().map(|c| out.join(c)).collect();
+                    let req = serde_json::json!({"op": "prove", "input": j.input, "children": children, "self_id": j.self_id, "out": out.join(&j.name)});
                     let _ = writeln!(stdin, "{req}").and_then(|_| stdin.flush());
                     let mut r = String::new();
                     rd.read_line(&mut r).ok();
-                    if !r.contains("\"ok\":true") { *err.lock().unwrap() = Some(format!("{name}: {r}")); break; }
-                    let journal = std::fs::read(crate::engine::with_ext(&out.join(name), "journal")).unwrap_or_default();
-                    let r0 = std::fs::read(input.with_extension("r0journal")).ok();
+                    if !r.contains("\"ok\":true") { *err.lock().unwrap() = Some(format!("{}: {r}", j.name)); break; }
+                    let journal = std::fs::read(crate::engine::with_ext(&out.join(&j.name), "journal")).unwrap_or_default();
+                    let r0 = std::fs::read(j.input.with_extension("r0journal")).ok();
                     let same = r0.map(|r| r == journal);
-                    if same == Some(false) { *err.lock().unwrap() = Some(format!("{name}: journal differs from RISC Zero's")); }
-                    lines.lock().unwrap().push((i, format!("{name}: proved {:.1} s (worker), journal {} bytes sha256 {} r0 {}\n",
-                        t.elapsed().as_secs_f64(), journal.len(), &hex::encode(Sha256::digest(&journal))[..16],
+                    if same == Some(false) { *err.lock().unwrap() = Some(format!("{}: journal differs from RISC Zero's", j.name)); }
+                    state.lock().unwrap()[i] = 2;
+                    lines.lock().unwrap().push((i, format!("{}: proved {:.1} s (worker {k}, done at {:.1} s), journal {} bytes sha256 {} r0 {}\n",
+                        j.name, t.elapsed().as_secs_f64(), t0.elapsed().as_secs_f64(), journal.len(), &hex::encode(Sha256::digest(&journal))[..16],
                         match same { Some(true) => "IDENTICAL", Some(false) => "DIFFERENT", None => "n/a" })));
                 }
                 drop(stdin);
@@ -121,10 +136,32 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         Ok((proof, journal))
     };
     let mut children = Vec::new();
-    let workers = workers.min(n + 1); // no more provers than leaf proofs (a 1-chunk block has 2)
-    if workers > 1 {
-        leaves_parallel(dir, export, out, n, workers, &mut report)?;
-        let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain(["trie".to_string()]).collect();
+    // a split trie update (engine-export with HAZYNC_TRIE_SPLIT): parts, then a combine verifying them, in place of trie
+    let parts: usize = match std::fs::read_to_string(export.join("trie_parts")) {
+        Ok(t) => t.trim().parse()?,
+        Err(_) => 0,
+    };
+    let mut jobs: Vec<Job> = Vec::new();
+    let trie_name = if parts > 0 {
+        let pn: Vec<String> = (0..parts).map(|i| format!("trie_part_{i:02}")).collect();
+        for p in &pn {
+            jobs.push(Job { name: p.clone(), input: export.join(format!("{p}.in")), children: vec![], self_id: false, deps: vec![] });
+        }
+        jobs.push(Job { name: "trie_combine".into(), input: export.join("trie_combine.in"), children: pn, self_id: true, deps: (0..parts).collect() });
+        "trie_combine"
+    } else {
+        "trie"
+    };
+    for i in 0..n {
+        jobs.push(Job { name: format!("chunk_{i:02}"), input: export.join(format!("chunk_{i:02}.in")), children: vec![], self_id: false, deps: vec![] });
+    }
+    if parts == 0 {
+        jobs.push(Job { name: "trie".into(), input: export.join("trie.in"), children: vec![], self_id: false, deps: vec![] });
+    }
+    let workers = workers.min(jobs.len()); // no more provers than leaf proofs (a 1-chunk block has 2)
+    if workers > 1 || parts > 0 {
+        leaves_parallel(dir, out, &jobs, workers, &mut report)?;
+        let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain([trie_name.to_string()]).collect();
         for nm in names {
             children.push(crate::engine::read_proof(&e, &baseline, &out.join(nm))?.0);
         }
@@ -147,6 +184,23 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     let r0id = std::fs::read(export.join("method_id"))?;
     ensure!(stream[4..36] == r0id[..], "agg.in: METHOD_ID not at bytes 4..36");
     stream[4..36].copy_from_slice(&image_id(&img));
+    if parts > 0 {
+        // The aggregate reads the trie proof's journal last ([word count] + words): the export wrote the whole update's
+        // (RISC Zero's mode 17); the combine's goes there. Same old root, new root and list digest, then this image's id.
+        let tj = std::fs::read(export.join("trie.r0journal"))?;
+        let cj = std::fs::read(out.join("trie_combine.journal"))?;
+        let tail = 4 + tj.len();
+        ensure!(stream.len() >= tail && stream[stream.len() - tail..stream.len() - tj.len()] == ((tj.len() / 4) as u32).to_le_bytes()
+                && stream[stream.len() - tj.len()..] == tj[..], "agg.in does not end with the trie journal");
+        ensure!(cj.len() == tj.len() + 32 && cj[4..tj.len()] == tj[4..] && cj[tj.len()..] == image_id(&img)[..],
+                "the combine's journal is not the whole update's (old root, new root, list) with this image's id");
+        stream.truncate(stream.len() - tail);
+        stream.extend_from_slice(&((cj.len() / 4) as u32).to_le_bytes());
+        stream.extend_from_slice(&cj);
+        let line = format!("trie split: {parts} parts + combine; combine journal = RISC Zero's whole update (old root, new root, list) + this image's id\n");
+        eprint!("{line}");
+        report.push_str(&line);
+    }
     let calls = e.child_calls(&baseline, &children)?;
     for c in &calls {
         ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "a child is not of this image");
