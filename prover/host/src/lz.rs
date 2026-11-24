@@ -920,6 +920,30 @@ pub(crate) fn journal_sha(r: &risc0_zkvm::Receipt) -> String {
 /// itself be joined. Leaves: `libzync-prove-range h h <json> state_<h-1>.json <out>` (a base step on any state).
 pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     use risc0_zkvm::Receipt;
+    // HAZYNC_ENGINE: left/right/out are engine proofs (P = P.proof.json + P.journal), mode 18 on the engine; the guest
+    // verifies both in-guest and checks they are adjacent, exactly as below.
+    if crate::engine_backend::active() {
+        use crate::sink::Sink;
+        let rd = |p: &str| crate::engine_backend::EngineProof {
+            path: p.into(), journal: std::fs::read(format!("{p}.journal")).unwrap_or_else(|e| panic!("{p}.journal: {e}")) };
+        let (l, r) = (rd(left), rd(right));
+        let (ls, rs) = (crate::engine_backend::decode_state(&l.journal), crate::engine_backend::decode_state(&r.journal));
+        let mut st = crate::sink::Stream::default();
+        st.write(&18u32);
+        st.write(&METHOD_ID);
+        st.write(&l.journal);
+        st.write(&r.journal);
+        let dir = std::path::Path::new(out).parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
+        let t = std::time::Instant::now();
+        let j = crate::engine_backend::with(&dir, |e| e.prove("join", &st.0, &[&l, &r], true));
+        let j = crate::engine_backend::keep(&j, out);
+        let s = crate::engine_backend::decode_state(&j.journal);
+        assert!(s.anchor_id == ls.anchor_id && s.height == rs.height && s.tip_hash == rs.tip_hash, "join: unexpected output state");
+        use sha2::Digest;
+        println!("JOURNAL_SHA256 {}", hex(&sha2::Sha256::digest(&j.journal)));
+        println!("JOINED left tip {} + right tip {} -> {out} (engine), {:.1} s", ls.height, rs.height, t.elapsed().as_secs_f64());
+        return;
+    }
     let rd = |p: &str| -> Receipt {
         let r: Receipt = crate::verify::read_receipt(p).unwrap_or_else(|e| panic!("{e}"));
         r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{p} does not verify against this image: {e}"));
