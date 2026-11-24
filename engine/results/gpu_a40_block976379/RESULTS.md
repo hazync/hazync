@@ -25,3 +25,12 @@ The bench proved each part as ONE program with no recursion. What the real engin
 - In-guest verification of 17 proofs: aggregate 68.5 s (A40) vs 49.1 s without verification (bench, A6000): at most about 20 s, about 1.1 s per proof, part of it the slower card.
 - The trie is the product's mode-17 code (13.6B cost); the bench's 36 s used the faster trie variant
   (experiment/fresh-trie), not yet ported into the engine.
+
+## Metered cost of each stream (CPU, `hzengine execute`, every journal byte-identical to RISC Zero's)
+| stream | cost | instructions |
+|---|---|---|
+| 16 chunks | 28.68B (1.64-2.01B each) | 703M |
+| trie | 8.92B | 156M |
+The chunks prove at 9.9 ns/cost here vs 5.9 ns/cost for one big program (bench run 3): 28.68B x 5.9 ns = 169 s of
+app proving, 285 s measured, so ~116 s (7.2 s per chunk) is the per-proof wrap. Next levers, in order of size:
+fewer/larger chunks for throughput (the chunk count is the host's), the faster trie, native SHA, GPU utilisation.
