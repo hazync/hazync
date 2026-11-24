@@ -804,6 +804,21 @@ pub(crate) fn nchunks_env() -> usize {
     std::env::var("HAZYNC_CHUNKS").ok().and_then(|s| s.parse().ok()).unwrap_or(2).max(1)
 }
 
+/// The chunk count for THIS block. HAZYNC_CHUNK_TARGET=<predicted cost per chunk, input_costs' units> sizes it:
+/// ceil(block's predicted cost / target), between 1 and HAZYNC_CHUNKS. Every proof carries a fixed cost (on the
+/// engine ~5 s), so a small block split 16 ways is mostly overhead (engine/results/gpu_a6000_multiblock: 140,000 in
+/// 90 s as 16 chunks, 23 s as one). Unset: HAZYNC_CHUNKS, as before. The hints run and the prover must agree (same env).
+pub(crate) fn nchunks_for(w: &BlockWitness) -> usize {
+    let max = nchunks_env();
+    match std::env::var("HAZYNC_CHUNK_TARGET").ok().and_then(|s| s.parse::<u64>().ok()).filter(|&t| t > 0) {
+        Some(t) => {
+            let total: u64 = input_costs(w).iter().sum();
+            (total.div_ceil(t) as usize).clamp(1, max)
+        }
+        None => max,
+    }
+}
+
 /// Read and verify the chunk receipts an aggregate consumes (hazync#153).
 ///
 /// Verified on the way in, not trusted: a chunk receipt that does not verify against METHOD_ID

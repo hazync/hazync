@@ -340,7 +340,7 @@ pub(crate) fn segment_size_cmd() {
     use risc0_zkvm::ExecutorImpl;
     let idx: usize = std::env::var("HAZYNC_CHUNK").ok().and_then(|s| s.parse().ok()).unwrap_or(9);
     let (_a, w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let (lo, hi) = *bounds.get(idx).expect("chunk index");
     let mut b = ExecutorEnv::builder();
     b.segment_limit_po2(seg_po2());
@@ -393,7 +393,7 @@ pub(crate) fn exec_time_cmd() {
     let (_a, w) = build_full();
     let t_build = t0.elapsed().as_secs_f64();
 
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let (lo, hi) = *bounds.get(idx).expect("chunk index");
     let mut b = ExecutorEnv::builder();
     b.segment_limit_po2(seg_po2());
@@ -463,7 +463,7 @@ pub(crate) fn segment_mem_cmd() {
     let nseg: usize = std::env::var("HAZYNC_NSEG").ok().and_then(|s| s.parse().ok()).unwrap_or(3);
 
     let (_a, w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let (lo, hi) = *bounds.get(idx).expect("chunk index");
     let mut b = ExecutorEnv::builder();
     b.segment_limit_po2(seg_po2());

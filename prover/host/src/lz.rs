@@ -411,7 +411,7 @@ pub(crate) fn write_aggregate_env_ex(
 pub(crate) fn agg_exec_fake() {
     use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
     let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let mut receipts = Vec::with_capacity(bounds.len());
     for (i, &(lo, hi)) in bounds.iter().enumerate() {
         let mut b = ExecutorEnv::builder();
@@ -454,7 +454,10 @@ pub(crate) fn engine_export(dir: &str) {
     let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
     put("method_id", &idb);
     let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
+    let pred: u64 = crate::chunks::input_costs(&w).iter().sum();
+    println!("  predicted cost {pred} ({} inputs, {} chunks)", w.inputs.len(), bounds.len());
+    put("predicted_cost", format!("{pred}\n").as_bytes());
     let mut receipts = Vec::with_capacity(bounds.len());
     for (i, &(lo, hi)) in bounds.iter().enumerate() {
         let mut st = Stream::default();
@@ -828,7 +831,7 @@ pub(crate) fn libzync_hints_cmd(out: &str) {
     // Collect mode for every hint kind: no bundle.
     std::env::remove_var("HAZYNC_LZ_HINTS");
     let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let threads = hint_threads();
     let done = execute_chunks_parallel(&w, &bounds, threads);
     let t_chunks = t0.elapsed().as_secs_f64();
@@ -1231,7 +1234,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             assert!(b.in_smt_root == w.in_smt_root && bincode::serialize(&b.smt).unwrap() == bincode::serialize(&w.smt).unwrap(),
                     "HAZYNC_LEAF_CHECK: leaf_{h}.bin's BIP30 witness != this run's");
         }
-        let bounds = chunk_bounds(&w, nchunks_env());
+        let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
         // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
         // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
         // would be PROVED with libsecp verifying each signature itself: valid, but the unbatched cost.
@@ -1470,7 +1473,7 @@ pub(crate) fn agg_chunks() {
     let (anchor, mut w) = build_full();
     // The partition decides how many chunk files exist — an uneven pack can yield fewer runs than
     // HAZYNC_CHUNKS asked for, and reading a fixed count would look for a file that was never written.
-    let nchunks = chunk_bounds(&w, nchunks_env()).len();
+    let nchunks = chunk_bounds(&w, crate::chunks::nchunks_for(&w)).len();
     let receipts = read_chunk_receipts(nchunks);
     println!("=== AGGREGATING {} chunk receipts for block {} ===", receipts.len(), w.height);
     let t = Instant::now();

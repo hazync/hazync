@@ -960,7 +960,7 @@ fn build_block_carried(forest: &mut Forest, j: &serde_json::Value, block_mtp: &[
 fn prove_chunk(idx: usize) {
     use std::time::Instant;
     let (_anchor, w) = build_full();
-    let bounds = chunk_bounds(&w, nchunks_env());
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let (lo, hi) = *bounds.get(idx).unwrap_or_else(|| panic!(
         "prove-chunk {idx}: block has only {} chunks at HAZYNC_CHUNKS={}", bounds.len(), nchunks_env()));
     let mut b = ExecutorEnv::builder();
@@ -1294,7 +1294,7 @@ fn main() {
         // libzync negative tests: execute ONE chunk with the current hint env and report its verdict.
         let idx: usize = args.get(p + 1).and_then(|s| s.parse().ok()).expect("exec-chunk <index>");
         let (_, w) = build_full();
-        let bounds = chunk_bounds(&w, nchunks_env());
+        let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
         let (r, log) = execute_chunks_parallel(&w, &bounds[idx..idx + 1], 1).pop().expect("one chunk");
         for l in String::from_utf8_lossy(&log).lines().filter(|l| l.contains("batch:")) { println!("  {l}"); }
         let j = &r.journal.bytes;
