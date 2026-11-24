@@ -1,0 +1,17 @@
+[package]
+name = "hazync-engine-guest"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-sha2 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-deferral-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-verify-stark-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
