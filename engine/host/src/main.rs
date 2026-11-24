@@ -16,6 +16,7 @@ mod capture;
 mod engine;
 mod r0;
 mod selftest;
+mod serve;
 
 use std::path::PathBuf;
 
@@ -95,7 +96,14 @@ enum Cmd {
         #[arg(long)]
         input: PathBuf,
         #[arg(long)]
+        child: Vec<PathBuf>,
+        #[arg(long)]
+        self_id: bool,
+        #[arg(long)]
         journal: Option<PathBuf>,
+        /// The guest's whole stdout (collect lines) goes here.
+        #[arg(long)]
+        log: Option<PathBuf>,
     },
     /// A whole block from `engine-export`: chunks, trie, and the aggregate verifying them all in-guest.
     ProveBlock {
@@ -108,6 +116,11 @@ enum Cmd {
         /// Also verify every chunk/trie proof on its own (the aggregate verifies them anyway).
         #[arg(long)]
         verify_each: bool,
+    },
+    /// Long-lived engine for the product host's prover backend: JSON requests on stdin, replies on stdout.
+    Serve {
+        #[arg(long)]
+        dir: PathBuf,
     },
     /// Verify a proof: STARK against agg.vk + baseline, its public values against its journal, and its image.
     Verify {
@@ -127,8 +140,9 @@ fn main() -> Result<()> {
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
-        Cmd::Execute { dir, input, journal } => r0::execute(&dir, &input, journal.as_deref()),
+        Cmd::Execute { dir, input, child, self_id, journal, log } => r0::execute(&dir, &input, &child, self_id, journal.as_deref(), log.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),
+        Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
     }
 }

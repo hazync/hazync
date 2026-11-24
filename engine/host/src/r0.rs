@@ -30,12 +30,16 @@ fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
 
 pub fn prove(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, out: &Path) -> Result<()> {
     let e = Engine::load(dir)?;
+    prove_with(&e, dir, input, children, set_self_id, out)
+}
+
+pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, out: &Path) -> Result<()> {
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
     let mut stream = std::fs::read(input)?;
     let mut proofs = Vec::new();
     for c in children {
-        proofs.push(read_proof(&e, &baseline, c)?.0);
+        proofs.push(read_proof(e, &baseline, c)?.0);
     }
     let calls = e.child_calls(&baseline, &proofs)?;
     if !calls.is_empty() {
@@ -62,33 +66,70 @@ pub fn prove(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, 
     let defs = e.attach_children(&baseline, &mut prv, &proofs)?;
     let (proof, journal) = e.prove(exe, emit, prv, &defs)?;
     if Engine::image(dir).is_err() {
-        record_image(dir, &e, &proof)?;
+        record_image(dir, e, &proof)?;
     }
     eprintln!("journal sha256 {}", hex::encode(Sha256::digest(&journal)));
     write_proof(out, proof, &journal)
 }
 
-/// Execute only (no proof): the journal and the guest's metered cost, for checks and measurement.
-pub fn execute(dir: &Path, input: &Path, journal_out: Option<&Path>) -> Result<()> {
+/// Execute only (no proof). `children` are verified in-guest as in `prove`. Writes the guest's whole stdout to `log`
+/// (a collect run's ECMH/coin-log/trie lines), the journal to `journal_out` when the run committed one. A run that ends
+/// in env::exit(code) prints HZEXIT:<code>; that is reported as `exit <code>` and is not an error here.
+pub struct ExecOut {
+    pub exit: Option<String>,
+    pub cost: u64,
+    pub instret: u64,
+}
+
+pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<()> {
     let e = Engine::load(dir)?;
-    let exe = Engine::exe(dir)?;
-    let stream = std::fs::read(input)?;
-    let mut s = StdIn::default();
-    s.write_bytes(&control(true, &[]));
-    s.write_bytes(&stream);
-    s.deferrals = vec![Default::default()];
-    let t = std::time::Instant::now();
-    let (r, out) = crate::capture::stdout_of(|| e.sdk.execute_metered_cost(exe.clone(), s));
-    let (pvs, (cost, instret)) = r?;
-    let journal = crate::capture::journal_of(&out);
-    ensure!(pvs == Sha256::digest(&journal).as_slice(), "journal does not match the public values");
-    for l in out.lines().filter(|l| !l.starts_with("HZJ:")).take(40) {
-        eprintln!("  guest: {l}");
-    }
-    eprintln!("execute: {:.1} s, cost {cost}, instructions {instret}, journal {} bytes sha256 {}",
-              t.elapsed().as_secs_f64(), journal.len(), hex::encode(Sha256::digest(&journal)));
-    if let Some(p) = journal_out {
-        std::fs::write(p, &journal)?;
+    let o = execute_with(&e, dir, input, children, set_self_id, journal_out, log)?;
+    match o.exit {
+        None => println!("EXECUTE_OK"),
+        Some(c) => println!("EXECUTE_EXIT {c}"),
     }
     Ok(())
+}
+
+pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<ExecOut> {
+    let exe = Engine::exe(dir)?;
+    let baseline = Engine::baseline(dir)?;
+    let mut stream = std::fs::read(input)?;
+    let mut proofs = Vec::new();
+    for c in children {
+        proofs.push(read_proof(e, &baseline, c)?.0);
+    }
+    let calls = e.child_calls(&baseline, &proofs)?;
+    if set_self_id {
+        let img = Engine::image(dir)?;
+        stream[4..36].copy_from_slice(&image_id(&img));
+    }
+    let commits: Vec<[u8; 32]> = calls.iter().map(|c| c.input_commit).collect();
+    let mut s = StdIn::default();
+    s.write_bytes(&control(true, &commits));
+    s.write_bytes(&stream);
+    e.attach_children(&baseline, &mut s, &proofs)?;
+    let t = std::time::Instant::now();
+    let (r, out) = crate::capture::stdout_of(|| e.sdk.execute_metered_cost(exe.clone(), s));
+    if let Some(p) = log {
+        std::fs::write(p, out.lines().filter(|l| !l.starts_with("HZJ:")).collect::<Vec<_>>().join("\n") + "\n")?;
+    }
+    let exit = out.lines().find_map(|l| l.strip_prefix("HZEXIT:")).map(|c| c.trim().to_string());
+    match (r, exit) {
+        (Ok((pvs, (cost, instret))), _) => {
+            let journal = crate::capture::journal_of(&out);
+            ensure!(pvs == Sha256::digest(&journal).as_slice(), "journal does not match the public values");
+            eprintln!("execute: {:.1} s, cost {cost}, instructions {instret}, journal {} bytes sha256 {}",
+                      t.elapsed().as_secs_f64(), journal.len(), hex::encode(Sha256::digest(&journal)));
+            if let Some(p) = journal_out {
+                std::fs::write(p, &journal)?;
+            }
+            Ok(ExecOut { exit: None, cost, instret })
+        }
+        (Err(_), Some(code)) => {
+            eprintln!("execute: {:.1} s, guest exit {code} (no journal)", t.elapsed().as_secs_f64());
+            Ok(ExecOut { exit: Some(code), cost: 0, instret: 0 })
+        }
+        (Err(err), None) => Err(err.into()),
+    }
 }

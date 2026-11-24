@@ -25,6 +25,7 @@ mod lz_coord;
 mod reorg;
 mod rewind;
 mod sink;
+mod engine_backend;
 
 use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
 use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd};

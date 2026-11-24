@@ -145,7 +145,9 @@ pub mod guest {
         }
 
         /// RISC Zero's exit with a non-zero code (the collect run's COLLECT_EXIT) means "no proof"; so does a panic.
+        /// The code goes to the host as a `HZEXIT:<code>` line (hzengine execute reports it), then the guest stops.
         pub fn exit(code: u8) -> ! {
+            openvm::io::println(alloc::format!("HZEXIT:{code}"));
             panic!("guest exit({code})")
         }
 
