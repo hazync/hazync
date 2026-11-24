@@ -122,6 +122,13 @@ enum Cmd {
         #[arg(long)]
         dir: PathBuf,
     },
+    /// Write image.json from baseline.json (what `build` does); with --check, compare it with an existing image.json.
+    Image {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        check: bool,
+    },
     /// Verify a proof: STARK against agg.vk + baseline, its public values against its journal, and its image.
     Verify {
         #[arg(long)]
@@ -143,6 +150,18 @@ fn main() -> Result<()> {
         Cmd::Execute { dir, input, child, self_id, journal, log } => r0::execute(&dir, &input, &child, self_id, journal.as_deref(), log.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),
         Cmd::Serve { dir } => serve::serve(&dir),
+        Cmd::Image { dir, check } => {
+            let img = engine::image_of(&engine::Engine::baseline(&dir)?);
+            if check {
+                let have = engine::Engine::image(&dir)?;
+                eyre::ensure!(have == img, "image.json {have:?} != computed {img:?}");
+                eprintln!("image.json matches the baseline: exe {} vm {}", img.exe, img.vm);
+            } else {
+                std::fs::write(dir.join("image.json"), serde_json::to_vec_pretty(&img)?)?;
+                eprintln!("image: exe {} vm {}", img.exe, img.vm);
+            }
+            Ok(())
+        }
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
     }
 }

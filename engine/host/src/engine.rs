@@ -220,17 +220,38 @@ pub fn build(dir: &Path, guest: &Path) -> Result<()> {
     let baseline = prover.generate_baseline();
     write_object_to_file(dir.join("guest.vmexe"), exe.clone())?;
     write_to_file_json(dir.join("baseline.json"), VerificationBaselineJson::from(baseline.clone()))?;
-    let commit = e.sdk.app_commit(exe)?;
-    eprintln!("build: {:.1} s; app_commit {:?}", t.elapsed().as_secs_f64(), commit);
+    let img = image_of(&baseline);
+    std::fs::write(dir.join("image.json"), serde_json::to_vec_pretty(&img)?)?;
+    eprintln!("build: {:.1} s; image exe {} vm {}", t.elapsed().as_secs_f64(), img.exe, img.vm);
     Ok(())
 }
 
-/// Record the image as the guest sees it, from a proof of it (the bytes verify_stark returns). Every later proof
-/// is checked against this file, and `build` refuses a guest whose baseline moved without re-recording it.
+/// The image as the guest sees it (the bytes a verify_stark call returns for a proof of it), from the baseline alone:
+/// exe = the executable commitment (program, initial memory, entry pc), vm = poseidon2 over the app, leaf and
+/// internal-for-leaf vk commitments; each field element as 4 little-endian bytes. The same computation as
+/// openvm-verify-stark-circuit's output_raw_from_proof; `record_image` checks it against a real proof.
+pub fn image_of(baseline: &VerificationBaseline) -> Image {
+    use openvm_stark_backend::p3_field::PrimeField32;
+    let exe = baseline.app_exe_commit();
+    let parts = [
+        baseline.app_vk_commit.cached_commit, baseline.app_vk_commit.vk_pre_hash,
+        baseline.leaf_vk_commit.cached_commit, baseline.leaf_vk_commit.vk_pre_hash,
+        baseline.internal_for_leaf_vk_commit.cached_commit, baseline.internal_for_leaf_vk_commit.vk_pre_hash,
+    ];
+    let vm = openvm_recursion_circuit::utils::poseidon2_hash_slice(&parts.into_iter().flatten().collect::<Vec<_>>()).0;
+    let bytes = |d: &[F]| -> String { hex::encode(d.iter().flat_map(|f| f.as_canonical_u32().to_le_bytes()).collect::<Vec<u8>>()) };
+    Image { exe: bytes(&exe), vm: bytes(&vm) }
+}
+
+/// Check a real proof's (exe, vm) against image.json (written by `build`), or write it if absent.
 pub fn record_image(dir: &Path, e: &Engine, proof: &VmStarkProof) -> Result<Image> {
     let baseline = Engine::baseline(dir)?;
     let c = e.child_calls(&baseline, slice::from_ref(proof))?.pop().unwrap();
     let img = Image { exe: hex::encode(c.exe), vm: hex::encode(c.vm) };
+    if let Ok(have) = Engine::image(dir) {
+        ensure!(have == img, "image.json ({have:?}) is not what a proof of this guest carries ({img:?})");
+        return Ok(img);
+    }
     std::fs::write(dir.join("image.json"), serde_json::to_vec_pretty(&img)?)?;
     eprintln!("image: exe {} vm {}", img.exe, img.vm);
     Ok(img)
