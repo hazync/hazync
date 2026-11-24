@@ -107,6 +107,7 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         Ok((proof, journal))
     };
     let mut children = Vec::new();
+    let workers = workers.min(n + 1); // no more provers than leaf proofs (a 1-chunk block has 2)
     if workers > 1 {
         leaves_parallel(dir, export, out, n, workers, &mut report)?;
         let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain(["trie".to_string()]).collect();

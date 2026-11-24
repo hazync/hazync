@@ -1,0 +1,8 @@
+segmentation max memory: 24 GiB
+segmentation max memory: 11 GiB
+segmentation max memory: 11 GiB
+segmentation max memory: 11 GiB
+chunk_00: proved 24.4 s (worker), journal 140100 bytes sha256 907350fdd16f9565 r0 IDENTICAL
+trie: proved 13.7 s (worker), journal 100 bytes sha256 0b630e11e20deec6 r0 IDENTICAL
+aggregate (2 children verified in-guest): proved 10.3 s, journal 4000 bytes sha256 4d7fb295a2e3e5956b459d2dc8a18a122c8303713206793bbca4fd67ba85ea3d; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 27.9 s + aggregate 10.3 s = 38.4 s; final proof verified in 0.03 s
