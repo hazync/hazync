@@ -65,3 +65,26 @@ sorted index instead of a BTreeMap. Same batch equation, same transcript, same r
 | sum | 20.91B | 16.99B | **−18.7%** | | | |
 
 (msm_hz6_vs_hz7.txt. Metered cost, not GPU time; the GPU run is pending.)
+
+### Second pass (keys-hz8) and the aggregate (24.11.2026)
+
+After hz7 the chunk profile (instruction cells) still had the msm at 17% inclusive, a third of it in the 36 two-point
+fallback checks (each allocating zeroed digit and bucket vectors). hz8: identity bases dropped once, bucket emptiness
+tracked by a flag (a bucket add is one x comparison and one add intrinsic instead of five equality intrinsics and the
+add), Straus on the stack for up to 4 points, and limbs/bytes reinterpreted instead of rebuilt in `hazync_batch_defer`.
+The host test covers both paths; breaking the cancellation, the doubling or Straus's negation fails it.
+
+| chunk | hz6 | hz7 | hz8 | hz8 vs hz6 | journal |
+|---|---|---|---|---|---|
+| 0 | 4.248B | 3.384B | 3.235B | −23.9% | identical |
+| 1 | 4.401B | 3.477B | 3.338B | −24.2% | identical |
+| 2 | 3.741B | 2.820B | 2.770B | −26.0% | identical |
+| 3 | 4.216B | 3.415B | 3.389B | −19.6% | identical |
+| 4 | 4.307B | 3.898B | 3.877B | −10.0% | identical |
+| sum | 20.91B | 16.99B | 16.61B | **−20.6%** | |
+
+The aggregate, measured on metering-only images (`bench-noverify`: same code, `env::verify` accepts without a
+proof, so no child proofs are needed; its own image id): **5.36B** with hz7's batch module, **5.11B** with hz8's (−4.7%:
+`Acc`, the live-coin hash's running sum, now adds in place and writes its limbs only when read). Both journals are
+RISC Zero's except the 32 image-id bytes. The aggregate is now the largest single proof of the block and runs alone
+after the leaves (hz8_and_agg.txt).

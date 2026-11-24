@@ -1,0 +1,12 @@
+122b8804 msm: identity bases skipped once, bucket emptiness by flag (one x compare + add per bucket add), Straus on the stack for <=4 points (the 2-point fallback checks); batch_defer: limbs<->bytes as plain reinterpretation
+hz8 build: 98.5 s; image exe 3a5cf6611c61871c866d521a05c63e5ae696e70fb39d7c0a893d6951dc473339 vm 00e00077450a5a5657b99e459ec
+b8 build: 83.6 s; image exe bdd2392a570c5d20956b000680547a67541d7e5f3d211409e385797435798908 vm 00e00077450a5a5657b99e459ec
+b7 build: 93.1 s; image exe eae3283e1ab46f6ac5a4e16cdb64d33fcc38ff00cf98b84f46dcf51755afcc1f vm 00e00077450a5a5657b99e459ec
+chunk_00 hz8 IDENTICAL :: execute: 17.6 s, cost 3234670533, instructions 74944602, journal 426760 bytes sha256 975daaf367bb3f0432303f0a33f2f0b44cbe46691a5a99c2c5d21b89eb08376d
+chunk_01 hz8 IDENTICAL :: execute: 19.2 s, cost 3337662733, instructions 75844523, journal 399980 bytes sha256 423545ebf152b87c0a9b64a0968c38f32dcbe713990015a6b9e38c3744b58ded
+chunk_02 hz8 IDENTICAL :: execute: 18.3 s, cost 2770448332, instructions 63459287, journal 310180 bytes sha256 c677c75b74d775fb6946803358d46797735ec1fa450bc90af7e14e24e29170de
+chunk_03 hz8 IDENTICAL :: execute: 19.2 s, cost 3389475869, instructions 77947071, journal 511580 bytes sha256 bf86604b4016615b3a637c0a983b9d74f9d6233fdec00cdeddba1de52703bb24
+chunk_04 hz8 IDENTICAL :: execute: 19.4 s, cost 3876820149, instructions 90260266, journal 630472 bytes sha256 775dee3327600f498404080158ff6a34b38ef549b172dfbbe8892646173bb637
+agg b7 :: execute: 20.2 s, cost 5358745706, instructions 96760074, journal 5284 bytes sha256 3e966583685cc7e6c9cfdd9b0b7447f894c5778f745cad8588bd4735b85c63d5 :: len/len/differing bytes vs r0: 5284 5284 32
+agg b8 :: execute: 20.7 s, cost 5105537013, instructions 90276748, journal 5284 bytes sha256 ffc9b946d3c70b81db011f4df7a61f43a87d23926f2ee0a7ee1b5c168f88d807 :: len/len/differing bytes vs r0: 5284 5284 32
+B8_DONE
