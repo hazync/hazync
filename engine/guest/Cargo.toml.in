@@ -7,7 +7,8 @@ edition = "2021"
 [workspace]
 
 [profile.release]
-lto = "fat"
+# No fat LTO (the product's guest has it, worth -0.7% there): the bitcode linker refuses the duplicate sys_sha_compress
+# (OpenVM's std PAL stub + the engine's). Goes away with native SHA (no sys_sha_compress at all).
 codegen-units = 1
 
 [features]
