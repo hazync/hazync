@@ -18,19 +18,24 @@ RISC Zero, same block, the product (v0.26.0) on one A6000: 1,658 s ≈ $0.32 (`g
 GPU utilisation averaged 50%.
 
 ## Against the bench port's 224 s (A6000, experiment/fresh-cost-model REVIEW.md)
-The bench proved each part as ONE program with no recursion. What the real engine adds, measured here:
-- Every chunk is its own proof wrapped to one STARK (the form verify-stark checks): about 7 s fixed per proof
-  (chunk_01: 1.81B cost ≈ 10.7 s of app proving at the bench's 5.9 ns/cost, 18.0 s measured). 16 chunks cost
-  about 110 s of wrapping. Fewer chunks trade latency for throughput; the chunk count is a host setting.
-- In-guest verification of 17 proofs: aggregate 68.5 s (A40) vs 49.1 s without verification (bench, A6000): at most about 20 s, about 1.1 s per proof, part of it the slower card.
-- The trie is the product's mode-17 code (13.6B cost); the bench's 36 s used the faster trie variant
-  (experiment/fresh-trie), not yet ported into the engine.
+The bench proved each part as ONE program with no recursion. Measured here (prove_block.log phase timings):
+- A chunk proof is mostly app proving: chunk_01 (1.81B cost) = 4 segments, 12.3 s of segment proving + 0.5 s
+  metered execution; the aggregation layers to one STARK are small (leaf 0.6 s, internal-for-leaf 0.3 s, two
+  internal-recursive 0.35 s); about 4 s more per proof is host work (the journal-emitting execute pass, key
+  transfer, memory partition): roughly 5 s fixed per proof, ~80 s over 16 chunks. GPU utilisation 50%.
+- 7.2 ns/cost of segment proving here vs 5.9 on the A6000 (bench run 3): the A40 is the slower card (696 vs
+  768 GB/s); not separated from other effects.
+- In-guest verification of 17 proofs: aggregate 68.5 s (A40) vs 49.1 s without verification (bench, A6000): at
+  most about 20 s, about 1.1 s per proof, part of it the slower card.
+- The trie: 8.92B cost (the platform's sha2 already puts the update-list hash on the SHA extension, the bench's
+  biggest trie lever); the RISC Zero-layout SHA shim is the remaining same-format lever (native SHA, in progress).
 
 ## Metered cost of each stream (CPU, `hzengine execute`, every journal byte-identical to RISC Zero's)
 | stream | cost | instructions |
 |---|---|---|
 | 16 chunks | 28.68B (1.64-2.01B each) | 703M |
 | trie | 8.92B | 156M |
-The chunks prove at 9.9 ns/cost here vs 5.9 ns/cost for one big program (bench run 3): 28.68B x 5.9 ns = 169 s of
-app proving, 285 s measured, so ~116 s (7.2 s per chunk) is the per-proof wrap. Next levers, in order of size:
-fewer/larger chunks for throughput (the chunk count is the host's), the faster trie, native SHA, GPU utilisation.
+
+Next levers, by size: fewer, larger chunks for throughput (the chunk count is the host's; ~5 s fixed per proof),
+overlapping host work with GPU proving (utilisation 50%), native SHA, then the trie's new format (a commitment
+change: needs a decision).
