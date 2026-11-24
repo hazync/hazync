@@ -99,6 +99,9 @@ enum Cmd {
         child: Vec<PathBuf>,
         #[arg(long)]
         self_id: bool,
+        /// A collect run: no in-guest verification, and the guest cannot commit.
+        #[arg(long)]
+        dry: bool,
         #[arg(long)]
         journal: Option<PathBuf>,
         /// The guest's whole stdout (collect lines) goes here.
@@ -147,7 +150,7 @@ fn main() -> Result<()> {
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
         Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
-        Cmd::Execute { dir, input, child, self_id, journal, log } => r0::execute(&dir, &input, &child, self_id, journal.as_deref(), log.as_deref()),
+        Cmd::Execute { dir, input, child, self_id, dry, journal, log } => r0::execute(&dir, &input, &child, self_id, dry, journal.as_deref(), log.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each } => block::prove_block(&dir, &export, &out, verify_each),
         Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::Image { dir, check } => {

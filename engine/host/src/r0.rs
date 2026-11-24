@@ -19,8 +19,13 @@ pub fn image_id(img: &Image) -> [u8; 32] {
 }
 
 fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
+    control_flags(emit as u32, commits)
+}
+
+/// flags: bit 0 emit (print the journal), bit 1 dry (no env::verify; can never commit; collect runs only).
+fn control_flags(flags: u32, commits: &[[u8; 32]]) -> Vec<u8> {
     let mut c = Vec::with_capacity(8 + 32 * commits.len());
-    c.extend_from_slice(&(emit as u32).to_le_bytes());
+    c.extend_from_slice(&flags.to_le_bytes());
     c.extend_from_slice(&(commits.len() as u32).to_le_bytes());
     for x in commits {
         c.extend_from_slice(x);
@@ -34,6 +39,11 @@ pub fn prove(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, 
 }
 
 pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, out: &Path) -> Result<()> {
+    prove_with_known(e, dir, input, children, set_self_id, None, out)
+}
+
+/// `known`: the journal an execution of this same input committed (skips the emit pass; checked against the proof).
+pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, known: Option<&Path>, out: &Path) -> Result<()> {
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
     let mut stream = std::fs::read(input)?;
@@ -64,7 +74,9 @@ pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], se
     let (mut emit, mut prv) = (mk(true), mk(false));
     e.attach_children(&baseline, &mut emit, &proofs)?;
     let defs = e.attach_children(&baseline, &mut prv, &proofs)?;
-    let (proof, journal) = e.prove(exe, emit, prv, &defs)?;
+    let known = known.map(std::fs::read).transpose()?;
+    let emit = if known.is_some() { None } else { Some(emit) };
+    let (proof, journal) = e.prove_known(exe, emit, known, prv, &defs)?;
     if Engine::image(dir).is_err() {
         record_image(dir, e, &proof)?;
     }
@@ -81,9 +93,9 @@ pub struct ExecOut {
     pub instret: u64,
 }
 
-pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<()> {
+pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<()> {
     let e = Engine::load(dir)?;
-    let o = execute_with(&e, dir, input, children, set_self_id, journal_out, log)?;
+    let o = execute_with(&e, dir, input, children, set_self_id, dry, journal_out, log)?;
     match o.exit {
         None => println!("EXECUTE_OK"),
         Some(c) => println!("EXECUTE_EXIT {c}"),
@@ -91,7 +103,8 @@ pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool
     Ok(())
 }
 
-pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<ExecOut> {
+pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<ExecOut> {
+    ensure!(!dry || children.is_empty(), "a dry run takes no proofs");
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
     let mut stream = std::fs::read(input)?;
@@ -106,7 +119,7 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     }
     let commits: Vec<[u8; 32]> = calls.iter().map(|c| c.input_commit).collect();
     let mut s = StdIn::default();
-    s.write_bytes(&control(true, &commits));
+    s.write_bytes(&control_flags(1 | if dry { 2 } else { 0 }, &commits));
     s.write_bytes(&stream);
     e.attach_children(&baseline, &mut s, &proofs)?;
     let t = std::time::Instant::now();

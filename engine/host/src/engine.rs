@@ -191,15 +191,37 @@ impl Engine {
         prove: StdIn,
         def_inputs: &[DeferralInput],
     ) -> Result<(VmStarkProof, Vec<u8>)> {
+        self.prove_known(exe, Some(emit), None, prove, def_inputs)
+    }
+
+    /// As `prove`; with `known` (a journal from an earlier execution of the same input) the emit pass is skipped and
+    /// the proof's public values are checked against it instead.
+    pub fn prove_known(
+        &self,
+        exe: Arc<VmExe<F>>,
+        emit: Option<StdIn>,
+        known: Option<Vec<u8>>,
+        prove: StdIn,
+        def_inputs: &[DeferralInput],
+    ) -> Result<(VmStarkProof, Vec<u8>)> {
         let t = std::time::Instant::now();
-        let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));
-        let pvs = pvs?;
-        let journal = crate::capture::journal_of(&out);
-        ensure!(pvs == Sha256::digest(&journal).as_slice(), "emitted journal does not match the public values");
-        eprintln!("execute: {:.1} s, journal {} bytes", t.elapsed().as_secs_f64(), journal.len());
+        let journal = match (known, emit) {
+            (Some(j), _) => j,
+            (None, Some(emit)) => {
+                let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));
+                let pvs = pvs?;
+                let journal = crate::capture::journal_of(&out);
+                ensure!(pvs == Sha256::digest(&journal).as_slice(), "emitted journal does not match the public values");
+                eprintln!("execute: {:.1} s, journal {} bytes", t.elapsed().as_secs_f64(), journal.len());
+                journal
+            }
+            (None, None) => eyre::bail!("prove: neither a known journal nor an emit pass"),
+        };
         let t = std::time::Instant::now();
-        let (proof, _baseline) = self.sdk.prove(exe, prove, def_inputs)?;
+        let (proof, baseline) = self.sdk.prove(exe, prove, def_inputs)?;
         eprintln!("prove: {:.1} s", t.elapsed().as_secs_f64());
+        let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
+        ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");
         Ok((proof, journal))
     }
 }

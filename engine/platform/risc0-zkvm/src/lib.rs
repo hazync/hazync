@@ -3,7 +3,8 @@
 //! serde word format (src/serde, vendored from risc0-zkvm 3.1.0, Apache-2.0), which defines the input stream.
 //!
 //! Input (stdin chunks, in order; written by hzengine):
-//!   0  control: emit u32 | n u32 | n x 32-byte deferral input commitments, one per `env::verify` call, in call order
+//!   0  control: flags u32 (bit 0 emit, bit 1 dry) | n u32 | n x 32-byte deferral input commitments, one per
+//!      `env::verify` call, in call order
 //!   1  the input stream, byte for byte what RISC Zero's ExecutorEnv would give this guest
 //! Output: `env::commit*` append to the journal exactly as RISC Zero's would; `env::finalize` reveals sha256(journal)
 //! as the 32 public-value bytes (and prints the journal when `emit` = 1, for the host's execute pass).
@@ -12,6 +13,10 @@
 //! named by the next input commitment must exist and verify, its (exe, vm) commitments must hash to `image`
 //! (image id = sha256(app_exe_commit || app_vm_commit)), and its public values must be sha256(journal). That is the
 //! statement `env::verify` makes on RISC Zero: a valid proof of that image with that journal exists.
+//!
+//! A DRY run (flag bit 1) skips every `env::verify` and can never commit: `finalize` refuses it. It exists for the
+//! host's collect runs (which end in env::exit before committing anything), so a block's collect aggregate can run
+//! before its chunk proofs exist. No proof of a dry run can carry a journal, so skipping the checks proves nothing.
 #![no_std]
 extern crate alloc;
 
@@ -40,6 +45,7 @@ pub mod guest {
             commits: Vec<[u8; 32]>,
             next_commit: usize,
             emit: bool,
+            dry: bool,
             journal: Vec<u8>,
             finalized: bool,
         }
@@ -53,12 +59,15 @@ pub mod guest {
                 if STATE.is_none() {
                     let ctl = openvm::io::read_vec();
                     assert!(ctl.len() >= 8, "engine: control chunk too short");
-                    let emit = u32::from_le_bytes(ctl[0..4].try_into().unwrap()) == 1;
+                    let flags = u32::from_le_bytes(ctl[0..4].try_into().unwrap());
+                    assert!(flags & !3 == 0, "engine: unknown control flags {flags:#x}");
+                    let (emit, dry) = (flags & 1 != 0, flags & 2 != 0);
                     let n = u32::from_le_bytes(ctl[4..8].try_into().unwrap()) as usize;
                     assert!(ctl.len() == 8 + 32 * n, "engine: control chunk length");
                     let commits = ctl[8..].chunks_exact(32).map(|c| c.try_into().unwrap()).collect();
                     let input = openvm::io::read_vec();
-                    STATE = Some(State { input, pos: 0, commits, next_commit: 0, emit, journal: Vec::new(), finalized: false });
+                    assert!(!dry || n == 0, "engine: a dry run takes no proofs");
+                    STATE = Some(State { input, pos: 0, commits, next_commit: 0, emit, dry, journal: Vec::new(), finalized: false });
                 }
                 STATE.as_mut().unwrap()
             }
@@ -105,6 +114,10 @@ pub mod guest {
         /// See the crate doc. Panics rather than returning Err on a mismatch: no caller continues after a failure.
         pub fn verify<T: bytemuck::Pod>(image_id: [u32; 8], journal: &[T]) -> Result<(), VerifyError> {
             let s = st();
+            if s.dry {
+                let _ = (image_id, journal);
+                return Ok(());
+            }
             assert!(s.next_commit < s.commits.len(), "env::verify: no proof supplied for this call");
             let commit = s.commits[s.next_commit];
             s.next_commit += 1;
@@ -155,6 +168,7 @@ pub mod guest {
         /// have been used: a supplied proof that was never checked would be a host error worth stopping on.
         pub fn finalize() {
             let s = st();
+            assert!(!s.dry, "engine: a dry run cannot commit a journal");
             assert!(!s.finalized, "env::finalize twice");
             s.finalized = true;
             assert!(s.next_commit == s.commits.len(), "engine: {} proofs supplied, {} verified", s.commits.len(), s.next_commit);
