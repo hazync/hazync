@@ -125,8 +125,28 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     let t = std::time::Instant::now();
     if std::env::var("HZ_SEGMENTS").is_ok() {
         // how the prover would segment this run (HZ_SEG_MEM_GB changes it)
+        // and what the segments cost: trace cells by circuit, as executed and padded to powers of two
         let (_, segs) = crate::capture::stdout_of(|| e.sdk.execute_metered(exe.clone(), s.clone())).0?;
-        eprintln!("segments: {}", segs.len());
+        let pk = &e.sdk.app_pk().app_vm_pk.vm_pk;
+        let w: Vec<u64> = pk.per_air.iter().map(|a| a.vk.params.width.total_width() as u64).collect();
+        let it: Vec<u64> = pk.per_air.iter().map(|a| a.vk.symbolic_constraints.interactions.len() as u64).collect();
+        let (mut un, mut pad, mut iun, mut ipad) = (0u64, 0u64, 0u64, 0u64);
+        for sg in &segs {
+            for (i, &h) in sg.trace_heights.iter().enumerate() {
+                let h = h as u64;
+                let p = if h == 0 { 0 } else { h.next_power_of_two() };
+                un += h * w[i];
+                pad += p * w[i];
+                iun += h * it[i];
+                ipad += p * it[i];
+            }
+        }
+        eprintln!(
+            "segments: {} | main cells {un} padded {pad} ({:.1}% padding) | interaction rows {iun} padded {ipad} ({:.1}%)",
+            segs.len(),
+            100.0 * (pad - un) as f64 / pad.max(1) as f64,
+            100.0 * (ipad - iun) as f64 / ipad.max(1) as f64
+        );
     }
     let (r, out) = crate::capture::stdout_of(|| e.sdk.execute_metered_cost(exe.clone(), s));
     if let Some(p) = log {
