@@ -152,6 +152,19 @@ pub fn judge_tip_statement(z: TipStatement, id: &[u8; 32], base: &[u8; 32], img:
     let net = img.network;
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: net.to_string(), image_source: Some(tip_image_source(id)) };
+    // a statement (or its base) resting on an earlier built-in core image of the chain (below a handover) is judged as
+    // that image. The two may differ: block P is on the step's core chain (the hash links), so blocks 1..P are too
+    let base_img: &Image = swiftsync_verify::earlier_core_image(img, &z.base_core_id).unwrap_or(img);
+    let img: &Image = match swiftsync_verify::earlier_core_image(img, &z.core_id) {
+        Some(e) => {
+            rep_check(&mut rep, true, format!("this step rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex));
+            e
+        }
+        None => img,
+    };
+    if !std::ptr::eq(base_img, img) {
+        rep_check(&mut rep, true, format!("the base rests on {} ({net}), a built-in core image of this chain", base_img.method_id_hex));
+    }
     let core_words = swiftsync_verify::words(&img.method_id());
     rep_check(&mut rep, z.kind == KIND_UTREEXO_TIP, "a utreexo tip statement (kind 'ZU' 2)");
     // every earlier step was verified inside the zkVM under the self_id this statement commits: it must be this image
@@ -165,7 +178,7 @@ pub fn judge_tip_statement(z: TipStatement, id: &[u8; 32], base: &[u8; 32], img:
         None => rep_check(&mut rep, false, format!("the network is mainnet or signet ({net:?})")),
     };
     // the base's coin-state claims were bound by ITS core receipt: that image must be trusted too
-    rep_check(&mut rep, z.base_core_id == core_words, format!("the base rested on the trusted {net} core image {}", img.method_id_hex));
+    rep_check(&mut rep, z.base_core_id == swiftsync_verify::words(&base_img.method_id()), format!("the base rested on the trusted {net} core image {}", base_img.method_id_hex));
     rep_check(&mut rep, z.core_id == core_words, format!("this step rests on the trusted {net} core image {}", img.method_id_hex));
     // the core verifier's lineage rule: a step needs no undo commitment, so a handover lineage of the image is fine
     rep_check(&mut rep, z.lineage == [0u8; 32] || z.lineage == swiftsync_verify::lineage_of(img.lineage), "the core lineage is zero or the core image's own");

@@ -165,8 +165,12 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
   is that image; a forged earlier run would have to verify under that id.
 - **The core statement** is checked in the final run as every zyncAPP does (ZYNCAPPS.md §4): `env::verify(core_id,
   journal)`, `check_core_statement` (KIND_CHAIN, version >= 2, `self_id == core_id`, the network, scripts checked, coin
-  log, the network's PINNED genesis anchor), a zero lineage and an image not in `PRE_UNDO_IMAGES` (so every block 1..T
-  has the 0x05 leaf), H <= T. `core_id` is an input, never compiled in.
+  log, the network's PINNED genesis anchor), an image not in `PRE_UNDO_IMAGES`, and the core lineage
+  (`prover/zyncapps/methods/core_lineage.rs`, since 24.11.2026; until then only a zero lineage): the prover passes the
+  list of handovers after the run's blocks, the guest requires it to digest to the journal's `lineage` (SHA-256 binds
+  it: it is the list compiled into `core_id`) and `handover_pin::undo_from(core_id, list) == 1` (so every block 1..T
+  has the 0x05 leaf, whichever image of the lineage proved it), H <= T. An empty list is a zero lineage, checked as
+  before. `core_id` is an input, never compiled in.
 
 **Does the per-block undo hash make deletions sound?** Two answers.
 1. In this design there are no deletions to make sound: a spend at or below H is the coin log's flipped leaf, and the
@@ -183,9 +187,12 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
 function `judge_verified_statement`): the **caller names the network** (`--network`, default mainnet, as every zAPP; the
 WASM frame's network field), never the proof, and a proof of another network is FAIL (its network word and core
 profile must be that network's); not a FakeReceipt, `RISC0_DEV_MODE` unset, the receipt verifies under the trusted
-utreexo id, `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, zero lineage (one core
-image since genesis: a handover lineage is refused, even the image's own), the core image, profile and anchor are
-that network's trusted ones (swiftsync-verify's `Image` table, used as a library), `max_time <= now + 7200`; OK
+utreexo id, `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, a lineage that is zero or
+the core image's own with every image of it committing the undo hash (`undo_from_of` 1; until 24.11.2026 a handover
+lineage was refused, even the image's own), the core image, profile and anchor are that network's trusted ones
+(swiftsync-verify's `Image` table, used as a library; a `core_id` naming an earlier built-in image of the chain, such
+as the image below a handover, is judged as that image, `earlier_core_image`; never an id outside the table, and never
+with `--core-image`), `max_time <= now + 7200`; OK
 additionally needs **block H from the node's own header chain** (`--expect`, or `--mempool` / `--bitcoin-cli` asked
 for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
@@ -447,8 +454,10 @@ and the core receipt.
   be trusted (the base's spent/unspent claims rest on its core receipt).
 - **Core handovers.** A step needs no undo commitment, so, unlike the base (§4: zero lineage), a step accepts the core
   verifier's own lineage rule (zero, or exactly the core image's pinned lineage). A chain of steps can continue across
-  a core image upgrade; the base must still have been walked under a trusted core image (open: a base under the
-  previous image after a handover: ours to decide, with the image table of the core verifier).
+  a core image upgrade; the base must still have been walked under a trusted core image. Since 24.11.2026 the base and
+  the step are each judged against the built-in image their own core id names (`earlier_core_image`): a base walked
+  under the image below a handover and a step on the new image are both trusted, because block P is on the step's
+  core chain (the hash links), so blocks 1..P are too.
 - Everything else (which images to trust, minimum work, the clock, that block H is the node's) is the checker's (§10.7).
 
 ### 10.5 Which H, and where the witness comes from

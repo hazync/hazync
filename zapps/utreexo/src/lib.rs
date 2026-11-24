@@ -217,16 +217,27 @@ pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image,
     let net = img.network;
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: net.to_string(), image_source: Some(image_source(id)) };
+    // a statement resting on an earlier built-in core image of the chain (below a handover) is judged as that image
+    let img: &Image = match swiftsync_verify::earlier_core_image(img, &z.core_id) {
+        Some(e) => {
+            rep.check(true, format!("the statement rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex));
+            e
+        }
+        None => img,
+    };
     rep.check(z.kind == KIND_UTREEXO, "a utreexo statement (kind 'ZU' 1)");
     rep.check(z.done == 1 && z.to == z.height, "the final run: it ended at H and checked the core receipt");
     // every earlier run was verified, inside the zkVM, under the id this statement commits: it must be this image
     rep.check(z.self_id == swiftsync_verify::words(&Digest::from_bytes(*id)), "every run of the chain is this image (self_id)");
     rep.check(z.roots.len() as u32 == z.leaves.count_ones(), format!("{} roots for {} leaves (one per set bit)", z.roots.len(), z.leaves));
     // The one lineage check. A zero lineage: the core image proved 1..T alone, so every block carries its undo
-    // commitment. A non-zero one (a handover, HANDOVER.md) is refused even when it is the image's own lineage
-    // (`lineage_of(img.lineage)`): blocks before the handover were proved by another image. (Until 18.11.2026 a second
-    // line also accepted the image's lineage; this check refused it first, so that line never decided anything.)
-    rep.check(z.lineage == [0u8; 32], "one core image since genesis (every block 1..T carries the undo commitment)");
+    // commitment. A non-zero one (a handover, HANDOVER.md) only when it is the image's own lineage (`lineage_of`) and
+    // every image of it commits the undo hash (`undo_from_of` 1): the guest checked the list against the journal
+    // (prover/zyncapps/methods/core_lineage.rs). Until 24.11.2026 every non-zero lineage was refused.
+    let list: Option<&[swiftsync_verify::Handover]> = if z.lineage == [0u8; 32] { Some(&[]) }
+        else if z.lineage == swiftsync_verify::lineage_of(img.lineage) { Some(img.lineage) } else { None };
+    rep.check(list.is_some_and(|l| swiftsync_verify::undo_from_of(&z.core_id, l) == 1),
+              "every block 1..T carries the undo commitment (one core image since genesis, or a lineage of undo-committing images)");
     match network_bits(net) {
         Some(b) => rep.check(z.network == b, format!("the proof is for {net}, the network asked for (its network word {}, {net}'s {b})", z.network)),
         None => rep.check(false, format!("the network is mainnet or signet ({net:?})")),

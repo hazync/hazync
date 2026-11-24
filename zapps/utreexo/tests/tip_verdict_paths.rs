@@ -148,3 +148,26 @@ fn a_deeply_nested_composite_receipt_is_refused_without_decoding() {
     assert!(rep.report.checks.iter().any(|c| !c.0 && c.1.contains("composite")), "{:?}", rep.report.checks);
     assert_eq!(verify_utreexo(&r, UTREEXO_IMAGE_ID, None, NOW, None, None).verdict, Verdict::Fail);
 }
+
+/// 24.11.2026: a step, or its base, resting on an earlier built-in core image of the chain (below a handover) is
+/// judged as that image; an id in no built-in table still fails.
+#[test]
+fn earlier_built_in_core_images_are_accepted_by_id() {
+    for net in ["mainnet", "signet"] {
+        let cur = img(net);
+        let Some(old) = swiftsync_verify::IMAGES.iter().find(|i| i.network == net && !std::ptr::eq(*i, cur)) else { continue };
+        let ow = words(&old.method_id());
+        let mut z = good(net);
+        z.base_core_id = ow;
+        assert_eq!(v(net, z, None), Verdict::Ok, "{net}: the base on {}", old.method_id_hex);
+        let mut z = good(net);
+        z.core_id = ow;
+        assert_eq!(v(net, z, None), Verdict::Ok, "{net}: the step on {}", old.method_id_hex);
+        let mut z = good(net);
+        z.core_id = [0xabab_abab; 8];
+        assert_eq!(v(net, z, None), Verdict::Fail, "{net}: a step on an id in no built-in table");
+        let mut z = good(net);
+        z.base_core_id = [0xabab_abab; 8];
+        assert_eq!(v(net, z, None), Verdict::Fail, "{net}: a base on an id in no built-in table");
+    }
+}

@@ -240,3 +240,79 @@ fn a_seal_that_does_not_verify_fails() {
     assert!(failed.len() == 1 && failed[0].1.starts_with("the receipt verifies"), "{:?}", r.checks);
     assert!(r.statement.is_none() && !r.identity_checked);
 }
+
+// ---- A core chain with a handover (24.11.2026): a lineage of undo-committing images is accepted, as the guest accepts
+// it (prover/zyncapps/methods/core_lineage.rs), and a statement on an earlier built-in core image is judged as that one.
+
+use swiftsync_verify::{lineage_of, Handover};
+
+/// The 8888d59c image's words: a built-in mainnet image whose block leaves carry no undo hash (pin::PRE_UNDO_IMAGES).
+fn pre_undo() -> [u32; 8] {
+    words(&Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap().method_id())
+}
+
+/// A lineage from (image, first_height) pairs, same RISC Zero.
+fn hs(l: &[([u32; 8], u32)]) -> Vec<Handover> {
+    l.iter().map(|&(image, first_height)| Handover { image, first_height, verifier: swiftsync_verify::pin::SAME_ZKVM }).collect()
+}
+
+/// A `good` statement judged against the current mainnet image as if it pinned `list`, its lineage field `committed`'s.
+fn with_lineage(list: &[([u32; 8], u32)], committed: &[([u32; 8], u32)]) -> (Verdict, Vec<(bool, String)>) {
+    let i = img("mainnet").with_lineage(hs(list));
+    let mut z = good("mainnet");
+    z.lineage = lineage_of(&hs(committed));
+    let a = at(&z);
+    let r = judge_verified_statement(z, &ID, i, NOW, Some((a.0, a.1.as_str())), None);
+    (r.verdict, r.checks)
+}
+
+#[test]
+fn a_handover_lineage_of_undo_committing_images_is_accepted() {
+    // an undo-committing predecessor (not in PRE_UNDO_IMAGES), as the image pins it: OK, as with no handover
+    let l = [([9; 8], 2)];
+    let (v, c) = with_lineage(&l, &l);
+    assert_eq!(v, Verdict::Ok, "{c:?}");
+    // two handovers, oldest first, both undo-committing
+    let l2 = [([9; 8], 2), ([8; 8], 5)];
+    assert_eq!(with_lineage(&l2, &l2).0, Verdict::Ok);
+}
+
+#[test]
+fn a_handover_lineage_with_a_pre_undo_image_fails() {
+    let l = [(pre_undo(), 2)];
+    let (v, c) = with_lineage(&l, &l);
+    assert_eq!(v, Verdict::Fail);
+    assert!(c.iter().any(|(ok, w)| !ok && w.contains("carries the undo commitment")), "{c:?}");
+    // the pre-undo image earlier in a longer lineage
+    let l2 = [(pre_undo(), 2), ([9; 8], 5)];
+    assert_eq!(with_lineage(&l2, &l2).0, Verdict::Fail);
+}
+
+#[test]
+fn a_lineage_that_is_not_the_image_s_fails() {
+    assert_eq!(with_lineage(&[([9; 8], 2)], &[([9; 8], 3)]).0, Verdict::Fail, "another first_height");
+    assert_eq!(with_lineage(&[], &[([9; 8], 2)]).0, Verdict::Fail, "a lineage the image does not pin");
+}
+
+#[test]
+fn an_earlier_built_in_core_image_is_judged_as_that_image() {
+    // 8888d59c is an earlier built-in mainnet image: the statement is judged as it, and fails only because its
+    // blocks carry no undo hash (a base walk needs it)
+    let mut z = good("mainnet");
+    z.core_id = pre_undo();
+    let a = at(&z);
+    let r = judge_verified_statement(z, &ID, img("mainnet"), NOW, Some((a.0, a.1.as_str())), None);
+    assert_eq!(r.verdict, Verdict::Fail);
+    assert!(r.checks.iter().any(|(ok, w)| *ok && w.contains("an earlier built-in core image of this chain")), "{:?}", r.checks);
+    assert!(r.checks.iter().any(|(ok, w)| *ok && w.contains("rests on the trusted mainnet core image 8888d59c")), "{:?}", r.checks);
+    let failed: Vec<_> = r.checks.iter().filter(|c| !c.0).collect();
+    assert!(failed.len() == 1 && failed[0].1.contains("carries the undo commitment"), "{failed:?}");
+    // an id in no built-in table is not substituted, and fails as another core image
+    let mut z = good("mainnet");
+    z.core_id = [0xabab_abab; 8];
+    let a = at(&z);
+    let r = judge_verified_statement(z, &ID, img("mainnet"), NOW, Some((a.0, a.1.as_str())), None);
+    assert_eq!(r.verdict, Verdict::Fail);
+    assert!(!r.checks.iter().any(|(_, w)| w.contains("an earlier built-in core image")), "{:?}", r.checks);
+    assert!(r.checks.iter().any(|(ok, w)| !ok && w.contains("rests on the trusted mainnet core image")), "{:?}", r.checks);
+}

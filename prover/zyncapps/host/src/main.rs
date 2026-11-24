@@ -87,6 +87,11 @@ fn core_policy(c: &Core, a: &[String]) -> Result<bool, String> {
     if let Some(h) = flag("--core-image") {
         img = img.with_method_id(&h.to_lowercase()).ok_or("--core-image: not 64 hex digits")?;
     }
+    // a statement resting on an earlier built-in core image of the chain (below a handover) is judged as that image
+    if let Some(e) = swiftsync_verify::earlier_core_image(img, c.core_id) {
+        println!("  rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex);
+        img = e;
+    }
     if words(&img.method_id()) != *c.core_id {
         return Err(format!("rests on core image {}, not the trusted {net} core image {}", id_hex(c.core_id), img.method_id_hex));
     }

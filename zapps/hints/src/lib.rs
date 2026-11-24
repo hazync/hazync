@@ -9,7 +9,7 @@
 //! receipt's verification covers it; what the zyncAPP could not know (which core images to trust, the genesis anchor,
 //! the network's work and checkpoint, the clock, and that block `height` is the node's own) is checked here, as for a
 //! core proof.
-use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
+use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, receipt_kind, undo_from_of, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
 use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -107,7 +107,6 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
         let us: [u8; 32] = Sha256::digest(u).into();
         rep.check(u.len() == 32 * z.height as usize && us == z.undo_sha256, format!("the undo-hash file is the proven one (sha256 {})", hex(&z.undo_sha256)));
     }
-    rep.check(z.undo_from == 1 && z.lineage == [0u8; 32], "every block 1..H carries the undo commitment (one core image since genesis)");
     // the core statement, as for a core proof
     let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
     let Some(mut img) = Image::by_network(net) else {
@@ -117,7 +116,17 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     if let Some(h) = core_image_hex {
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
+    // a statement resting on an earlier built-in core image of the chain (below a handover) is judged as that image
+    if let Some(e) = swiftsync_verify::earlier_core_image(img, &z.core_id) {
+        rep.check(true, format!("the statement rests on {} ({net}), an earlier built-in core image of this chain; judged as that image", e.method_id_hex));
+        img = e;
+    }
     rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
+    // every block 1..H carries the undo commitment: one core image since genesis, or a handover lineage (the image's
+    // own) whose every image commits it (the guest checked the list against the journal, core_lineage.rs)
+    let list: Option<&[swiftsync_verify::Handover]> = if z.lineage == [0u8; 32] { Some(&[]) } else if z.lineage == lineage_of(img.lineage) { Some(img.lineage) } else { None };
+    rep.check(z.undo_from == 1 && list.is_some_and(|l| undo_from_of(&z.core_id, l) == 1),
+              "every block 1..H carries the undo commitment (one core image since genesis, or a lineage of undo-committing images)");
     // the whole profile, as the core verifier compares it (review H5): network, scripts checked, coin log, trie, live hash
     rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
     rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(img.lineage), "the core lineage is the image's");

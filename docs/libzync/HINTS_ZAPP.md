@@ -112,14 +112,21 @@ the tip) and needs no EC arithmetic.
 
 Inside: `env::verify(core_id, core_journal)`, then `facts::check_core_statement` (KIND_CHAIN, version ≥ 2,
 `self_id == core_id`, the network, scripts checked, coin log) with the network's PINNED genesis anchor compiled into the
-guest (so the statement itself says "from genesis"), then a zero lineage and a core image not in the core's own
-`handover_pin::PRE_UNDO_IMAGES` (included, not copied).
+guest (so the statement itself says "from genesis"), then a core image not in the core's own
+`handover_pin::PRE_UNDO_IMAGES` (included, not copied) and the core lineage (`prover/zyncapps/methods/core_lineage.rs`,
+since 24.11.2026): the prover passes the list of handovers, the guest requires it to digest to the journal's
+`lineage` (`handover_pin::lineage_step` from 32 zero bytes; SHA-256 binds the list to the digest, so it is the list
+compiled into `core_id`) and `handover_pin::undo_from(core_id, list) == 1`, so every block 1..T was proved by an image
+whose leaves commit the undo hash. An empty list is a zero lineage, checked exactly as before; until 24.11.2026 every
+non-zero lineage was refused, so the zyncAPP stopped at the first handover.
 `core_id` is an input, never compiled in (ZYNCAPPS.md §4).
 
 The node (or the CLI for it) checks: the receipt verifies under the published hints image id (the `zyncapp-hints`
 line of `reproduce/LIBZYNC_IDS`, rebuilt by `reproduce/libzync.Dockerfile`), not a FakeReceipt, `RISC0_DEV_MODE` unset
 (refused inside `verify_hints`, so in every entry point); `core_id`, `lineage` and the whole `profile` are a published
-core's; `anchor_id` the pinned
+core's (a `core_id` naming an earlier built-in core image of the chain, such as the image below a handover, is judged
+as that image, as the core verifier does; never an id outside the built-in table, and never with `--core-image`);
+`lineage` zero or that image's own, with every image of it committing the undo hash; `anchor_id` the pinned
 genesis anchor; `cum_work` ≥ `nMinimumChainWork`; `max_time` ≤ now + 7200; **`block_hash` is its own header chain's
 block at H** (a SwiftSync node syncs headers first, so it has it); `format` is one it reads; SHA-256 of the file
 = `hints_sha256`. The file's own height field is inside the hashed bytes.
@@ -194,7 +201,8 @@ and step 4.2's index reset; **Q2** a block hash in the file header; **Q3** U0 as
 verifier for CLI, WASM, C ABI), `scripts/libzync/hints_ref.py` (an independent generator written from hintsfile.md),
 `prover/zyncapps/hints-crate-ref` (the `hintsfile` crate 0.2.0 as a second reference, test only).
 
-**Input framing.** After the core receipt, journal, network flag, format, H, the genesis header and a profiling step:
+**Input framing.** After the core receipt, journal, network flag, format, H, the genesis header, a profiling step and
+the core lineage list (`Vec<(image, first_height, verifier)>`, empty for a zero lineage):
 per block one frame `[L, k, s] ‖ block (L bytes, header ‖ count ‖ transactions without witness) ‖ k tracked positions
 ‖ s status words (0 = unspent at H; height, tx, vin = its spender) ‖ state (8) ‖ undo (8)`; then `[T − H]` and the
 block-forest leaves above H.
@@ -233,6 +241,9 @@ by a proof. Proving the core further on CPU (~16 min a block here) was not attem
   state, a flipped undo hash, a flipped nonce, the coinbase listed twice, the last transaction listed twice (block
   586, the same Merkle root: "mutated", CVE-2012-2459), a dropped and a swapped transaction, a trailing byte, a core
   lineage, a pre-undo core image, another core id, an unknown format, an assumevalid core, a flipped leaf above H;
+  since 24.11.2026 (`HINTS_TAMPER`): a handover lineage with a pre-undo image (`handover_pre_undo`) and a list that is
+  not the one committed (`handover_list`) refused; a lineage of one undo-committing image given as committed
+  (`handover`, the positive control) accepted;
 - H = 1,999 under T = 10,000 gives the same file as under T = 1,999;
 - the verifier on the real receipts (`hints_verify_test.sh` 11/11, `test-hints.mjs` 5/5, `test_hints.c` 4/4, unit
   test `hints::tests::real_receipts`): the proven file DEMO (3 blocks are below minimum work), refused: a flipped bit,
