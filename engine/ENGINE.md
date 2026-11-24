@@ -55,6 +55,26 @@ Each lands only with its measurement, and with outputs checked against the produ
 - **M5 join** + chain from genesis on a short range; verifier CLI.
 - **M6** host pipeline from Hazync's prep: inputs for every mode from a block, GPU end-to-end, tip latency on N cards.
 
+## Status (24.11.2026)
+
+- M1 recursion: DONE on CPU (results/M1.md): leaf, node over two leaves, node over a node (nested deferral); negative
+  controls (tampered journal, wrong image) refused in-guest.
+- The engine guest = the product guest's own source (engine/guest), built on the platform crate (engine/platform):
+  BUILDS (31 MB exe). Block-level run: `hzengine prove-block` over the product host's `engine-export`.
+- Product-host backend (prover/host/src/engine_backend.rs): `HAZYNC_ENGINE=<hzengine> HAZYNC_ENGINE_KEYS=<dir>`
+  makes `libzync-prove-range` and `libzync-join` run every execution and proof on the engine (`hzengine serve`).
+
+## Layout
+
+| path | what |
+|---|---|
+| engine/host | `hzengine`: keygen, build, prove / execute (RISC Zero input streams, child proofs), prove-block, serve, verify |
+| engine/platform | the RISC Zero guest API on OpenVM (risc0-zkvm, risc0-crypto, sha2 slices) |
+| engine/guest | assemble.sh (product guest -> engine guest), base.sh (C/C++ tree), edits.py, batch_ecdsa_ovm.rs, libsecp patch |
+| engine/selftest-guest | M1's recursion self-test image |
+| engine/scripts | m1.sh, mkbundle.sh, gpu_block.sh + pod/ (one-GPU block run) |
+| prover/host/src/{sink,engine_backend}.rs | the product host's side: input streams, the engine as its prover |
+
 ## Not changed
 
 Consensus code and its patches' meaning; ChainState's content (apart from image ids and the trie format);
