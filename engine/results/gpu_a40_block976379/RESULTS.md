@@ -22,6 +22,6 @@ The bench proved each part as ONE program with no recursion. What the real engin
 - Every chunk is its own proof wrapped to one STARK (the form verify-stark checks): about 7 s fixed per proof
   (chunk_01: 1.81B cost ≈ 10.7 s of app proving at the bench's 5.9 ns/cost, 18.0 s measured). 16 chunks cost
   about 110 s of wrapping. Fewer chunks trade latency for throughput; the chunk count is a host setting.
-- In-guest verification of 17 proofs: aggregate 68.5 s vs 49.1 s without (bench), so about 20 s, or 1.1 s per proof.
+- In-guest verification of 17 proofs: aggregate 68.5 s (A40) vs 49.1 s without verification (bench, A6000): at most about 20 s, about 1.1 s per proof, part of it the slower card.
 - The trie is the product's mode-17 code (13.6B cost); the bench's 36 s used the faster trie variant
   (experiment/fresh-trie), not yet ported into the engine.
