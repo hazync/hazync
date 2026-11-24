@@ -1280,6 +1280,15 @@ fn main() {
     }));
 
     let args: Vec<String> = std::env::args().collect();
+    // The engine's chunking (only when proving on it, or exporting for it; the RISC Zero path keeps HAZYNC_CHUNKS):
+    // chunks sized by predicted cost, about 0.9B each (~5B engine cycles), at most 16. Block 976,379 on one A6000:
+    // 5 such chunks 183 s vs 16 equal ones 245 s; 741,000 as 1 chunk 39 s vs 110 s (engine/results/gpu_a6000_tuning).
+    // Set before anything reads them, so the hints run and the prover agree; either can still be set by hand.
+    if engine_backend::active() || args.iter().any(|a| a == "engine-export") {
+        for (k, v) in [("HAZYNC_CHUNK_TARGET", "900000000"), ("HAZYNC_CHUNKS", "16")] {
+            if std::env::var_os(k).is_none() { std::env::set_var(k, v); }
+        }
+    }
     if let Some(i) = args.iter().position(|a| a == "engine-export") {
         let dir = args.get(i + 1).expect("engine-export <dir>").clone();
         std::env::set_var("HAZYNC_ENGINE_EXPORT", &dir);

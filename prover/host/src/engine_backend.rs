@@ -27,7 +27,8 @@ pub(crate) struct Engine {
 }
 
 static ENGINE: Mutex<Option<Engine>> = Mutex::new(None);
-/// HAZYNC_ENGINE_GPUS=n (n > 1): n more servers, one per GPU (CUDA_VISIBLE_DEVICES=i), for `prove_many`.
+/// The other servers `prove_many` uses: HAZYNC_ENGINE_GPUS x share() in all, the main one included, spread over the
+/// GPUs (CUDA_VISIBLE_DEVICES=i).
 static POOL: Mutex<Vec<Mutex<Engine>>> = Mutex::new(Vec::new());
 
 /// Whether this run proves on the engine (HAZYNC_ENGINE set).
@@ -41,6 +42,7 @@ fn start(work: &str, gpu: Option<usize>, tag: &str) -> Engine {
     let mut cmd = Command::new(&bin);
     cmd.args(["serve", "--dir", &keys]).stdin(Stdio::piped()).stdout(Stdio::piped());
     if let Some(g) = gpu { cmd.env("CUDA_VISIBLE_DEVICES", g.to_string()); }
+    cmd.env("HZ_GPU_SHARE", share().to_string());
     let mut child = cmd.spawn().unwrap_or_else(|e| panic!("HAZYNC_ENGINE={bin}: {e}"));
     let stdin = child.stdin.take().unwrap();
     let mut stdout = BufReader::new(child.stdout.take().unwrap());
@@ -57,6 +59,24 @@ fn gpus() -> usize {
     std::env::var("HAZYNC_ENGINE_GPUS").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1)
 }
 
+/// Provers per GPU: HAZYNC_ENGINE_PER_GPU, else the engine's own default for this card (`hzengine gpu-share`: 3 on
+/// 40 GiB or more, measured on an A6000 in engine/results/gpu_a6000_tuning; else 1). Each server is told the share,
+/// which sizes its segment cap so the provers on one card fit together.
+fn share() -> usize {
+    static S: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *S.get_or_init(|| {
+        if let Some(n) = std::env::var("HAZYNC_ENGINE_PER_GPU").ok().and_then(|v| v.parse::<usize>().ok()) {
+            return n.max(1);
+        }
+        let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
+        let mut c = Command::new(&bin);
+        c.arg("gpu-share");
+        if gpus() > 1 { c.env("CUDA_VISIBLE_DEVICES", "0"); }
+        let o = c.output().unwrap_or_else(|e| panic!("{bin} gpu-share: {e}"));
+        String::from_utf8_lossy(&o.stdout).trim().parse::<usize>().unwrap_or(1).max(1)
+    })
+}
+
 /// The engine, started on first use (GPU 0 when HAZYNC_ENGINE_GPUS > 1). `work` holds the streams and its proofs.
 pub(crate) fn with<T>(work: &str, f: impl FnOnce(&mut Engine) -> T) -> T {
     let mut g = ENGINE.lock().unwrap();
@@ -66,12 +86,12 @@ pub(crate) fn with<T>(work: &str, f: impl FnOnce(&mut Engine) -> T) -> T {
     f(g.as_mut().unwrap())
 }
 
-/// Prove independent jobs (name, stream, children, self_id) on every GPU at once, results in job order: the main
-/// server (GPU 0) and HAZYNC_ENGINE_GPUS - 1 more. One GPU: in order on the main server.
+/// Prove independent jobs (name, stream, children, self_id) on every server at once, results in job order: the main
+/// server (GPU 0) and HAZYNC_ENGINE_GPUS x share() - 1 more, server k on GPU k mod GPUs. One server: in order.
 pub(crate) type Job = (String, Vec<u8>, Vec<EngineProof>, bool, Option<Vec<u8>>);
 
 pub(crate) fn prove_many(work: &str, jobs: Vec<Job>) -> Vec<EngineProof> {
-    let n = gpus();
+    let (g, n) = (gpus(), gpus() * share());
     if n == 1 || jobs.len() < 2 {
         return jobs.into_iter().map(|(name, st, ch, sid, known)| {
             let c: Vec<&EngineProof> = ch.iter().collect();
@@ -82,8 +102,8 @@ pub(crate) fn prove_many(work: &str, jobs: Vec<Job>) -> Vec<EngineProof> {
     {
         let mut p = POOL.lock().unwrap();
         while p.len() < n - 1 {
-            let g = p.len() + 1;
-            p.push(Mutex::new(start(work, Some(g), &format!("s{g}"))));
+            let k = p.len() + 1;
+            p.push(Mutex::new(start(work, (g > 1).then_some(k % g), &format!("s{k}"))));
         }
     }
     let next = std::sync::atomic::AtomicUsize::new(0);

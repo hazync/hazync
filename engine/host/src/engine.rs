@@ -105,6 +105,45 @@ pub fn keygen(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Memory of the GPU this process proves on, GiB (the first of CUDA_VISIBLE_DEVICES, via nvidia-smi). None on a CPU
+/// build or without nvidia-smi.
+pub fn gpu_mem_gib() -> Option<f64> {
+    if !cfg!(feature = "cuda") {
+        return None;
+    }
+    let dev = std::env::var("CUDA_VISIBLE_DEVICES").ok().and_then(|v| v.split(',').next().map(str::to_string)).unwrap_or_else(|| "0".into());
+    let o = std::process::Command::new("nvidia-smi").args(["--query-gpu=memory.total", "--format=csv,noheader,nounits", "-i", &dev]).output().ok()?;
+    let mib: f64 = String::from_utf8_lossy(&o.stdout).trim().lines().next()?.trim().parse().ok()?;
+    Some(mib / 1024.0)
+}
+
+/// The cards the defaults below were measured on (A6000, 48 GB: results/gpu_a6000_tuning) and anything larger.
+const BIG_CARD_GIB: f64 = 40.0;
+
+/// How many provers share one GPU by default: 3 on a card of 40 GiB or more (976,379: 240 s with 1, 194 s with 2,
+/// 183 s with 3 on an A6000; one prover's host work overlaps another's GPU work), else 1 (unmeasured).
+pub fn default_gpu_share() -> usize {
+    match gpu_mem_gib() { Some(m) if m >= BIG_CARD_GIB => 3, _ => 1 }
+}
+
+/// HZ_GPU_SHARE: how many provers this process shares its GPU with, itself included (set by whoever starts them:
+/// prove-block --workers, the product host's engine pool). Default 1.
+pub fn gpu_share() -> usize {
+    std::env::var("HZ_GPU_SHARE").ok().and_then(|v| v.parse().ok()).unwrap_or(1).max(1)
+}
+
+/// The segment cap, GiB. HZ_SEG_MEM_GB when set. Else, on a card of 40 GiB or more: memory / share - 4, at most 24
+/// (A6000: 24 alone, 20 for two, 12 for three — each the measured setting; 32 makes the prover refuse its own trace,
+/// "nonzero root sum"). Smaller cards and CPU: OpenVM's default.
+pub fn seg_cap_gib(share: usize) -> Option<usize> {
+    if let Some(gb) = std::env::var("HZ_SEG_MEM_GB").ok().and_then(|v| v.parse::<usize>().ok()) {
+        return Some(gb);
+    }
+    let m = gpu_mem_gib().filter(|&m| m >= BIG_CARD_GIB)?;
+    // nvidia-smi gives an A6000 as 49,140 MiB (47.99 GiB): round, so 3 provers get the measured 12, not 11
+    Some(((m / share as f64).round() as usize).saturating_sub(4).clamp(4, 24))
+}
+
 /// The engine's loaded state: SDK from cached keys, plus the guest once built.
 pub struct Engine {
     pub sdk: Sdk,
@@ -115,10 +154,10 @@ impl Engine {
     pub fn load(dir: &Path) -> Result<Self> {
         let mut cached: SdkCachedProvingKey<SdkVmConfig> =
             read_object_from_file(dir.join("sdk.pk")).wrap_err("sdk.pk (run keygen)")?;
-        // HZ_SEG_MEM_GB: the prover's per-segment trace memory cap (OpenVM default 15 GiB, sized for 24 GB cards).
-        // Fewer, larger segments hash each touched memory page fewer times (Poseidon2 was 39% of a chunk's trace cells,
-        // results/profile_chunk). Prover-side only: not serialized, not in any key or commitment.
-        if let Some(gb) = std::env::var("HZ_SEG_MEM_GB").ok().and_then(|v| v.parse::<usize>().ok()) {
+        // The prover's per-segment trace memory cap (OpenVM default 15 GiB, sized for 24 GB cards). Fewer, larger
+        // segments hash each touched memory page fewer times (Poseidon2 was 39% of a chunk's trace cells,
+        // results/profile_chunk). Prover-side only: not serialized, not in any key or commitment. See seg_cap_gib.
+        if let Some(gb) = seg_cap_gib(gpu_share()) {
             std::sync::Arc::get_mut(&mut cached.app_pk.app_vm_pk).expect("sdk.pk: unshared key").vm_config.system.config.segmentation_max_memory = gb << 30;
             eprintln!("segmentation max memory: {gb} GiB");
         }

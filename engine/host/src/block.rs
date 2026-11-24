@@ -22,7 +22,8 @@ fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
 }
 
 /// `workers` > 1: the chunk and trie proofs run on that many `hzengine serve` processes at once (sharing the GPU),
-/// so one proof's host-side work overlaps another's GPU work; the aggregate then runs here.
+/// so one proof's host-side work overlaps another's GPU work; the aggregate then runs here, alone on the GPU (its
+/// segment cap is this process's: share 1).
 fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usize, report: &mut String) -> Result<()> {
     use std::io::{BufRead, BufReader, Write};
     use std::process::{Command, Stdio};
@@ -35,7 +36,7 @@ fn leaves_parallel(dir: &Path, export: &Path, out: &Path, n: usize, workers: usi
     std::thread::scope(|sc| {
         for _ in 0..workers {
             sc.spawn(|| {
-                let mut ch = match Command::new(&me).args(["serve", "--dir"]).arg(dir).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
+                let mut ch = match Command::new(&me).args(["serve", "--dir"]).arg(dir).env("HZ_GPU_SHARE", workers.to_string()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn() {
                     Ok(c) => c, Err(e) => { *err.lock().unwrap() = Some(format!("spawn serve: {e}")); return; }
                 };
                 let mut stdin = ch.stdin.take().unwrap();
