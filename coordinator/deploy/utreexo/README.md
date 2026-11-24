@@ -94,7 +94,7 @@ sha256sum elf/zyncapp-utreexo-tip.bin    # must be 9c5c04c61e6e0bf5fe29e6f727d1c
 ```
 
 On hazync-proof, as root (copy the files above, `prover/fetch_block_rpc.py`, the two unit files here and a base receipt:
-`zapps/utreexo/vectors/mainnet-3.receipt` is a real base proof of H = 3 under the pinned base image `00b2d1e8`):
+`zapps/utreexo/vectors/mainnet-3.receipt` is a real base proof of H = 3 under the pinned base image `00360814`):
 
 ```sh
 install -d /opt/hazync-utreexo/bin /var/lib/hazync-utreexo

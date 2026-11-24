@@ -11,7 +11,8 @@ followed at the tip on CPU (K1, N3). zyncAPP pages are live on hazync.org (R4). 
 `de54b94f`, with an MMR of every block hash (K1); the SwiftSync hints zyncAPP (`1894f12e`, J1/K2), the Utreexo roots
 zyncAPP (`27bea7da`, tip mode `ab6f7a26`) and four zyncAPPs with no guest (assume, liveness, statement, deposit) are
 released ([`ZYNCAPPS.md`](ZYNCAPPS.md) §9); on main since 21.11.2026 (strict compact sizes, v0.28) hints `11c72c44`,
-utreexo `00b2d1e8` and tip mode `5ef26dfe`, the core unchanged; reorg handling P1 to P6 is released with automatic rewinds off
+utreexo `00b2d1e8` and tip mode `5ef26dfe`, the core unchanged; since 24.11.2026 (a core handover lineage of
+undo-committing images accepted) hints `1aafa05c` and utreexo `00360814`; reorg handling P1 to P6 is released with automatic rewinds off
 ([`REORG.md`](REORG.md)). What is still open is in **N** and **O** at the end. Entries below keep the dates and image
 ids they were written with: an id not in `reproduce/LIBZYNC_IDS` is a historical (3.0.5 or laptop-built) image.
 

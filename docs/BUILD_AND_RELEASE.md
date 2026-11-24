@@ -27,7 +27,8 @@ refuse 3.0.x receipts ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md)).
 - **Images** (v0.27.0): mainnet `46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c` and signet
   `01a80f17…` (unchanged since v0.26.0), and the zyncAPPs' headers `de54b94f…`, hints `1894f12e…`, utreexo
   `27bea7da…` and utreexo-tip `ab6f7a26…`; on main since 21.11.2026 (strict compact sizes, v0.28) hints `11c72c44…`,
-  utreexo `00b2d1e8…` and utreexo-tip `5ef26dfe…`, core and headers unchanged (v0.24.0 shipped mainnet `8888d59c…`, signet `d4210dae…`, headers
+  utreexo `00b2d1e8…` and utreexo-tip `5ef26dfe…`, core and headers unchanged; since 24.11.2026 (a core handover
+  lineage of undo-committing images accepted) hints `1aafa05c…` and utreexo `00360814…`, the rest unchanged (v0.24.0 shipped mainnet `8888d59c…`, signet `d4210dae…`, headers
   `2db34e12…`). `reproduce/libzync.Dockerfile` rebuilds them bit for bit (it prints the ids and ELF hashes);
   `reproduce/LIBZYNC_IDS` pins them.
 - **Hosts:** `prover/build-release.sh` embeds the published mainnet ELF (built by `reproduce/libzync.Dockerfile`, or

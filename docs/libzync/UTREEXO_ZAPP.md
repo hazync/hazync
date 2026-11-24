@@ -4,7 +4,9 @@ Status: released in v0.27.0 (#744, 20.11.2026) as an **early** zAPP, CPU only. E
 10,000 and 100,000; the roots are byte-identical to Floresta's own code at every H tested; real CPU proofs at H = 2 and 3
 (§8). Reviewed 15.11.2026 (no soundness break found); images pinned in `reproduce/LIBZYNC_IDS` from the reproducible
 container build: base `00b2d1e8`, tip mode (§10) `5ef26dfe` since 21.11.2026 (the block walks read compact sizes as
-Core does, with libzync::facts' reader; two agreeing builds of `cffa2cbb`); before them `27bea7da` / `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
+Core does, with libzync::facts' reader; two agreeing builds of `cffa2cbb`); since 24.11.2026 base `00360814` (a core
+handover lineage of undo-committing images accepted, §4; two agreeing builds of `ce4540b8`; the tip image unchanged);
+before them `27bea7da` / `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
 top of it, like every zAPP.
 
 Utreexo is Tadge Dryja's accumulator; Floresta (getfloresta/Floresta, formerly vinteumorg) is Davidson Souza's node
@@ -197,7 +199,7 @@ additionally needs **block H from the node's own header chain** (`--expect`, or 
 for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
 chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
-the built-in id `00b2d1e8…` (since 21.11.2026; `27bea7da…` from 18.11.2026) is **pinned** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
+the built-in id `00360814…` (since 24.11.2026; `00b2d1e8…` from 21.11.2026, `27bea7da…` from 18.11.2026) is **pinned** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
 reproducible container's build, §10.8; until then a local build, and a proof under an unpinned built-in id is at most
 DEMO) (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
 and the OK line say the checker does not know its code); otherwise DEMO. A FAIL report carries no statement. The receipt is decoded with a 16 MiB bincode
