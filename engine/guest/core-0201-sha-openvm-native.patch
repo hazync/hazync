@@ -1,0 +1,207 @@
+ENGINE core-0201 (applied by engine/guest/base.sh AFTER the product's 0001 0002 0009 0010 libzync/0101): Core's SHA-256
+in OpenVM's native state layout. RISC Zero's sys_sha_compress takes the state byte-swapped from Core's uint32_t s[8];
+OpenVM's zkvm_sha256_impl takes Core's layout as is. So Transform (0002/0009), HAZYNC_D64_STREAM's hz_d64 (0101) and
+HAZYNC_SHA_STREAM's CSHA256 (0101) call zkvm_sha256_impl directly with no swaps; the digest is written big-endian at
+the end, as Core's own Finalize does. Same bytes in, same digest out. Made with diff -u in the laid-out tree.
+
+--- a/src/crypto/sha256.cpp
++++ b/src/crypto/sha256.cpp
+@@ -62,9 +62,33 @@
+ }
+ #endif // DISABLE_OPTIMIZED_SHA256
+ 
++/** ENGINE (hazync engine/openvm, core-0201): SHA-256 compression on OpenVM's SHA-256 extension in Core's OWN state
++ *  layout. zkvm_sha256_impl(state, block, out) takes and returns the state as 8 native (little-endian) uint32 words --
++ *  exactly Core's `uint32_t s[8]` -- and the 64 raw message bytes as the block, so no byte swaps; in place
++ *  (out == state) is how OpenVM's own sha2 calls it. The instruction needs 4-byte aligned pointers (zkvm_sha256_impl
++ *  would heap-copy an unaligned one): an unaligned chunk is staged in a local block. Replaces RISC Zero's
++ *  sys_sha_compress (state byte-swapped) used by patches 0002/0009/0010/libzync-0101. */
++extern "C" void zkvm_sha256_impl(const unsigned char* state, const unsigned char* input, unsigned char* output);
++
+ // Internal implementation code.
+ namespace
+ {
++inline void hz_ovm_compress(uint32_t* s, const unsigned char* chunk, size_t blocks)
++{
++    alignas(4) unsigned char blk[64];
++    while (blocks--) {
++        const unsigned char* in = chunk;
++        if ((((uintptr_t)chunk) & 3u) != 0u) { __builtin_memcpy(blk, chunk, 64); in = blk; }
++        zkvm_sha256_impl((const unsigned char*)s, in, (unsigned char*)s);
++        chunk += 64;
++    }
++}
++/* A native state word -> its 4 digest bytes (big-endian), as byte stores: no __bswapsi2 libcall (rv32im has no
++ * byte-reverse instruction) and safe for an unaligned destination. */
++inline void hz_ovm_be32(unsigned char* p, uint32_t x)
++{
++    p[0] = (unsigned char)(x >> 24); p[1] = (unsigned char)(x >> 16); p[2] = (unsigned char)(x >> 8); p[3] = (unsigned char)x;
++}
+ /// Internal SHA-256 implementation.
+ namespace sha256
+ {
+@@ -98,56 +122,9 @@
+ }
+ 
+ /** Perform a number of SHA-256 transformations, processing 64-byte chunks. */
+-/** SHA-256 compression routed through the RISC0 zkVM SHA accelerator (sys_sha_compress).
+- *  Same KIND of platform-specific Transform Core ships for SHA-NI/AVX2 — not a consensus change.
+- *  RISC0 stores state big-endian (SHA256_INIT uses .to_be) and takes the raw message bytes as the
+- *  block; Core keeps native-endian state and reads the chunk big-endian, so we byte-swap the state
+- *  in/out and pass the raw 64-byte chunk. */
+-#ifdef HAZYNC_SHA_FASTPATH
+-/* Inline byte reverse. Deliberately NOT __builtin_bswap32: without Zbb that lowers to a call to
+- * __bswapsi2, and the call dominates the work. Same value, no libcall. */
+-#define HZ_BSWAP32(x) ((uint32_t)((((uint32_t)(x)) >> 24) | ((((uint32_t)(x)) >> 8) & 0x0000FF00u) \
+-                                | ((((uint32_t)(x)) << 8) & 0x00FF0000u) | (((uint32_t)(x)) << 24)))
+-#endif
+-extern "C" void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
+ void Transform(uint32_t* s, const unsigned char* chunk, size_t blocks)
+ {
+-    uint32_t st[8];
+-#ifdef HAZYNC_SHA_FASTPATH
+-    /* rv32im has no byte-reverse instruction (that is Zbb), so __builtin_bswap32 lowers to a LIBCALL
+-     * to __bswapsi2 and the call frame costs more than the four shifts it performs. A profile of the
+-     * current stack puts __bswapsi2 at 78 M cycles in the chunk work and 256 M in the aggregate --
+-     * 334 M total, on byte order, between two little-endian ends. Written as shifts it inlines. */
+-    for (int i = 0; i < 8; ++i) st[i] = HZ_BSWAP32(s[i]);
+-#else
+-    for (int i = 0; i < 8; ++i) st[i] = __builtin_bswap32(s[i]);
+-#endif
+-    uint32_t blk[16];
+-    while (blocks--) {
+-#ifdef HAZYNC_SHA_FASTPATH
+-        /* The 64-byte staging copy runs PER BLOCK, and memcpy is the largest single line in the
+-         * aggregate profile (656 M) with CSHA256::Write as its dominant caller. The copy exists only
+-         * to guarantee 4-byte alignment for the uint32_t* the accelerator takes; when `chunk` is
+-         * already aligned -- which Core's internal buffers are -- it can be passed straight through.
+-         * Byte content is identical either way, so this changes no hash. */
+-        if ((((uintptr_t)chunk) & 3u) == 0u) {
+-            const uint32_t* w = (const uint32_t*)(const void*)chunk;
+-            sys_sha_compress(st, st, w, w + 8);
+-        } else {
+-            __builtin_memcpy(blk, chunk, 64);
+-            sys_sha_compress(st, st, blk, blk + 8);
+-        }
+-#else
+-        __builtin_memcpy(blk, chunk, 64);
+-        sys_sha_compress(st, st, blk, blk + 8);
+-#endif
+-        chunk += 64;
+-    }
+-#ifdef HAZYNC_SHA_FASTPATH
+-    for (int i = 0; i < 8; ++i) s[i] = HZ_BSWAP32(st[i]);
+-#else
+-    for (int i = 0; i < 8; ++i) s[i] = __builtin_bswap32(st[i]);
+-#endif
++    hz_ovm_compress(s, chunk, blocks);   /* ENGINE core-0201 */
+ }
+ 
+ void TransformD64(unsigned char* out, const unsigned char* in)
+@@ -447,43 +424,31 @@
+ 
+ TransformType Transform = sha256::Transform;
+ #if defined(HAZYNC_D64_STREAM)
+-extern "C" void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
+ namespace {
+-inline uint32_t hz_d64_bswap(uint32_t x)
+-{
+-    return (x >> 24) | ((x >> 8) & 0x0000FF00u) | ((x << 8) & 0x00FF0000u) | (x << 24);
+-}
+-/* Double-SHA256 of one 64-byte block, state in accelerator layout throughout. */
++/* Double-SHA256 of one 64-byte block, native state layout throughout (ENGINE core-0201). */
+ void hz_d64(unsigned char* out, const unsigned char* in)
+ {
+-    static uint32_t iv[8];
+-    static bool iv_ready = false;
+-    if (!iv_ready) {
+-        sha256::Initialize(iv);
+-        for (int i = 0; i < 8; ++i) iv[i] = hz_d64_bswap(iv[i]);
+-        iv_ready = true;
+-    }
++    static const uint32_t iv[8] = {0x6a09e667ul, 0xbb67ae85ul, 0x3c6ef372ul, 0xa54ff53aul,
++                                   0x510e527ful, 0x9b05688cul, 0x1f83d9abul, 0x5be0cd19ul};
+     /* Padding block for a 64-byte message: 0x80, zeros, then the bit length 512 big-endian. */
+-    alignas(4) static const unsigned char pad64b[64] = {
++    alignas(4) static const unsigned char pad64[64] = {
+         0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+         0,    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0};
+-    const uint32_t* pad64 = reinterpret_cast<const uint32_t*>(pad64b);
+-    uint32_t blk[16];
++    alignas(4) unsigned char blk[64];
++    const unsigned char* b1 = in;
++    if ((((uintptr_t)in) & 3u) != 0u) { __builtin_memcpy(blk, in, 64); b1 = blk; }
+     uint32_t s[8];
+-    __builtin_memcpy(blk, in, 64);
+-    sys_sha_compress(s, iv, blk, blk + 8);
+-    sys_sha_compress(s, s, pad64, pad64 + 8);
+-    /* Second hash: the 32-byte digest (accelerator layout = digest byte order), 0x80, zeros, then
+-     * the bit length 256 big-endian. */
+-    uint32_t b2[16] = {0};
+-    __builtin_memcpy(b2, s, 32);
+-    reinterpret_cast<unsigned char*>(b2)[32] = 0x80;
+-    reinterpret_cast<unsigned char*>(b2)[62] = 0x01;
+-    reinterpret_cast<unsigned char*>(b2)[63] = 0x00;
+-    sys_sha_compress(s, iv, b2, b2 + 8);
+-    __builtin_memcpy(out, s, 32);
++    zkvm_sha256_impl((const unsigned char*)iv, b1, (unsigned char*)s);
++    zkvm_sha256_impl((const unsigned char*)s, pad64, (unsigned char*)s);
++    /* Second hash: the 32-byte digest (big-endian bytes of the state words), 0x80, zeros, bit length 256 big-endian. */
++    alignas(4) unsigned char b2[64] = {0};
++    for (int i = 0; i < 8; ++i) hz_ovm_be32(b2 + 4 * i, s[i]);
++    b2[32] = 0x80;
++    b2[62] = 0x01;
++    zkvm_sha256_impl((const unsigned char*)iv, b2, (unsigned char*)s);
++    for (int i = 0; i < 8; ++i) hz_ovm_be32(out + 4 * i, s[i]);
+ }
+ } // namespace
+ TransformD64Type TransformD64 = hz_d64;
+@@ -710,26 +675,11 @@
+ ////// SHA-256
+ 
+ #ifdef HAZYNC_SHA_STREAM
+-extern "C" void sys_sha_compress(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*);
+ namespace {
+-inline uint32_t hz_bswap(uint32_t x)
+-{
+-    return (x >> 24) | ((x >> 8) & 0x0000FF00u) | ((x << 8) & 0x00FF0000u) | (x << 24);
+-}
+-/* s is in the accelerator's layout throughout, so a block is ONE syscall and no swaps. */
++/* s is in Core's native layout (ENGINE core-0201): a block is ONE OpenVM SHA instruction, no swaps. */
+ inline void hz_compress(uint32_t* s, const unsigned char* chunk, size_t blocks)
+ {
+-    uint32_t blk[16];
+-    while (blocks--) {
+-        if ((((uintptr_t)chunk) & 3u) == 0u) {
+-            const uint32_t* w = (const uint32_t*)(const void*)chunk;
+-            sys_sha_compress(s, s, w, w + 8);
+-        } else {
+-            __builtin_memcpy(blk, chunk, 64);
+-            sys_sha_compress(s, s, blk, blk + 8);
+-        }
+-        chunk += 64;
+-    }
++    hz_ovm_compress(s, chunk, blocks);
+ }
+ /* Plain memcpy (rounds 7-8). The earlier word loop read up to 3 bytes before and after a misaligned
+    source; the destination is always the private `buf`, so the regions never overlap. */
+@@ -740,7 +690,6 @@
+ inline void hz_init(uint32_t* s)
+ {
+     sha256::Initialize(s);
+-    for (int i = 0; i < 8; ++i) s[i] = hz_bswap(s[i]);
+ }
+ } // namespace
+ 
+@@ -787,8 +736,7 @@
+     WriteBE64(sizedesc, bytes << 3);
+     Write(pad, 1 + ((119 - (bytes % 64)) % 64));
+     Write(sizedesc, 8);
+-    /* Accelerator layout IS the digest's byte order. */
+-    __builtin_memcpy(hash, s, 32);
++    for (int i = 0; i < 8; ++i) hz_ovm_be32(hash + 4 * i, s[i]);   /* ENGINE core-0201: native state */
+ }
+ 
+ CSHA256& CSHA256::Reset()

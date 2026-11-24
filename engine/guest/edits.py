@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""edits.py <assembled guest main.rs>: the ONLY source edits the engine makes to Hazync's guest (README.md).
+"""edits.py <assembled guest main.rs> <assembled libzync/src/coinlog.rs>: the ONLY source edits the engine makes to Hazync's guest (README.md).
 Each asserts its anchor occurs exactly once, so a product change that moves one fails here, by name."""
 import sys
 p = sys.argv[1]; s = open(p).read()
@@ -22,22 +22,10 @@ rep('mod liftx_hint;', 'mod liftx_hint;\n#[cfg(not(feature = "liftx-hint"))]\nmo
 # 4) The journal's hash becomes the proof's public values, once, at the end of main.
 i = s.index("\nfn main() {"); j = s.index("\n}\n", i)
 s = s[:j] + "\n    risc0_zkvm::guest::env::finalize();" + s[j:]
-# 5) RISC Zero's sys_sha_compress (Core patches 0002/0009/0010/0101 and libzync's coin log call it) on OpenVM's SHA-256
-#    extension. OpenVM's std PAL defines the same symbol as an unreachable!() stub; this definition is linked first
-#    (--allow-multiple-definition in build.rs).
+# 5) SHA-256 in OpenVM's native layout: Core and libsecp call zkvm_sha256_impl directly (core-0201 / secp-0202, laid
+#    out by base.sh) and so does the coin log (edit 7). The engine defines no sys_sha_compress (RISC Zero's syscall,
+#    state byte-swapped); OpenVM's std PAL keeps its own unreachable!() stub of that name, which nothing calls.
 s += """
-extern "C" { fn zkvm_sha256_impl(state: *const u8, input: *const u8, output: *mut u8); }
-/// ENGINE: RISC Zero's sys_sha_compress contract (state words byte-swapped from native, block as two 32-byte halves).
-#[no_mangle]
-pub unsafe extern "C" fn sys_sha_compress(out: *mut u32, inp: *const u32, b1: *const u32, b2: *const u32) {
-    let mut st = [0u32; 8]; for i in 0..8 { st[i] = (*inp.add(i)).swap_bytes(); }
-    let mut blk = [0u8; 64];
-    core::ptr::copy_nonoverlapping(b1 as *const u8, blk.as_mut_ptr(), 32);
-    core::ptr::copy_nonoverlapping(b2 as *const u8, blk.as_mut_ptr().add(32), 32);
-    let mut o = [0u32; 8];
-    zkvm_sha256_impl(st.as_ptr() as *const u8, blk.as_ptr(), o.as_mut_ptr() as *mut u8);
-    for i in 0..8 { *out.add(i) = o[i].swap_bytes(); }
-}
 /// ENGINE: libsecp's sqrt hook (HAZYNC_LIFTX_OVM, secp-0201): square root mod p on OpenVM's modular extension (hinted,
 /// checked by squaring in the extension). 1 = a square (out set), 0 = not a square.
 #[no_mangle]
@@ -49,4 +37,51 @@ pub unsafe extern "C" fn hz_fe_sqrt(a_be: *const u8, out_be: *mut u8) -> i32 {
 }
 openvm::init!();
 """
+open(p, "w").write(s); print("engine edits applied:", p)
+
+# 7) libzync's coin log (libzync/src/coinlog.rs) on OpenVM's SHA-256 in its native layout. The product calls RISC Zero's
+#    sys_sha_compress with pre-swapped IVs (IV_NODE_W / IV_SPENT_W) and gets the digest back as its in-memory bytes (W).
+#    Here the IV is the native state (IV_NODE / IV_SPENT as they are), the block is L || R as raw bytes (W is exactly
+#    that), and the native output state is swapped once into W (the digest's big-endian bytes). Same bytes out.
+p = sys.argv[2]; s = open(p).read()
+rep('''/// The IVs as the accelerator's state words (the state's big-endian bytes in memory order).
+#[cfg(target_os = "zkvm")]
+static IV_NODE_W: [[u32; 8]; 64] = swapped(&IV_NODE);
+#[cfg(target_os = "zkvm")]
+static IV_SPENT_W: [u32; 8] = swapped(&[IV_SPENT])[0];
+''', '')
+rep('''#[cfg(target_os = "zkvm")]
+const fn swapped<''', '''#[cfg(any())]   // ENGINE: unused (native layout, no pre-swapped IVs)
+const fn swapped<''')
+rep('''#[cfg(target_os = "zkvm")]
+extern "C" {
+    fn sys_sha_compress(out: *mut [u32; 8], in_state: *const [u32; 8], b1: *const [u32; 8], b2: *const [u32; 8]);
+}
+
+#[cfg(target_os = "zkvm")]
+#[inline(always)]
+fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
+    unsafe { sys_sha_compress(out, iv, a, b) };
+}''', '''#[cfg(target_os = "zkvm")]
+extern "C" {
+    fn zkvm_sha256_impl(state: *const u8, input: *const u8, output: *mut u8);
+}
+
+#[cfg(target_os = "zkvm")]
+#[inline(always)]
+fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {   // ENGINE: OpenVM's SHA-256, native state layout
+    let blk: [W; 2] = [*a, *b];   // L || R as raw bytes, 4-byte aligned
+    let mut st = [0u32; 8];
+    unsafe { zkvm_sha256_impl(iv.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8) };
+    for (o, x) in out.iter_mut().zip(st.iter()) {
+        *o = x.swap_bytes();
+    }
+}''')
+rep('''    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_NODE_W[l as usize], a, b, out);''', '''    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_NODE[l as usize], a, b, out);''')
+rep('''    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_SPENT_W, c, s, out);''', '''    #[cfg(target_os = "zkvm")]
+    compress_w(&IV_SPENT, c, s, out);''')
+assert "sys_sha_compress(" not in s
 open(p, "w").write(s); print("engine edits applied:", p)

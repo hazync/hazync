@@ -1,0 +1,37 @@
+ENGINE secp-0202 (applied by engine/guest/base.sh after secp-0201): libsecp's SHA-256 compression on OpenVM's SHA-256
+extension when HAZYNC_SHA_OVM is defined (engine/guest/build.rs). libsecp's state is native words, OpenVM's layout,
+so no swaps. The engine's counterpart of the product's libzync/0103 (RISC Zero accelerator, byte-swapped).
+
+--- a/src/hash_impl.h
++++ b/src/hash_impl.h
+@@ -40,6 +40,22 @@
+     hash->bytes = 0;
+ }
+ 
++#ifdef HAZYNC_SHA_OVM
++/** ENGINE (hazync engine/openvm, secp-0202): one SHA-256 compression on OpenVM's SHA-256 extension. Its state is 8
++ *  native (little-endian) uint32 words, the same layout as `s` here, and the block is the 64 raw message bytes, so
++ *  no byte swaps. `buf` is always secp256k1_sha256.buf (4-byte aligned, after s[8]); an unaligned one would still be
++ *  correct (staged in a local block) instead of a heap copy inside zkvm_sha256_impl. */
++void zkvm_sha256_impl(const unsigned char* state, const unsigned char* input, unsigned char* output);
++static void secp256k1_sha256_transform(uint32_t* s, const unsigned char* buf) {
++    if ((((uintptr_t)buf) & 3u) != 0u) {
++        uint32_t blk[16];
++        memcpy(blk, buf, 64);
++        zkvm_sha256_impl((const unsigned char*)s, (const unsigned char*)blk, (unsigned char*)s);
++    } else {
++        zkvm_sha256_impl((const unsigned char*)s, buf, (unsigned char*)s);
++    }
++}
++#else
+ /** Perform one SHA-256 transformation, processing 16 big endian 32-bit words. */
+ static void secp256k1_sha256_transform(uint32_t* s, const unsigned char* buf) {
+     uint32_t a = s[0], b = s[1], c = s[2], d = s[3], e = s[4], f = s[5], g = s[6], h = s[7];
+@@ -122,6 +138,7 @@
+     s[6] += g;
+     s[7] += h;
+ }
++#endif /* HAZYNC_SHA_OVM */
+ 
+ static void secp256k1_sha256_write(secp256k1_sha256 *hash, const unsigned char *data, size_t len) {
+     size_t bufsize = hash->bytes & 0x3F;

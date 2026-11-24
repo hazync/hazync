@@ -11,7 +11,7 @@ edited). Everything that differs is listed here, with the reason. Nothing here c
 | `batch_ecdsa.rs` -> `batch_ecdsa_ovm.rs` | same public items, hint layout, transcript and batch equation; group arithmetic on OpenVM's secp256k1 extension instead of RISC Zero bigint2 circuits |
 | `liftx_hint` inert when `liftx-hint` is off | RISC Zero's hinted key lift (patch 0013) is replaced by libsecp's sqrt hook |
 | `env::finalize()` at the end of `main` | the journal's sha256 becomes the proof's 32 public-value bytes |
-| `sys_sha_compress` defined in Rust | Core's and libzync's SHA call RISC Zero's syscall; here it runs on OpenVM's SHA-256 extension (byte swaps at the boundary: the RISC Zero layout; to be removed, see below) |
+| coin log (`libzync/src/coinlog.rs`) `compress_w` on `zkvm_sha256_impl` | OpenVM's SHA-256 in its native state layout: IVs as they are (no pre-swapped `IV_*_W`), one swap of the output into the digest's bytes; RISC Zero's `sys_sha_compress` is not defined anywhere in the engine |
 | `hz_fe_sqrt` defined in Rust | libsecp's sqrt hook: square root mod p on OpenVM's modular extension |
 | `openvm::init!()` | OpenVM's moduli/curve setup |
 
@@ -25,14 +25,17 @@ sha256(exe || vm) of that proof = `image` and its public values = sha256(journal
 
 ## Consensus C/C++ (engine/guest/base.sh)
 
-Core: exactly the product's tree (v28.0 + 0001 0002 0009 0010 libzync/0101).
-libsecp: pristine v0.5.1 + `secp-0201-openvm-batch-liftx.patch` — the batch hooks of libzync/0102 at the same call
+Core: the product's tree (v28.0 + 0001 0002 0009 0010 libzync/0101) + `core-0201-sha-openvm-native.patch`: Transform,
+`HAZYNC_D64_STREAM`'s hz_d64 and `HAZYNC_SHA_STREAM`'s CSHA256 call OpenVM's `zkvm_sha256_impl` in Core's own state
+layout instead of RISC Zero's byte-swapped `sys_sha_compress` (same digests; unaligned blocks staged in a local block).
+libsecp: pristine v0.5.1 + `secp-0201-openvm-batch-liftx.patch` + `secp-0202-sha-openvm-native.patch` (libsecp's SHA-256
+compression on OpenVM's extension, `HAZYNC_SHA_OVM`) — the batch hooks of libzync/0102 at the same call
 sites and kinds (field elements via libsecp's own `fe_get_b32`), and the sqrt hook. None of the product's RISC Zero
 field/group patches (0005 0006 0008 0012 0013), and not 0103 (libsecp's SHA on the RISC Zero accelerator).
 
 ## Build
 
-No fat LTO (product: fat). The bitcode linker refuses the duplicate `sys_sha_compress`; native SHA removes the symbol.
+Fat LTO + codegen-units=1, as the product.
 
 ## Commitments
 
