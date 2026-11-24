@@ -32,9 +32,16 @@ struct Req {
 }
 
 pub fn serve(dir: &Path) -> Result<()> {
+    // Replies get their own descriptor (the original stdout); fd 1 becomes stderr, so the SDK's tracing and any other
+    // print can never corrupt the reply stream. (capture.rs still redirects fd 1 around a guest execution.)
+    use std::os::fd::FromRawFd;
+    std::io::stdout().flush().ok();
+    // SAFETY: plain fd juggling on this process's own descriptors, before any thread is started here.
+    let reply_fd = unsafe { libc::dup(1) };
+    assert!(reply_fd >= 0 && unsafe { libc::dup2(2, 1) } >= 0, "serve: fd setup");
+    let mut stdout = unsafe { std::fs::File::from_raw_fd(reply_fd) };
     let e = Engine::load(dir)?;
     let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
     writeln!(stdout, "{}", serde_json::json!({"ok": true, "ready": true}))?;
     stdout.flush()?;
     for line in stdin.lock().lines() {
