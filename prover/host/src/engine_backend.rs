@@ -134,14 +134,20 @@ pub(crate) struct Exec {
 
 impl Engine {
     fn req(&mut self, v: serde_json::Value) -> serde_json::Value {
+        let op = v["op"].clone();
+        self.try_req(v).unwrap_or_else(|e| panic!("engine: {op} failed: {e}"))
+    }
+
+    /// One request; a reply that is not ok is an Err carrying the engine's error.
+    fn try_req(&mut self, v: serde_json::Value) -> Result<serde_json::Value, String> {
         writeln!(self.stdin, "{v}").and_then(|_| self.stdin.flush()).expect("engine: request");
         let mut l = String::new();
         self.stdout.read_line(&mut l).expect("engine: reply");
         let r: serde_json::Value = serde_json::from_str(&l).unwrap_or_else(|e| panic!("engine: bad reply {l:?}: {e}"));
         if r["ok"] != true {
-            panic!("engine: {} failed: {}", v["op"], r["error"]);
+            return Err(r["error"].to_string());
         }
-        r
+        Ok(r)
     }
 
     fn file(&mut self, name: &str, ext: &str) -> PathBuf {
@@ -171,6 +177,28 @@ impl Engine {
         };
         let _ = std::fs::remove_file(&input);
         out
+    }
+
+    /// `execute` with a failed run as Err (instead of a panic): the engine's error, then the last lines of the guest's
+    /// log, where an out-of-memory guest says so (lz::is_guest_oom reads it; #794's re-split).
+    pub(crate) fn try_execute(&mut self, name: &str, stream: &[u8]) -> Result<Exec, String> {
+        let input = self.file(name, "in");
+        std::fs::write(&input, stream).unwrap();
+        let (log, journal) = (input.with_extension("log"), input.with_extension("journal"));
+        let r = self.try_req(serde_json::json!({"op": "execute", "input": input, "children": Vec::<String>::new(),
+                                                "self_id": false, "dry": false, "journal": journal, "log": log}));
+        let text = std::fs::read_to_string(&log).unwrap_or_default();
+        let _ = std::fs::remove_file(&input);
+        let r = r.map_err(|e| {
+            let tail: Vec<&str> = text.lines().rev().take(5).collect();
+            format!("engine execute of {name} failed: {e}; guest log ends: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" | "))
+        })?;
+        let exit = r["exit"].as_str().map(|c| c.parse().expect("engine: exit code"));
+        Ok(Exec {
+            exit,
+            log: text,
+            journal: if exit.is_none() { Some(std::fs::read(&journal).expect("engine: journal")) } else { None },
+        })
     }
 
     /// Prove; the proof is kept in the work dir under `name`.
