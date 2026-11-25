@@ -46,6 +46,26 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      risc0 would refuse, and what tests cover each one.
   5. How is the image id bound? What exactly does "exe commitment + vm" commit to? Can two different guests or configurations share an id? Can a proof from
      one configuration verify under another?
+
+     **Answer (25.11.2026, from the code; MEASURED where marked):**
+     - image id = SHA-256(app_exe_commit ‖ app_vm_commit) (engine/host/src/r0.rs `image_id`; the guest computes the
+       same in engine/platform/risc0-zkvm `env::verify`).
+     - app_exe_commit (OpenVM `compute_exe_commit`): Poseidon2 Merkle hash of the program's code commitment, the
+       initial memory root and the start pc. Any change to the guest's code or initial data changes it.
+     - app_vm_commit: Poseidon2 hash of the verifier's key-commit components (verify-stark `output_raw_from_proof`:
+       `vk_commit_components(verifier_pvs)`): the commitments to the app VM's verifying key and the aggregation
+       layers'. A different VM configuration (extensions, moduli, system params) means different AIRs, a different
+       key and so a different vm commit.
+     - `env::verify(image_id, journal)` in the guest: verify_stark on the next supplied proof, then asserts
+       SHA-256(exe ‖ vm) == image_id ("the proof is not of this image") and the proof's public values ==
+       SHA-256(journal) ("journal does not match the proof"). MEASURED: negative controls in the M1 tests (wrong image,
+       wrong journal) are refused.
+     - Two guests / configurations sharing an id: only by a SHA-256 or Poseidon2 collision. A proof from another
+       configuration carries that configuration's vm commit, so it fails the image check.
+     - Caveat (ESTIMATED, to confirm): the segment cap (segmentation_max_memory) is prover-side and not in any key
+       or commitment (engine.rs Engine::load says so), so proofs made at different caps verify under the same id;
+       that is intended. Whether OpenVM's own `VerificationBaseline` (the outer verifier's pin) can admit a proof of
+       a different aggregation key is answered by the baseline pinning agg_vk; to be checked against crates/verify.
   6. List every difference between the engine guest and the product guest (CHANGES.md), and explain why each one cannot change a verdict or committed state.
 
   B. Completeness: can every block Core accepts still be proved?
