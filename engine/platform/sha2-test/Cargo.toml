@@ -1,0 +1,11 @@
+# Host test of ../sha2 (the guest's SHA-256 shim) against RustCrypto sha2, with the intrinsic in software.
+[package]
+name = "sha2-shim-test"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+shim = { path = "../sha2", package = "hazync-engine-sha2", features = ["compress"] }
+sha2 = { version = "0.10", features = ["compress"] }

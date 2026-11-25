@@ -35,10 +35,8 @@ pub fn update(l: u32, start: u64, e: &[Spend], sib: &mut core::slice::Iter<W>, o
         *new = *h;
         return true;
     }
-    if l == 0 {
-        *old = e[0].1;
-        spent_w(&e[0].1, &e[0].2, new);
-        return true;
+    if e.len() == 1 {
+        return update_one(l, start, &e[0], sib, old, new);
     }
     let mid = start + (1u64 << (l - 1));
     let m = e.partition_point(|x| x.0 < mid);
@@ -48,6 +46,45 @@ pub fn update(l: u32, start: u64, e: &[Spend], sib: &mut core::slice::Iter<W>, o
     }
     parent_w(l, &a0, &b0, old);
     parent_w(l, &a1, &b1, new);
+    true
+}
+
+/// `update` for a subtree holding exactly one spend, as a loop: the same siblings in the same order, the same hashes.
+/// The recursion reads, for a path whose offset has bits b_(l-1)..b_0, the left sibling of every right turn on the way
+/// down (b_i = 1, top-down), then, unwinding, the right sibling of every left turn (b_i = 0, bottom-up).
+fn update_one(l: u32, start: u64, x: &Spend, sib: &mut core::slice::Iter<W>, old: &mut W, new: &mut W) -> bool {
+    let off = x.0.wrapping_sub(start);
+    if l > 64 { return false; }
+    // left siblings of the right turns, top-down; slots [..nl] are written before they are read
+    let mut left: [core::mem::MaybeUninit<&W>; 64] = [core::mem::MaybeUninit::uninit(); 64];
+    let mut nl = 0usize;
+    for i in (0..l).rev() {
+        if (off >> i) & 1 == 1 {
+            let Some(h) = sib.next() else { return false };
+            left[nl].write(h);
+            nl += 1;
+        }
+    }
+    let (mut o, mut n) = (x.1, [0u32; 8]);
+    spent_w(&x.1, &x.2, &mut n);
+    for i in 0..l {
+        let (mut po, mut pn) = ([0u32; 8], [0u32; 8]);
+        if (off >> i) & 1 == 1 {
+            nl -= 1;
+            // SAFETY: written in the loop above (one slot per set bit, consumed in reverse)
+            let h = unsafe { left[nl].assume_init() };
+            parent_w(i + 1, h, &o, &mut po);
+            parent_w(i + 1, h, &n, &mut pn);
+        } else {
+            let Some(h) = sib.next() else { return false };
+            parent_w(i + 1, &o, h, &mut po);
+            parent_w(i + 1, &n, h, &mut pn);
+        }
+        o = po;
+        n = pn;
+    }
+    *old = o;
+    *new = n;
     true
 }
 
@@ -330,6 +367,59 @@ mod tests {
                 }
                 assert_eq!(roots, st.roots(), "trial {t} block {b}");
                 assert_eq!(n, st.len());
+            }
+        }
+    }
+
+    /// The recursion as it was before `update_one` (every subtree split until its leaves), as the reference.
+    fn update_rec(l: u32, start: u64, e: &[Spend], sib: &mut core::slice::Iter<W>, old: &mut W, new: &mut W) -> bool {
+        if e.is_empty() {
+            let Some(h) = sib.next() else { return false };
+            *old = *h;
+            *new = *h;
+            return true;
+        }
+        if l == 0 {
+            *old = e[0].1;
+            spent_w(&e[0].1, &e[0].2, new);
+            return true;
+        }
+        let mid = start + (1u64 << (l - 1));
+        let m = e.partition_point(|x| x.0 < mid);
+        let (mut a0, mut a1, mut b0, mut b1) = ([0u32; 8], [0u32; 8], [0u32; 8], [0u32; 8]);
+        if !update_rec(l - 1, start, &e[..m], sib, &mut a0, &mut a1) || !update_rec(l - 1, mid, &e[m..], sib, &mut b0, &mut b1) {
+            return false;
+        }
+        parent_w(l, &a0, &b0, old);
+        parent_w(l, &a1, &b1, new);
+        true
+    }
+
+    #[test]
+    fn update_matches_the_recursion() {
+        // random perfect trees, spend sets (single spends included, at every depth) and witnesses, also short, long and
+        // altered ones: the same result, the same hashes and the same number of siblings read
+        let mut seed = 0x243f6a8885a308d3u64;
+        let mut rnd = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        for t in 0..3000u64 {
+            let l = (rnd() % 12) as u32;
+            let start = (rnd() % 4) << l;
+            let size = 1u64 << l;
+            let k = 1 + (rnd() % size.min(5)) as usize;
+            let mut pos: Vec<u64> = (0..k).map(|_| start + rnd() % size).collect();
+            pos.sort();
+            pos.dedup();
+            let e: Vec<Spend> = pos.iter().map(|p| (*p, w_of(&h(t, *p)), w_of(&h(*p, t)))).collect();
+            let nw = (rnd() % (l as u64 * 5 + 3)) as usize;
+            let wit: Vec<W> = (0..nw).map(|i| w_of(&h(t + 77, i as u64))).collect();
+            let (mut i1, mut i2) = (wit.iter(), wit.iter());
+            let (mut o1, mut n1, mut o2, mut n2) = ([0u32; 8], [0u32; 8], [0u32; 8], [0u32; 8]);
+            let r1 = update(l, start, &e, &mut i1, &mut o1, &mut n1);
+            let r2 = update_rec(l, start, &e, &mut i2, &mut o2, &mut n2);
+            assert_eq!(r1, r2, "trial {t}: result");
+            if r1 {
+                assert_eq!((o1, n1), (o2, n2), "trial {t}: hashes");
+                assert_eq!(i1.len(), i2.len(), "trial {t}: siblings read");
             }
         }
     }
