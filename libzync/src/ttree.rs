@@ -56,6 +56,37 @@ pub const SPLIT_JOURNAL_WORDS: usize = TRIE_JOURNAL_WORDS + 8;
 /// The witness tag of a subtree proved by a part (combine witnesses only).
 pub const TAG_PART: u32 = 7;
 
+/// A split update handed to the AGGREGATE instead of a combine proof (engine, 25.11.2026): the aggregate verifies every
+/// part (a proof of its own image) and runs the combine's update itself, on the update lists it already holds, so the
+/// parts prove in parallel with the chunks and no combine proof waits for them. Payload words: [KIND_TRIE_PARTS,
+/// witness words nw, order words np, parts n, the combine witness (header + TAG_PART nodes), the order, each part
+/// journal]. Same checks as the combine (`apply_stream_parts`); the aggregate also requires the counts mode and that the
+/// witness's old root is the chain's trie root.
+pub const KIND_TRIE_PARTS: u32 = 0xC4A1_0021;
+
+/// `KIND_TRIE_PARTS` payload: (combine witness, order, part journals). Exact length, and every part tagged as one.
+pub fn parts_encode(wit: &[u32], perm: &[u32], parts: &[[u32; PART_JOURNAL_WORDS]]) -> Vec<u32> {
+    let mut v = alloc::vec![KIND_TRIE_PARTS, wit.len() as u32, perm.len() as u32, parts.len() as u32];
+    v.extend_from_slice(wit);
+    v.extend_from_slice(perm);
+    for p in parts { v.extend_from_slice(p); }
+    v
+}
+
+#[allow(clippy::type_complexity)]
+pub fn parts_decode(v: &[u32]) -> Option<(&[u32], &[u32], Vec<[u32; PART_JOURNAL_WORDS]>)> {
+    let (&[kind, nw, np, n], rest) = (v.first_chunk::<4>()?, &v[4..]);
+    if kind != KIND_TRIE_PARTS { return None; }
+    let (nw, np, n) = (nw as usize, np as usize, n as usize);
+    let need = nw.checked_add(np)?.checked_add(n.checked_mul(PART_JOURNAL_WORDS)?)?;
+    if rest.len() != need { return None; }
+    let (wit, rest) = rest.split_at(nw);
+    let (perm, rest) = rest.split_at(np);
+    let parts: Vec<[u32; PART_JOURNAL_WORDS]> = rest.chunks_exact(PART_JOURNAL_WORDS).map(|c| c.try_into().unwrap()).collect();
+    if parts.iter().any(|p| p[0] != KIND_TRIE_PART) { return None; }
+    Some((wit, perm, parts))
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum TErr {
     /// the witness's old root is not the one given

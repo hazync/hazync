@@ -2237,6 +2237,13 @@ fn aggregate() {
         let mut tj = vec![0u32; n as usize];
         if n > 0 {
             env::read_slice(&mut tj);
+        }
+        if tj.first() == Some(&ttree::KIND_TRIE_PARTS) {
+            // a split update without a combine proof: every part a proof of THIS image, combined in agg_lite on the
+            // block's own update lists (ttree::KIND_TRIE_PARTS)
+            let (_, _, parts) = ttree::parts_decode(&tj).expect("trie parts: malformed payload");
+            for p in &parts { env::verify(self_id, &p[..]).expect("trie part proof invalid"); }
+        } else if n > 0 {
             env::verify(self_id, &tj).expect("trie proof invalid");
             // a split update's combine (mode 20): its parts must have been verified as proofs of THIS image
             if tj.first() == Some(&ttree::KIND_TRIE_SPLIT) {

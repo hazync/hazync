@@ -482,6 +482,19 @@ mod tests {
                         crate::ttree::apply_part(&w[sp.w.clone()], sp.d, &pm, &pi, &po).expect("part")
                     }).collect();
                     assert_eq!(crate::ttree::apply_stream_parts(&cw, &m, &i, Some(&p), &parts), want, "round {round} k {k}");
+                    // the aggregate's form of the same split: the payload round-trips exactly; a short or long one,
+                    // or one with a part not tagged as a part, does not decode
+                    let pl = crate::ttree::parts_encode(&cw, &p, &parts);
+                    let (dw, dp, dparts) = crate::ttree::parts_decode(&pl).expect("payload");
+                    assert!(dw == &cw[..] && dp == &p[..] && dparts == parts);
+                    assert_eq!(crate::ttree::apply_stream_parts(dw, &m, &i, Some(dp), &dparts), want, "payload round {round} k {k}");
+                    assert!(crate::ttree::parts_decode(&pl[..pl.len() - 1]).is_none(), "short payload");
+                    let mut long = pl.clone(); long.push(0);
+                    assert!(crate::ttree::parts_decode(&long).is_none(), "long payload");
+                    if !parts.is_empty() {
+                        let mut bad = pl.clone(); let at = 4 + cw.len() + p.len(); bad[at] = crate::ttree::KIND_TRIE_SPLIT;
+                        assert!(crate::ttree::parts_decode(&bad).is_none(), "untagged part");
+                    }
                     nparts += parts.len();
                     if let Some(first) = parts.first() {
                         let mut bad = parts.clone();

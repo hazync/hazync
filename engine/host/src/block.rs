@@ -142,18 +142,25 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         Err(_) => 0,
     };
     let mut jobs: Vec<Job> = Vec::new();
-    let trie_name = if parts > 0 {
-        let pn: Vec<String> = (0..parts).map(|i| format!("trie_part_{i:02}")).collect();
+    // A split update goes to the aggregate as its parts (ttree::KIND_TRIE_PARTS): no combine proof, the parts prove
+    // beside the chunks. HZ_TRIE_COMBINE=1: the combine proof (mode 20) as before.
+    let combine = parts > 0 && std::env::var("HZ_TRIE_COMBINE").is_ok_and(|v| v == "1");
+    let pn: Vec<String> = (0..parts).map(|i| format!("trie_part_{i:02}")).collect();
+    let trie_names: Vec<String> = if parts > 0 {
         for p in &pn {
             jobs.push(Job { name: p.clone(), input: export.join(format!("{p}.in")), children: vec![], self_id: false, deps: vec![] });
         }
-        jobs.push(Job { name: "trie_combine".into(), input: export.join("trie_combine.in"), children: pn, self_id: true, deps: (0..parts).collect() });
-        "trie_combine"
+        if combine {
+            jobs.push(Job { name: "trie_combine".into(), input: export.join("trie_combine.in"), children: pn.clone(), self_id: true, deps: (0..parts).collect() });
+            vec!["trie_combine".into()]
+        } else {
+            pn.clone()
+        }
     } else {
         // the whole update first: it is the largest leaf (976,379: 6.3B against ~3.4B per chunk), so starting it
         // first keeps it off the end of the leaf phase
         jobs.push(Job { name: "trie".into(), input: export.join("trie.in"), children: vec![], self_id: false, deps: vec![] });
-        "trie"
+        vec!["trie".into()]
     };
     for i in 0..n {
         jobs.push(Job { name: format!("chunk_{i:02}"), input: export.join(format!("chunk_{i:02}.in")), children: vec![], self_id: false, deps: vec![] });
@@ -161,7 +168,7 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     let workers = workers.min(jobs.len()); // no more provers than leaf proofs (a 1-chunk block has 2)
     if workers > 1 || parts > 0 {
         leaves_parallel(dir, out, &jobs, workers, &mut report)?;
-        let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain([trie_name.to_string()]).collect();
+        let names: Vec<String> = (0..n).map(|i| format!("chunk_{i:02}")).chain(trie_names.iter().cloned()).collect();
         for nm in names {
             children.push(crate::engine::read_proof(&e, &baseline, &out.join(nm))?.0);
         }
@@ -184,7 +191,40 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     let r0id = std::fs::read(export.join("method_id"))?;
     ensure!(stream[4..36] == r0id[..], "agg.in: METHOD_ID not at bytes 4..36");
     stream[4..36].copy_from_slice(&image_id(&img));
-    if parts > 0 {
+    if parts > 0 && !combine {
+        // The aggregate reads the trie journal last ([word count] + words): the export wrote the whole update's (RISC
+        // Zero's mode 17); the parts payload goes there (ttree::KIND_TRIE_PARTS): the combine's witness and order from
+        // its export input, then each part's journal as this engine proved it (each identical to RISC Zero's).
+        let tj = std::fs::read(export.join("trie.r0journal"))?;
+        let tail = 4 + tj.len();
+        ensure!(stream.len() >= tail && stream[stream.len() - tail..stream.len() - tj.len()] == ((tj.len() / 4) as u32).to_le_bytes()
+                && stream[stream.len() - tj.len()..] == tj[..], "agg.in does not end with the trie journal");
+        let words = |b: &[u8]| -> Vec<u32> { b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() };
+        // trie_combine.in (prover/host trie_split): mode 20, image id (8 words), [nw, nm, ni, np, nparts], witness,
+        // marks x24, inserts x27, order, part journals
+        let ci = words(&std::fs::read(export.join("trie_combine.in"))?);
+        ensure!(ci.len() >= 14 && ci[0] == 20, "trie_combine.in: not a combine stream");
+        let (nw, nm, ni, np, nparts) = (ci[9] as usize, ci[10] as usize, ci[11] as usize, ci[12] as usize, ci[13] as usize);
+        let (ws, ps) = (14, 14 + nw + 24 * nm + 27 * ni);
+        ensure!(nparts == parts && ci.len() == ps + np + 34 * nparts, "trie_combine.in: layout");
+        let mut pj = Vec::with_capacity(parts);
+        for p in &pn {
+            let j = words(&std::fs::read(out.join(format!("{p}.journal")))?);
+            ensure!(j.len() == 34, "{p}: not a part journal");
+            pj.push(<[u32; 34]>::try_from(&j[..]).unwrap());
+        }
+        let mut payload = vec![0xC4A1_0021u32, nw as u32, np as u32, parts as u32];   // ttree::KIND_TRIE_PARTS
+        payload.extend_from_slice(&ci[ws..ws + nw]);
+        payload.extend_from_slice(&ci[ps..ps + np]);
+        for j in &pj { payload.extend_from_slice(j); }
+        stream.truncate(stream.len() - tail);
+        stream.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        for w in &payload { stream.extend_from_slice(&w.to_le_bytes()); }
+        let line = format!("trie split: {parts} parts verified by the aggregate (no combine proof), payload {} words\n", payload.len());
+        eprint!("{line}");
+        report.push_str(&line);
+    }
+    if combine {
         // The aggregate reads the trie proof's journal last ([word count] + words): the export wrote the whole update's
         // (RISC Zero's mode 17); the combine's goes there. Same old root, new root and list digest, then this image's id.
         let tj = std::fs::read(export.join("trie.r0journal"))?;

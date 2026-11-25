@@ -784,10 +784,24 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 }
             } else {
                 // The trie receipt must start from the chain's trie root and apply exactly this list.
-                let dg = ttree::list_digest(&marks, &hins);
                 #[allow(static_mut_refs)]
                 let tj = unsafe { &TRIE_J };
                 let prev_root = coinlog::w_of(&trie_root);
+                if tj.first() == Some(&ttree::KIND_TRIE_PARTS) {
+                    // A split update without a combine proof (ttree::KIND_TRIE_PARTS; main verified every part as a
+                    // proof of this image): the combine's update runs here, over THIS block's list, so it applies
+                    // exactly this list by construction. Counts mode, and the old root is the chain's trie root.
+                    match ttree::parts_decode(tj) {
+                        Some((cw, perm, parts)) if cw.first() == Some(&1) && cw.get(1..9) == Some(&prev_root[..]) => {
+                            match ttree::apply_stream_parts(cw, &marks, &hins, Some(perm), &parts) {
+                                Ok(nr) => trie_root = coinlog::h_of(&nr),
+                                Err(_) => { env::log("agg-lite: REJECT the trie parts do not update this list"); all_ok = false; }
+                            }
+                        }
+                        _ => { env::log("agg-lite: REJECT the trie parts do not start from the chain's trie root"); all_ok = false; }
+                    }
+                } else {
+                let dg = ttree::list_digest(&marks, &hins);
                 let jd: alloc::vec::Vec<u32> = dg.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
                 if tj.len() != ttree::TRIE_JOURNAL_WORDS || tj[0] != ttree::KIND_TRIE {
                     env::log("agg-lite: REJECT no trie receipt for this block"); all_ok = false;
@@ -798,6 +812,7 @@ pub fn validate_block_lite(w: &BlockWitness, mtp: u32, journals: &[Vec<u32>],
                 } else {
                     let nr: coinlog::W = tj[9..17].try_into().unwrap();
                     trie_root = coinlog::h_of(&nr);
+                }
                 }
             }
         }
