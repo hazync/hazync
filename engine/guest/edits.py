@@ -114,6 +114,14 @@ rep('''    #[cfg(target_os = "zkvm")]
 rep('''    #[cfg(target_os = "zkvm")]
     compress_w(&IV_SPENT_W, c, s, out);''', '''    #[cfg(target_os = "zkvm")]
     compress_w(&IV_SPENT, c, s, out);''')
+rep('''pub fn parent_blk(l: u32, blk: &[W; 2], out: &mut W) {
+    parent_w(l, &blk[0], &blk[1], out)
+}''', '''pub fn parent_blk(l: u32, blk: &[W; 2], out: &mut W) {
+    #[cfg(target_os = "zkvm")]
+    unsafe { compress_blk(&IV_NODE[l as usize], blk, out) }   // ENGINE: the pair is the block, read in place
+    #[cfg(not(target_os = "zkvm"))]
+    parent_w(l, &blk[0], &blk[1], out)
+}''')
 assert "sys_sha_compress(" not in s
 open(p, "w").write(s); print("engine edits applied:", p)
 

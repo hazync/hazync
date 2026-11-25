@@ -157,6 +157,13 @@ pub fn parent_w(l: u32, a: &W, b: &W, out: &mut W) {
     compress_w(&IV_NODE[l as usize], a, b, out);
 }
 
+/// `parent_w` of a contiguous pair: blk = [L, R]. The same hash; a caller that keeps a pair side by side lets the
+/// engine's compression read it as its block in place (no 64-byte copy).
+#[inline(always)]
+pub fn parent_blk(l: u32, blk: &[W; 2], out: &mut W) {
+    parent_w(l, &blk[0], &blk[1], out)
+}
+
 #[inline(always)]
 pub fn spent_w(c: &W, s: &W, out: &mut W) {
     #[cfg(target_os = "zkvm")]

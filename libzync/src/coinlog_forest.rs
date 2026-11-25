@@ -6,7 +6,7 @@
 //! them; the positions alone fix the shape. An unspent leaf at the claimed position is the only way a touched tree's
 //! old root can match: a coin that does not exist, or was spent before, cannot be spent.
 
-use crate::coinlog::{h_of, parent, parent_w, spent_w, w_of, H, W};
+use crate::coinlog::{h_of, parent, parent_blk, parent_w, spent_w, w_of, H, W};
 use alloc::vec::Vec;
 
 /// One spend of an earlier coin: its position in the log, its unspent leaf and its spender record, as words.
@@ -40,12 +40,16 @@ pub fn update(l: u32, start: u64, e: &[Spend], sib: &mut core::slice::Iter<W>, o
     }
     let mid = start + (1u64 << (l - 1));
     let m = e.partition_point(|x| x.0 < mid);
-    let (mut a0, mut a1, mut b0, mut b1) = ([0u32; 8], [0u32; 8], [0u32; 8], [0u32; 8]);
-    if !update(l - 1, start, &e[..m], sib, &mut a0, &mut a1) || !update(l - 1, mid, &e[m..], sib, &mut b0, &mut b1) {
-        return false;
+    // the children's hashes land side by side: [left, right] is the parent's block as it is
+    let (mut bo, mut bn) = ([[0u32; 8]; 2], [[0u32; 8]; 2]);
+    {
+        let ((a0, b0), (a1, b1)) = (bo.split_at_mut(1), bn.split_at_mut(1));
+        if !update(l - 1, start, &e[..m], sib, &mut a0[0], &mut a1[0]) || !update(l - 1, mid, &e[m..], sib, &mut b0[0], &mut b1[0]) {
+            return false;
+        }
     }
-    parent_w(l, &a0, &b0, old);
-    parent_w(l, &a1, &b1, new);
+    parent_blk(l, &bo, old);
+    parent_blk(l, &bn, new);
     true
 }
 
@@ -65,26 +69,44 @@ fn update_one(l: u32, start: u64, x: &Spend, sib: &mut core::slice::Iter<W>, old
             nl += 1;
         }
     }
-    let (mut o, mut n) = (x.1, [0u32; 8]);
-    spent_w(&x.1, &x.2, &mut n);
+    if l == 0 {
+        *old = x.1;
+        spent_w(&x.1, &x.2, new);
+        return true;
+    }
+    // The running old / new hash sits at its side of a pair (bit i of the offset: 1 = right child), the sibling goes on
+    // the other side, and the pair is the compression's block as it is. Each level writes into the other pair at the
+    // next level's side (the last level into old / new): no 64-byte block copy, no output copy.
+    let (mut bo, mut bn) = ([[[0u32; 8]; 2]; 2], [[[0u32; 8]; 2]; 2]);
+    let s0 = (off & 1) as usize;
+    bo[0][s0] = x.1;
+    spent_w(&x.1, &x.2, &mut bn[0][s0]);
+    let mut c = 0usize;
     for i in 0..l {
-        let (mut po, mut pn) = ([0u32; 8], [0u32; 8]);
-        if (off >> i) & 1 == 1 {
+        let s = ((off >> i) & 1) as usize;
+        let h: &W = if s == 1 {
             nl -= 1;
             // SAFETY: written in the loop above (one slot per set bit, consumed in reverse)
-            let h = unsafe { left[nl].assume_init() };
-            parent_w(i + 1, h, &o, &mut po);
-            parent_w(i + 1, h, &n, &mut pn);
+            unsafe { left[nl].assume_init() }
         } else {
             let Some(h) = sib.next() else { return false };
-            parent_w(i + 1, &o, h, &mut po);
-            parent_w(i + 1, &n, h, &mut pn);
+            h
+        };
+        bo[c][1 - s] = *h;
+        bn[c][1 - s] = *h;
+        let last = i + 1 == l;
+        let t = if last { 0 } else { ((off >> (i + 1)) & 1) as usize };
+        let ((xo, yo), (xn, yn)) = (bo.split_at_mut(1), bn.split_at_mut(1));
+        let (so, dso, sn, dsn) = if c == 0 { (&xo[0], &mut yo[0], &xn[0], &mut yn[0]) } else { (&yo[0], &mut xo[0], &yn[0], &mut xn[0]) };
+        if last {
+            parent_blk(i + 1, so, old);
+            parent_blk(i + 1, sn, new);
+        } else {
+            parent_blk(i + 1, so, &mut dso[t]);
+            parent_blk(i + 1, sn, &mut dsn[t]);
         }
-        o = po;
-        n = pn;
+        c ^= 1;
     }
-    *old = o;
-    *new = n;
     true
 }
 

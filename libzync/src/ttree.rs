@@ -22,7 +22,7 @@
 //! the block's paths, and the update-list digest. The in-memory model, the witness encoder and the measurement
 //! synthesiser are in `trie_model.rs` (host and tests only).
 
-use crate::coinlog::{parent_w, W};
+use crate::coinlog::{parent_blk, parent_w, W};
 use alloc::vec::Vec;
 
 pub type Key = [u8; 64];
@@ -184,22 +184,30 @@ fn chain<'a>(r: &mut Rs<'a>, d0: u32, ups: &[Up], key: fn(&Up) -> &W, old: &mut 
         d += 1;
     }
     if n == 0 { return node(r, d, old, new); }
-    let mut buf = [[ZERO; 2]; 2];
-    {
-        let (a, b) = buf[0].split_at_mut(1);
-        node(r, d, &mut a[0], &mut b[0])?;
-    }
+    // The running old / new hash sits at its side of a pair (right when the left is pruned), the pruned sibling goes on
+    // the other side, and the pair is the compression's block as it is. Each level writes into the other pair at the
+    // next level's side (the top level into old / new): no 64-byte block copy, no output copy.
+    let (mut bo, mut bn) = ([[ZERO; 2]; 2], [[ZERO; 2]; 2]);
+    let s0 = unsafe { sib[n - 1].assume_init() }.1 as usize;
+    node(r, d, &mut bo[0][s0], &mut bn[0][s0])?;
     let mut c = 0usize;
     for i in (0..n).rev() {
         let (h, lp) = unsafe { sib[i].assume_init() };
-        let (x, y) = buf.split_at_mut(1);
-        let (src, dst) = if c == 0 { (&x[0], &mut y[0]) } else { (&y[0], &mut x[0]) };
-        if lp { parent_w(50, h, &src[0], &mut dst[0]); parent_w(50, h, &src[1], &mut dst[1]); }
-        else { parent_w(50, &src[0], h, &mut dst[0]); parent_w(50, &src[1], h, &mut dst[1]); }
+        let s = lp as usize;
+        bo[c][1 - s] = *h;
+        bn[c][1 - s] = *h;
+        let ((xo, yo), (xn, yn)) = (bo.split_at_mut(1), bn.split_at_mut(1));
+        let (so, dso, sn, dsn) = if c == 0 { (&xo[0], &mut yo[0], &xn[0], &mut yn[0]) } else { (&yo[0], &mut xo[0], &yn[0], &mut xn[0]) };
+        if i == 0 {
+            parent_blk(50, so, old);
+            parent_blk(50, sn, new);
+        } else {
+            let t = unsafe { sib[i - 1].assume_init() }.1 as usize;
+            parent_blk(50, so, &mut dso[t]);
+            parent_blk(50, sn, &mut dsn[t]);
+        }
         c ^= 1;
     }
-    *old = buf[c][0];
-    *new = buf[c][1];
     Ok(())
 }
 
