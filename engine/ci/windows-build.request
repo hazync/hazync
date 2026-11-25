@@ -4,3 +4,4 @@ request 3, 25.11.2026: uint typedef for MSVC (run 45637035760: histogram.cuh, ma
 request 4, 25.11.2026: CUDA_ARCH 70,75,80,86,89,120 (run 45642025937: __match_any_sync needs sm_70+, so no Pascal as shipped)
 request 5, 25.11.2026: openvm-msvc.patch (compound literals in rv32im/bigint, GCC-only -Wno-maybe-uninitialized; run 45644680969)
 request 6, 25.11.2026: tolerate the repos' symbolic links on Windows (run 45647400296)
+request 7, 25.11.2026: zero-register S-box columns for MSVC (poseidon2-air columns.cuh; run 45647869377)

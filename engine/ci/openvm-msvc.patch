@@ -112,3 +112,73 @@
          );
          Multiplication256Core core(range_tuple_checker);
          core.fill_trace_row(row.slice_from(COL_INDEX(Multiplication256Cols, core)), rec.core);
+--- a/crates/circuits/poseidon2-air/cuda/include/poseidon2-air/columns.cuh
++++ b/crates/circuits/poseidon2-air/cuda/include/poseidon2-air/columns.cuh
+@@ -23,6 +23,19 @@
+     T post;
+ };
+ 
++#if defined(_MSC_VER)
++// engine (MSVC): with no S-box registers, SBox<T, D, 0> is `T registers[0]`, a zero-length array (a GCC extension
++// that MSVC refuses). Under GCC the member occupies no columns; these specialisations have no sbox member at all, so
++// every offset (COL_INDEX = offsetof over T = uint8_t) is the same, and the sbox accessors below return the post
++// column's offset, which is where GCC's zero-size sbox sits. apply_sbox writes no register when SBOX_REGS == 0.
++template <typename T, size_t WIDTH, size_t SBOX_DEGREE> struct FullRound<T, WIDTH, SBOX_DEGREE, 0> {
++    T post[WIDTH];
++};
++template <typename T, size_t WIDTH, size_t SBOX_DEGREE> struct PartialRound<T, WIDTH, SBOX_DEGREE, 0> {
++    T post;
++};
++#endif
++
+ template <
+     typename T,
+     size_t WIDTH,
+@@ -81,7 +94,15 @@
+         if (!is_valid()) {
+             return RowSlice::null();
+         }
++#if defined(_MSC_VER)
++        if constexpr (SBOX_REGS == 0) {
++            return slice.slice_from(COL_INDEX(Cols, beginning_full_rounds[round].post));
++        } else {
++            return slice.slice_from(COL_INDEX(Cols, beginning_full_rounds[round].sbox[lane]));
++        }
++#else
+         return slice.slice_from(COL_INDEX(Cols, beginning_full_rounds[round].sbox[lane]));
++#endif
+     }
+ 
+     __device__ RowSlice beginning_full_post(size_t round) const {
+@@ -96,7 +117,15 @@
+         if (!is_valid()) {
+             return RowSlice::null();
+         }
++#if defined(_MSC_VER)
++        if constexpr (SBOX_REGS == 0) {
++            return slice.slice_from(COL_INDEX(Cols, partial_rounds[round].post));
++        } else {
++            return slice.slice_from(COL_INDEX(Cols, partial_rounds[round].sbox));
++        }
++#else
+         return slice.slice_from(COL_INDEX(Cols, partial_rounds[round].sbox));
++#endif
+     }
+ 
+     __device__ RowSlice partial_post(size_t round) const {
+@@ -111,7 +140,15 @@
+         if (!is_valid()) {
+             return RowSlice::null();
+         }
++#if defined(_MSC_VER)
++        if constexpr (SBOX_REGS == 0) {
++            return slice.slice_from(COL_INDEX(Cols, ending_full_rounds[round].post));
++        } else {
++            return slice.slice_from(COL_INDEX(Cols, ending_full_rounds[round].sbox[lane]));
++        }
++#else
+         return slice.slice_from(COL_INDEX(Cols, ending_full_rounds[round].sbox[lane]));
++#endif
+     }
+ 
+     __device__ RowSlice ending_full_post(size_t round) const {
