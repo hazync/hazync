@@ -42,6 +42,17 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        valid for 2.x?).
   2. What security level do the proof parameters give, in bits? Does that rely on any conjectures, and how does it compare with risc0's 3.1.0 settings?
   3. Is OpenVM still actively maintained? Give its release pace, how it discloses security issues, and who maintains it.
+
+     **Answer (25.11.2026; source https://github.com/openvm-org/openvm/releases, https://blog.openvm.dev/2.0-production):**
+     - Maintainer: Axiom (openvm-org); the 2.0 audit was commissioned by Axiom.
+     - Release pace (MEASURED from the releases page): v2.0.0 10.07.2026, v2.0.1 17.07.2026, v2.0.2 14.08.2026,
+       v2.1.0 04.11.2026; 1.x before that (Cantina-audited v1.7.0). Active.
+     - Disclosure: GitHub security advisories (GHSA) published with releases; v2.1.0 lists five (std main, RV32IM abort
+       transpilation, k256/p256 canonicality, ECC decompression). Versioning: patch releases keep the verifying key
+       (OpenVM AGENTS.md / VERSIONING.md), so a patch upgrade should not move our image ids; a minor (2.1 -> 2.2) may.
+     - Responsiveness: issue #3196 (SDK, opened 08.11.2026) had no maintainer reply when read on 25.11.2026: one data
+       point, not a pattern.
+     - UNKNOWN: a security contact / bug bounty, and support commitments for 2.x.
   4. The compatibility layer that runs risc0's guest API on OpenVM is our own code on the soundness path. List every place where it could accept something
      risc0 would refuse, and what tests cover each one.
 
