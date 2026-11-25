@@ -61,6 +61,25 @@ impl Image {
     }
 }
 
+/// HZ_LEAF_CHILDREN (app segment proofs per leaf proof, OpenVM's default and maximum 4) and HZ_INTERNAL_CHILDREN
+/// (proofs per internal proof, default and maximum 3): prover-side only. Each layer's GPU memory peak grows with the
+/// proofs it verifies at once (results/gpu_a40_memory), so a small card uses fewer. None: both unset.
+fn tree_config_from_env() -> Result<Option<openvm_sdk::config::AggregationTreeConfig>> {
+    let get = |k: &str| std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok());
+    let (leaf, internal) = (get("HZ_LEAF_CHILDREN"), get("HZ_INTERNAL_CHILDREN"));
+    if leaf.is_none() && internal.is_none() { return Ok(None); }
+    let mut t = openvm_sdk::config::AggregationTreeConfig::default();
+    if let Some(n) = leaf {
+        ensure!((1..=openvm_sdk::config::MAX_NUM_CHILDREN_LEAF).contains(&n), "HZ_LEAF_CHILDREN {n} outside 1..=4");
+        t.num_children_leaf = n;
+    }
+    if let Some(n) = internal {
+        ensure!((2..=openvm_sdk::config::MAX_NUM_CHILDREN_INTERNAL).contains(&n), "HZ_INTERNAL_CHILDREN {n} outside 2..=3");
+        t.num_children_internal = n;
+    }
+    Ok(Some(t))
+}
+
 fn agg_params() -> AggregationSystemParams {
     AggregationSystemParams::default()
 }
@@ -194,7 +213,25 @@ impl Engine {
             std::sync::Arc::get_mut(&mut cached.app_pk.app_vm_pk).expect("sdk.pk: unshared key").vm_config.system.config.segmentation_max_memory = gb << 30;
             eprintln!("segmentation max memory: {gb} GiB");
         }
-        let sdk = Sdk::from_deferral_cached_proving_key(cached)?;
+        let sdk = match tree_config_from_env()? {
+            None => Sdk::from_deferral_cached_proving_key(cached)?,
+            // A proving-time aggregation tree (HZ_LEAF_CHILDREN / HZ_INTERNAL_CHILDREN; in no key): the SDK from the cached
+            // app and aggregation keys plus that tree. OpenVM's cached-key constructor takes no tree config and the
+            // function it uses for the cached deferral keys is crate-private, so the deferral prover is rebuilt with
+            // the public constructor keygen uses, and must give exactly the deferral config the app key carries.
+            Some(tree) => {
+                let SdkCachedProvingKey { app_pk, agg_pk, .. } = cached;
+                let vm = &app_pk.app_vm_pk.vm_config;
+                let dap = DeferralAggProver::verify_stark(&agg_params(), hook_params_with_100_bits_security(),
+                    vm.system.config.memory_config.memory_dimensions(), vm.system.config.num_public_values);
+                let regenerated = dap.multi_deferral_circuit_prover.make_config(vec![SupportedDeferral::VerifyStark]);
+                let want = vm.deferral.as_ref().ok_or_else(|| eyre!("sdk.pk: the app key has no deferral config"))?;
+                ensure!(bitcode::serialize(&regenerated)? == bitcode::serialize(want)?,
+                        "the rebuilt deferral prover does not match the app key's deferral config");
+                eprintln!("aggregation tree: {} children per leaf, {} per internal", tree.num_children_leaf, tree.num_children_internal);
+                Sdk::builder().app_pk(app_pk).agg_pk(agg_pk).agg_tree_config(tree).deferral_agg_prover(dap).build()?
+            }
+        };
         let agg_vk = sdk.agg_vk();
         Ok(Engine { sdk, agg_vk })
     }
@@ -297,12 +334,7 @@ impl Engine {
             (None, None) => eyre::bail!("prove: neither a known journal nor an emit pass"),
         };
         let t = std::time::Instant::now();
-        let (proof, baseline) = if crate::segpar::leaf_children_set() {
-            // the leaf batch is set: the same proof chain through segpar (no workers), which applies it
-            crate::segpar::prove(self, exe, prove, def_inputs, &std::env::temp_dir().join("hz-unused.stdin"), &[])?
-        } else {
-            self.sdk.prove(exe, prove, def_inputs)?
-        };
+        let (proof, baseline) = self.sdk.prove(exe, prove, def_inputs)?;
         eprintln!("prove: {:.1} s", t.elapsed().as_secs_f64());
         let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
         ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");

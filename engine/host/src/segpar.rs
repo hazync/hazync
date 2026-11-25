@@ -100,24 +100,6 @@ pub fn prove_segments(e: &Engine, dir: &Path, input: &Path, lo: usize, hi: usize
     Ok(segs.len())
 }
 
-/// The aggregation prover with HZ_LEAF_CHILDREN children per leaf (None: unset, the SDK's own), made once.
-fn leaf_children_agg(e: &Engine) -> Result<Option<Arc<openvm_sdk::prover::AggProver>>> {
-    static AGG: std::sync::OnceLock<Arc<openvm_sdk::prover::AggProver>> = std::sync::OnceLock::new();
-    let Some(n) = std::env::var("HZ_LEAF_CHILDREN").ok().and_then(|v| v.parse::<usize>().ok()) else { return Ok(None) };
-    ensure!((1..=openvm_sdk::config::MAX_NUM_CHILDREN_LEAF).contains(&n), "HZ_LEAF_CHILDREN {n} outside 1..=4");
-    Ok(Some(AGG.get_or_init(|| {
-        eprintln!("leaf children: {n}");
-        let tree = openvm_sdk::config::AggregationTreeConfig { num_children_leaf: n, ..Default::default() };
-        Arc::new(openvm_sdk::prover::AggProver::from_pk(
-            Arc::new(e.sdk.app_pk().app_vm_pk.vm_pk.get_vk()), e.sdk.agg_pk(), tree, e.sdk.def_hook_cached_commit()))
-    }).clone()))
-}
-
-/// HZ_LEAF_CHILDREN is set: proofs go through `prove` (with or without workers) so the leaf batch applies.
-pub fn leaf_children_set() -> bool {
-    std::env::var("HZ_LEAF_CHILDREN").is_ok()
-}
-
 /// Contiguous runs of segments, one per prover, balanced by instruction count; the last run is this process's.
 fn plan(segs: &[Segment], provers: usize) -> Vec<(usize, usize)> {
     let n = segs.len();
@@ -152,12 +134,6 @@ pub fn prove(
     let t0 = std::time::Instant::now();
     let lap = |what: &str| eprintln!("segpar: {what} at {:.2} s", t0.elapsed().as_secs_f64());
     let mut prover = e.sdk.prover(exe.clone())?;
-    // HZ_LEAF_CHILDREN (prover-side only, not in any key): how many app segment proofs one leaf proof verifies,
-    // OpenVM's default and maximum 4. Fewer makes each leaf trace smaller: the GPU memory peak of a run with many
-    // segments (results/gpu_a40_memory: the leaf layer's rs_code_matrix, +2.3 GiB).
-    if let Some(agg) = leaf_children_agg(e)? {
-        prover.agg_prover = agg;
-    }
     lap("stark prover");
     let has_deferrals = prover.deferral_setup.hook_commit().is_some();
     let memory_dimensions = prover.app_prover.memory_dimensions();
