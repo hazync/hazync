@@ -201,9 +201,27 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   16. What is the whole-chain cost, from genesis to the tip, in GPU-hours and dollars? Use measured per-block costs across eras, and say which blocks the
   estimate rests on.
   17. How do the tip-block times compare (detect to verified) with risc0's current 191 s on 4× PRO 6000?
+
+     **Answer so far (25.11.2026): proving MEASURED, detect-to-verified NOT YET.**
+     - prove-block (all leaves + aggregate + final verify) for 976,379 on 4x RTX PRO 6000 Blackwell: 42.6-48 s
+       (results/gpu_blackwell_hz24, gpu_blackwell_4x_hz26); 65 s on ONE card.
+     - Not included and not yet measured on the engine path: block detection, the host's preparation (hints:
+       48-50 s CPU for 364,292 on the build box; the export's RISC Zero executions are a test harness and would not run
+       in production), and moving proofs. The product's 191 s includes all of these, so the fair comparison needs the
+       engine wired into the tip pipeline (HAZYNC_ENGINE backend exists: engine_backend.rs) and timed end to end.
   18. What do the three levers still on the table buy, measured: fewer and larger chunks, CPU/GPU overlap, and native SHA? Does any of them change a
   commitment or format?
   19. How does it scale across several GPUs for one block?
+
+     **Answer (25.11.2026, MEASURED, 976,379 unless noted; results/gpu_blackwell_*):**
+     | cards (RTX PRO 6000 Blackwell) | whole trie | notes |
+     |---|---|---|
+     | 1 | 65 s | leaves 43 s + aggregate 18.5 s |
+     | 2 | 51 s (split trie) | |
+     | 4 | 42.6-48 s | leaves 25-28 s + aggregate 16-17 s |
+     364,292: 201 s on 1 card, 76 s on 4. Scaling flattens because the aggregate (16-19 s) runs alone at the end.
+     segpar (the aggregate's segments over all cards) cut it 16.8 -> 14.3 s on 4 cards; reusing the leaf workers for
+     it (37a02971) removes the startup cost that made the first try a net loss: to be re-measured.
 
   E. Migration
   20. What has to be rebuilt? Cover the zAPPs (headers, hints, utreexo, deposit, assume, liveness, statement), the verifiers, the board and coordinator, the
@@ -211,6 +229,15 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   21. Which commitments and formats can stay byte-identical, so existing tools and zAPP logic carry over?
   22. What's the plan for re-proving from genesis, and does the existing risc0 chain proof have any role in it?
   23. Does the engine support composition, so a zAPP can verify a core proof inside its own proof as it does today?
+
+     **Answer (25.11.2026): YES for the mechanism, MEASURED on CPU; zAPP guests themselves not yet ported.**
+     - `env::verify(image, journal)` works on the engine as on RISC Zero (Q4/Q5): the aggregate verifies every chunk
+       and trie proof in-guest on every block; block 2 verified block 1's proof in-guest from genesis, and a
+       `libzync-join` of blocks 2 + 3 verified both and checked adjacency; `libzync-verify` accepted all
+       (results/cpu_chain_genesis). Negative controls: a tampered child journal and a child of another image are
+       refused in-guest (results/NEGATIVE.md).
+     - A zAPP guest (headers, hints, utreexo, ...) needs building on the engine platform (same approach as the core
+       guest: its source + engine/platform), then the same env::verify of a core proof. Not done yet (Q20).
   24. What does it cost to maintain over time? Do we follow upstream OpenVM releases, and what happens to image ids when we do?
 
   F. The deciding question
