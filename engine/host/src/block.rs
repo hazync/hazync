@@ -196,7 +196,15 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         jobs.push(Job { name: "trie".into(), input: export.join("trie.in"), children: vec![], self_id: false, deps: vec![] });
         vec!["trie".into()]
     };
-    for i in 0..n {
+    // chunks largest first when the export measured them (chunk_NN.cycles, RISC Zero's cycles): the big ones start at
+    // once and the small ones fill the gaps (4x PRO 6000, 364,292: 76 s with its chunks falling in size, 96 s with 16
+    // equal ones in two waves of 12). Without the files: export order.
+    let size = |i: usize| std::fs::read_to_string(export.join(format!("chunk_{i:02}.cycles"))).ok().and_then(|t| t.trim().parse::<u64>().ok());
+    let mut order: Vec<usize> = (0..n).collect();
+    if (0..n).all(|i| size(i).is_some()) {
+        order.sort_by_key(|&i| std::cmp::Reverse(size(i).unwrap()));
+    }
+    for i in order {
         jobs.push(Job { name: format!("chunk_{i:02}"), input: export.join(format!("chunk_{i:02}.in")), children: vec![], self_id: false, deps: vec![] });
     }
     let workers = workers.min(jobs.len()); // no more provers than leaf proofs (a 1-chunk block has 2)

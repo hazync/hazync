@@ -479,6 +479,9 @@ pub(crate) fn engine_export(dir: &str) {
             .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
         require_committed(s.exit_code, &format!("chunk {i} execution"));
         put(&format!("chunk_{i:02}.r0journal"), &s.journal.bytes);
+        // the chunk's measured size, for the engine's scheduler (largest first); RISC Zero's cycles rank chunks as the
+        // engine's costs do (364,292: both fall chunk by chunk)
+        put(&format!("chunk_{i:02}.cycles"), format!("{}\n", s.cycles()).as_bytes());
         println!("  chunk {i:>3} [{lo}..{hi}) exported: {} bytes in, {} cycles", st.0.len(), s.cycles());
         let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
         receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
