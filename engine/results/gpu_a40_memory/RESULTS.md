@@ -61,3 +61,23 @@ Reed-Solomon encoding), which the stacked height sets (2^22 halved it in the key
   Even so: the full block now peaks no higher than the tiny one, and the +2.2 GiB step moved from the leaf layer to
   internal_for_leaf (3 children by default). Next: the SDK built with the tree config (one patched OpenVM line, or
   upstream), num_children_leaf 1 and num_children_internal 2.
+
+## Proving-time aggregation tree (3edbde74; SDK builder + checked deferral prover), 25.11.2026 night
+
+One prover, 2 GiB segments, every proof verified (the rebuilt deferral prover's config matched the app key's each time).
+
+| keys | tree (leaf/internal) | card | block | wall | nvidia-smi peak | tracker max |
+|---|---|---|---|---|---|---|
+| m27 | 1/2 | A40 | 130,000 | 21 s | 3,817 MiB | 3.40 GiB |
+| m27 | 1/2 | A40 | 976,379 | 666 s | 4,284 MiB | 3.60 GiB |
+| m27 | **2/2** | A40 | 976,379 | **513 s** | **4,049 MiB** | - |
+| m27 + stacked 2^22 | 2/2 | L4 | 976,379 | 604 s | 4,166 MiB | 3.60 GiB |
+| (before: m27, default tree 4/3) | | A40 | 976,379 | | 5,0xx MiB | |
+
+- The tree takes the full block from ~5.0 GB to ~4.05 GB. 2 per leaf beats 1 per leaf on both memory and time.
+- Stacked 2^22 changes nothing: the peak step is not in the app proofs.
+- What is left (L4 log, harvest of run_20261125_205749):
+  - ~1.5-1.6 GiB stays resident through every phase and between chunks: the device proving keys of every circuit, uploaded once and kept for the run.
+  - On top of that, the largest single step is rs_code_matrix in the leaf layer (1.2-1.6 GiB) and in internal_for_leaf (1.6 GiB), the recursion circuits' own fixed 100-bit presets (leaf 2^21 x blowup 4, internal 2^19 x blowup 8).
+  - The app proofs peak lower (2.6 GiB resident at start, including the 1.1 GiB address space).
+- Next lever for a 4 GB card: keep the proving keys on the host and upload only the active layer's (prover-side, inside OpenVM).
