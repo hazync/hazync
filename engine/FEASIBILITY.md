@@ -51,8 +51,12 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        stays within the Johnson bound, which is proven for Reed-Solomon codes: no proximity-gap conjecture is used.
      - Assumptions that remain: Poseidon2 over BabyBear as a random oracle / collision-resistant hash (Fiat-Shamir),
        and SHA-256 for our image id and journal binding.
-     - TO CONFIRM: RISC Zero 3.1.0's stated level and whether it relies on a conjecture (not quoted from memory
-       here). The comparison belongs in the decision write-up with a source.
+     - RISC Zero for comparison (sources: risc0-zkp 3.0.1 docs.rs lib.rs: "50 FRI queries is sufficient to achieve our
+       security target of 97 bits (conjectured security)"; risc0 README: "98 bits of conjectured security"): RISC
+       Zero's level is CONJECTURED (FRI, toy-problem conjecture); no proven figure found. ePrint 2024/1161 shows
+       FRI's conjectured levels can sit well above what is provable. To re-check against risc0 3.1.0's own
+       soundness calculator before quoting externally.
+     - So on parameters alone the engine is at least as strong: 100 bits proven against ~97-98 conjectured.
   3. Is OpenVM still actively maintained? Give its release pace, how it discloses security issues, and who maintains it.
 
      **Answer (25.11.2026; source https://github.com/openvm-org/openvm/releases, https://blog.openvm.dev/2.0-production):**
