@@ -1,3 +1,4 @@
 request 1, 25.11.2026: first Windows CUDA build of hzengine (CUDA_ARCH 61,75,80,86,89,120)
 request 2, 25.11.2026: stark-backend MSVC patch (vpmm_shim designated initializers) + msvc_builtins.h (__builtin_clz/ctz)
 request 3, 25.11.2026: uint typedef for MSVC (run 45637035760: histogram.cuh, matrix.cu, poseidon2.cuh)
+request 4, 25.11.2026: CUDA_ARCH 70,75,80,86,89,120 (run 45642025937: __match_any_sync needs sm_70+, so no Pascal as shipped)
