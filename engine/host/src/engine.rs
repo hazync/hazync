@@ -82,7 +82,13 @@ fn new_sdk() -> Result<(Sdk, SdkVmConfig)> {
             .make_config(vec![SupportedDeferral::VerifyStark]),
     );
     let vm_config = vm_config.optimize();
-    let app_params = app_params_with_100_bits_security(MAX_APP_LOG_STACKED_HEIGHT);
+    // The app proofs' stacked height (all traces are committed in columns of 2^h rows): OpenVM's 24 by default.
+    // HZ_APP_LOG_STACKED_HEIGHT (keygen only; it is in the keys, so it changes the image id): a smaller height lowers
+    // the GPU memory floor (~6.6 GB at 24, results/gpu_a40_memory) at the cost of more, smaller segments.
+    let h = std::env::var("HZ_APP_LOG_STACKED_HEIGHT").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(MAX_APP_LOG_STACKED_HEIGHT);
+    ensure!((16..=MAX_APP_LOG_STACKED_HEIGHT).contains(&h), "HZ_APP_LOG_STACKED_HEIGHT {h} outside 16..={MAX_APP_LOG_STACKED_HEIGHT}");
+    if h != MAX_APP_LOG_STACKED_HEIGHT { eprintln!("app log stacked height: {h}"); }
+    let app_params = app_params_with_100_bits_security(h);
     let sdk = Sdk::builder()
         .app_config(AppConfig::new(vm_config.clone(), app_params))
         .agg_params(agg)
