@@ -93,3 +93,16 @@ One prover, 2 GiB segments, every proof verified (the rebuilt deferral prover's 
   encoding), and the memory pool keeps its high-water mark. Only log tails were harvested (essentials harvest), so the
   phase attribution of this run's peak is from the L4 run; the next memory run uses HARVEST_FULL=1.
 - Next: 2^26 address space (halves the 1.1 GiB), if every guest input fits in 64 MiB (CPU check m26.sh).
+
+## 2^26 address space (keys-m26) and the 1 GiB segment cap, RTX 4090, 25.11.2026 late
+
+- CPU (m26.sh, hazync-coord): every chunk and trie input of 976379t, 364292t, 962000t and 965500 (46 inputs) runs
+  in a 64 MiB address space, journals IDENTICAL to RISC Zero's. The aggregate guest is covered by the GPU run below.
+- 4090, keys-m26, tree 2/2, 2 GiB segments, full log: 976,379 in 357 s, verified, nvidia-smi peak **4,168 MiB**
+  (130,000: 15 s, 3,792 MiB). The address space halving did not move the peak.
+- Full-log attribution (tracker): leaf now 1.4-1.8 GiB and internal_for_leaf 2.1-2.2 (the app VM release works). The
+  peak, 3.6 GiB, is the AGGREGATE's app-segment proofs (154 segments): ~2.2-2.5 GiB live (app key 1.2 + address
+  space + the segment's traces) + rs_code_matrix 1.0 GiB, and the logup GKR step +1.2 GiB.
+- 1 GiB segments (same keys): chunk_00 has 565 segments and took 189.7 s (vs ~71 s at 2 GiB); tracker max 2.80 GiB,
+  smi 3,374 MiB through chunk_00 and part of chunk_01. The run was stopped by gpu_block's balance guard (< $1) before
+  the aggregate, which held the peak at 2 GiB, so the full-block peak at 1 GiB is NOT measured.
