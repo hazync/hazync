@@ -205,7 +205,25 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      - Still to do: the image and journal checks on top (cheap), a browser and a phone run, and the patch upstream
        (or carried as our one fork line). UNKNOWN: phone time (expect a small multiple of the laptop's).
   12. Windows: does the GPU prover build and prove on Windows with a native CUDA toolchain? What's the minimum driver version?
+
+     **In progress (25.11.2026; .github/workflows/engine-windows.yml on windows-2022, CUDA 12.9.1, MSVC 14.44):**
+     OpenVM v2.1.0 does not build with MSVC as shipped. Found and patched so far (engine/ci/*.patch, applied by
+     engine/ci/openvm-patches.sh; each a same-values portability edit, upstream candidates):
+     - stark-backend vpmm_shim.cu: C++20 designated initializers under --std=c++17 (GCC extension);
+     - `uint` (glibc's typedef) in histogram.cuh / matrix.cu / poseidon2.cuh: engine/ci/msvc_builtins.h;
+     - GCC's __builtin_clz / __builtin_ctz in four .cu files: same header (CUDA __clz/__ffs on device, _BitScan* host);
+     - C99 compound literals `(uint32_t[2]){a, b}` in rv32im mul/mulh/divrem and bigint: std::array temporaries;
+     - GCC's -Wno-maybe-uninitialized passed to cl (D8021) by openvm-circuit / recursion build.rs: only off MSVC.
+     hzengine's own Unix-only code (stdout capture, serve's reply channel) ported to SetStdHandle (71ae6d49).
+     Still to see: the rest of the build, linking, then proving on a real Windows card (Xesktop PRO 6000).
   13. Cards: which GPUs are supported (oldest architecture, minimum memory)? Do consumer cards like a 3060 or 4090 work, and how fast?
+
+     **Partly answered (25.11.2026):** OpenVM's CUDA kernels use `__match_any_sync` (histogram.cuh), which needs
+     **sm_70 (Volta) or newer**: Pascal (GTX 10xx, e.g. the GTX 1050 Ti test laptop) is NOT supported as shipped
+     (build error on sm_61, run 45642025937). Supported: Volta, Turing (RTX 20xx, GTX 16xx), Ampere (RTX 30xx, A40,
+     A6000), Ada (RTX 40xx, L40S), Blackwell (RTX 50xx, PRO 6000). Pascal would need an emulated __match_any_sync for
+     sm_61 (a kernel patch) or the CPU prover. MEASURED so far: A40, RTX A6000, RTX PRO 6000 Blackwell. Minimum
+     memory and consumer-card speed: not yet measured.
   14. Is there a CPU-only prover, and how fast is it?
   15. Reproducible ids: do two clean builds on different machines give the same image id? Can that be pinned the way reproduce/LIBZYNC_IDS is pinned today?
 
