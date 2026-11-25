@@ -1,0 +1,3 @@
+976379ts2_default	rc=0	verify=0	49s	gpu_util=19%	peak_mem=9344MiB
+976379t_default	rc=0	verify=0	48s	gpu_util=18%	peak_mem=901MiB
+976379ts2_default_g2	rc=0	verify=0	51s	gpu_util=18%	peak_mem=985MiB

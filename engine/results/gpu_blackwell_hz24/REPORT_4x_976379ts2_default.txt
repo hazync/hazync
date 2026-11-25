@@ -1,0 +1,12 @@
+trie_part_00: proved 12.3 s (worker 5, done at 15.1 s), journal 136 bytes sha256 d786785ee7b1b258 r0 IDENTICAL
+trie_part_01: proved 10.9 s (worker 3, done at 13.7 s), journal 136 bytes sha256 bf4958a64d8706aa r0 IDENTICAL
+trie_part_02: proved 14.3 s (worker 4, done at 17.1 s), journal 136 bytes sha256 49ae158eb3d8c4fe r0 IDENTICAL
+trie_part_03: proved 12.3 s (worker 1, done at 15.1 s), journal 136 bytes sha256 7c9d1181190e37dd r0 IDENTICAL
+chunk_00: proved 20.2 s (worker 0, done at 23.0 s), journal 426760 bytes sha256 975daaf367bb3f04 r0 IDENTICAL
+chunk_01: proved 20.1 s (worker 6, done at 22.9 s), journal 399980 bytes sha256 423545ebf152b87c r0 IDENTICAL
+chunk_02: proved 15.3 s (worker 7, done at 18.2 s), journal 310180 bytes sha256 c677c75b74d775fb r0 IDENTICAL
+chunk_03: proved 19.1 s (worker 2, done at 22.0 s), journal 511580 bytes sha256 bf86604b4016615b r0 IDENTICAL
+chunk_04: proved 19.6 s (worker 8, done at 22.5 s), journal 630472 bytes sha256 775dee3327600f49 r0 IDENTICAL
+trie split: 4 parts verified by the aggregate (no combine proof), payload 12362 words
+aggregate (9 children verified in-guest): proved 19.0 s, journal 5284 bytes sha256 f2bc583e996e767dc1393cd175f6f9becb9b27b1041241e46758cb3c40b41a9b; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 26.7 s + aggregate 19.0 s = 46.1 s; final proof verified in 0.01 s
