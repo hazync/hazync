@@ -1,0 +1,5 @@
+trie: proved 607.7 s (worker 0, done at 607.7 s), journal 100 bytes sha256 c60f0fa0bcbd2199 r0 IDENTICAL
+chunk_00: proved 388.0 s (worker 1, done at 388.0 s), journal 3732 bytes sha256 c9a5b99b559721dc r0 IDENTICAL
+aggregate: segments spread over this process and 1 segment workers (segpar)
+aggregate (2 children verified in-guest): proved 658.6 s, journal 4076 bytes sha256 9ac1acb33ed0210d00edc362a1b1720107bc3b7eaab34969dee2d6596def7baf; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 608.0 s + aggregate 658.6 s = 1266.9 s; final proof verified in 0.03 s
