@@ -15,6 +15,7 @@ mod block;
 mod capture;
 mod engine;
 mod r0;
+mod segpar;
 mod selftest;
 mod serve;
 

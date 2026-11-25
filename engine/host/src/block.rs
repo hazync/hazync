@@ -21,6 +21,63 @@ fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
     c
 }
 
+/// A `serve` process on one GPU for the aggregate's segments (segpar), started early so its keys are loaded by the
+/// time the aggregate needs it. Share 1, as the aggregate's own process: every side must cut the same segments.
+pub struct Worker {
+    io: std::sync::Mutex<(std::process::ChildStdin, std::io::BufReader<std::process::ChildStdout>, bool)>,
+    child: std::sync::Mutex<std::process::Child>,
+}
+impl Worker {
+    pub fn spawn(dir: &Path, dev: &str) -> Result<Worker> {
+        use std::process::{Command, Stdio};
+        let mut ch = Command::new(std::env::current_exe()?)
+            .args(["serve", "--dir"]).arg(dir)
+            .env("HZ_GPU_SHARE", "1").env("CUDA_VISIBLE_DEVICES", dev)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn()?;
+        let (i, o) = (ch.stdin.take().unwrap(), std::io::BufReader::new(ch.stdout.take().unwrap()));
+        Ok(Worker { io: std::sync::Mutex::new((i, o, false)), child: std::sync::Mutex::new(ch) })
+    }
+    /// Segments lo..hi of the program on the serialized stdin at `input`, their proofs to `out`; returns how many
+    /// segments the worker cut in all.
+    pub fn prove_segments(&self, input: &Path, lo: usize, hi: usize, out: &Path) -> Result<usize> {
+        use std::io::{BufRead, Write};
+        let mut g = self.io.lock().unwrap();
+        let (stdin, rd, ready) = &mut *g;
+        if !*ready {
+            let mut l = String::new();
+            rd.read_line(&mut l)?;
+            ensure!(l.contains("\"ready\":true"), "segment worker did not start: {l}");
+            *ready = true;
+        }
+        let req = serde_json::json!({"op": "prove_segments", "input": input, "lo": lo, "hi": hi, "out": out});
+        writeln!(stdin, "{req}")?;
+        stdin.flush()?;
+        let mut r = String::new();
+        rd.read_line(&mut r)?;
+        let v: serde_json::Value = serde_json::from_str(&r).map_err(|err| eyre::eyre!("segment worker reply {r:?}: {err}"))?;
+        ensure!(v["ok"] == true, "segment worker: {r}");
+        Ok(v["segments"].as_u64().unwrap_or(0) as usize)
+    }
+}
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let mut c = self.child.lock().unwrap();
+        let _ = c.kill();
+        let _ = c.wait();
+    }
+}
+
+/// Segment workers for the aggregate: one per GPU other than this process's first (HZ_SEGPAR=0: none).
+fn segment_workers(dir: &Path) -> Vec<Worker> {
+    if std::env::var("HZ_SEGPAR").is_ok_and(|v| v == "0") { return vec![]; }
+    let gpus = crate::engine::gpu_count();
+    let devs: Vec<String> = match std::env::var("CUDA_VISIBLE_DEVICES") {
+        Ok(v) => v.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+        Err(_) => (0..gpus).map(|g| g.to_string()).collect(),
+    };
+    devs.iter().skip(1).filter_map(|d| Worker::spawn(dir, d).map_err(|err| eprintln!("segpar: worker on {d}: {err}")).ok()).collect()
+}
+
 /// One leaf-level proof for `leaves_parallel`: `children` (names of earlier jobs, verified in-guest in that order) and
 /// `self_id` as the serve request's; it starts once every job in `deps` is proved.
 struct Job { name: String, input: PathBuf, children: Vec<String>, self_id: bool, deps: Vec<usize> }
@@ -135,6 +192,8 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         write_proof(&out.join(&name), proof.clone(), &journal)?;
         Ok((proof, journal))
     };
+    // the aggregate's segment workers, loading their keys while the leaves prove
+    let segw = segment_workers(dir);
     let mut children = Vec::new();
     // a split trie update (engine-export with HAZYNC_TRIE_SPLIT): parts, then a combine verifying them, in place of trie
     let parts: usize = match std::fs::read_to_string(export.join("trie_parts")) {
@@ -256,7 +315,15 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     e.attach_children(&baseline, &mut emit, &children)?;
     let defs = e.attach_children(&baseline, &mut prv, &children)?;
     let t = Instant::now();
-    let (proof, journal) = e.prove(exe, emit, prv, &defs)?;
+    let (proof, journal) = if segw.is_empty() {
+        e.prove(exe, emit, prv, &defs)?
+    } else {
+        let line = format!("aggregate: segments spread over this process and {} segment workers (segpar)\n", segw.len());
+        eprint!("{line}");
+        report.push_str(&line);
+        e.prove_split(exe, emit, prv, &defs, &out.join("agg.stdin"), &segw)?
+    };
+    drop(segw);
     let t_agg = t.elapsed().as_secs_f64();
     let t = Instant::now();
     Sdk::verify_proof(e.agg_vk.as_ref().clone(), baseline.clone(), &proof)?;

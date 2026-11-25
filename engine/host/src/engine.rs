@@ -288,6 +288,32 @@ impl Engine {
     }
 }
 
+impl Engine {
+    /// As `prove`, with the app proof's segments spread over `workers` and this process (segpar).
+    pub fn prove_split(
+        &self,
+        exe: Arc<VmExe<F>>,
+        emit: StdIn,
+        prove: StdIn,
+        def_inputs: &[DeferralInput],
+        stdin_file: &Path,
+        workers: &[crate::block::Worker],
+    ) -> Result<(VmStarkProof, Vec<u8>)> {
+        let t = std::time::Instant::now();
+        let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));
+        let pvs = pvs?;
+        let journal = crate::capture::journal_of(&out);
+        ensure!(pvs == Sha256::digest(&journal).as_slice(), "emitted journal does not match the public values");
+        eprintln!("execute: {:.1} s, journal {} bytes", t.elapsed().as_secs_f64(), journal.len());
+        let t = std::time::Instant::now();
+        let (proof, baseline) = crate::segpar::prove(self, exe, prove, def_inputs, stdin_file, workers)?;
+        eprintln!("prove (segpar): {:.1} s", t.elapsed().as_secs_f64());
+        let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
+        ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");
+        Ok((proof, journal))
+    }
+}
+
 pub struct ChildCall {
     pub input_commit: [u8; 32],
     pub exe: [u8; 32],
