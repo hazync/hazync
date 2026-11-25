@@ -242,8 +242,39 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   E. Migration
   20. What has to be rebuilt? Cover the zAPPs (headers, hints, utreexo, deposit, assume, liveness, statement), the verifiers, the board and coordinator, the
   worker and the Windows app, the release tooling and the site pins.
+
+     **Answer (25.11.2026, inventory; ESTIMATED effort):**
+     - Core guest: done (the engine guest is the product source + engine/guest edits + engine/platform).
+     - zAPP guests (zapps/: assume, corecheck, deposit, headers, hints, liveness, statement, utreexo): each a guest
+       to build on engine/platform the same way, and its env::verify of a core proof re-pointed at the engine image.
+       Their LOGIC stays (Q21: the core journals are byte-identical).
+     - Verifiers: native (hzengine verify exists), WASM (probe works, Q11: needs the image/journal checks, the patch
+       upstreamed or carried), the site's verifier page, swiftsync-verify / zapp verifiers that pin image ids.
+     - Host side: product host already has the engine backend (HAZYNC_ENGINE: libzync-prove-range / join / verify
+       through hzengine serve); the board, coordinator and worker would run hzengine (CUDA) instead of the RISC Zero
+       prover; Windows app + Windows CUDA build: NOT TRIED (Q12).
+     - Release tooling: reproducible build container for the engine guest (Q15), id pins (reproduce/LIBZYNC_IDS ->
+       engine ids), GPU test matrix (Linux A40/A6000/Blackwell measured; Windows, consumer cards not).
   21. Which commitments and formats can stay byte-identical, so existing tools and zAPP logic carry over?
+
+     **Answer (MEASURED):** every chunk, trie and part journal, and every aggregate journal except its 32-byte image
+     id, is byte-identical to RISC Zero's on every block run (976,379, 962,000, 741,000, 364,292, 130,000, the genesis
+     chain): the chain state, coin log roots, trie roots, ECMH set hash, txlog and the update-list digests are the same
+     commitments. What changes: the image id(s), the proof format (OpenVM VmStarkProof, ~229 KB compressed vs a RISC
+     Zero receipt), and the verifier. So zAPP logic over the journals carries over; anything that pins an image id or
+     parses a receipt changes.
   22. What's the plan for re-proving from genesis, and does the existing risc0 chain proof have any role in it?
+
+     **Answer (25.11.2026; options, ESTIMATED):**
+     - Re-prove from genesis on the engine: the engine starts at genesis already (handover stubbed, edit 1;
+       results/cpu_chain_genesis). Cost: Q16; the early chain is dominated by per-proof fixed cost, so multi-block
+       proofs for small blocks are the lever (not built).
+     - Use the RISC Zero chain proof (a handover): OpenVM has a pairing extension (BN254, guest-libs/pairing), so an
+       engine guest could verify a RISC Zero receipt COMPRESSED TO GROTH16 (RISC Zero's own STARK-to-SNARK step) and
+       continue from its chain state at height H. That keeps the existing proof's value and avoids re-proving
+       1..H. Needs: the Groth16 verifier in the engine guest (BN254 pairing on OpenVM's extension), RISC Zero's
+       verifying key pinned, and a review. Not built.
+       (The trust then includes RISC Zero's Groth16 setup and prover for 1..H.)
   23. Does the engine support composition, so a zAPP can verify a core proof inside its own proof as it does today?
 
      **Answer (25.11.2026): YES for the mechanism, MEASURED on CPU; zAPP guests themselves not yet ported.**
@@ -256,5 +287,22 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        guest: its source + engine/platform), then the same env::verify of a core proof. Not done yet (Q20).
   24. What does it cost to maintain over time? Do we follow upstream OpenVM releases, and what happens to image ids when we do?
 
+     **Answer (25.11.2026):**
+     - Our own code on top of OpenVM: engine/platform (RISC Zero API shim, sha2/crypto shims, ~500 lines), the guest
+       edits (edits.py, each anchored so a product change fails loudly), C patches (core-0201/0202, secp-0201/0202),
+       msm_ovm.rs/batch_ecdsa_ovm.rs, hzengine (host). Plus, for WASM, one line patched out of openvm-circuit.
+     - Upstream: OpenVM patch releases keep the verifying key (their VERSIONING), so a patch upgrade should keep our
+       image ids; a minor release (2.1 -> 2.2) may change keys and ids. An id change needs a handover between engine
+       images: verifying the old image's proofs in the new guest works if the old aggregation key can still be
+       verified by the new verify-stark (UNKNOWN across OpenVM minors; to test at the next release).
+
   F. The deciding question
   25. Which of the above, if it came back badly, would rule the switch out, and which are just work?
+
+     **Draft (25.11.2026), to settle with the user:**
+     - Could rule it out: Q1 (if the v2.1.0 changes to the deferral/recursion path or the ECC extensions turned out
+       unreviewed AND the OpenVM team will not cover them), Q9 (any verdict differing from RISC Zero / Core on the
+       test vectors), Q7 (a Core-valid block the engine cannot prove at all).
+       So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 running; Q7 untested.
+     - Just work: Q11 (WASM: the probe works), Q15 (ids: fixed on one machine, container next), Q12/Q13 (Windows,
+       consumer cards), Q16-Q19 (cost/speed: measured strong), Q20-Q24 (migration).
