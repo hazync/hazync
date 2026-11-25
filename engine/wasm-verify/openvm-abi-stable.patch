@@ -1,0 +1,18 @@
+--- a/crates/vm/Cargo.toml
++++ b/crates/vm/Cargo.toml
+@@ -43,7 +43,6 @@
+ cfg-if.workspace = true
+ libloading = { workspace = true, optional = true }
+ tempfile = { workspace = true, optional = true }
+-abi_stable.workspace = true
+ bytesize.workspace = true
+ 
+ [build-dependencies]
+--- a/crates/vm/src/arch/execution_mode/metered/memory_ctx.rs
++++ b/crates/vm/src/arch/execution_mode/metered/memory_ctx.rs
+@@ -1,4 +1,4 @@
+-use abi_stable::std_types::RVec;
++type RVec<T> = Vec<T>; // wasm probe: abi_stable dropped
+ use openvm_instructions::riscv::{RV32_NUM_REGISTERS, RV32_REGISTER_AS, RV32_REGISTER_NUM_LIMBS};
+ 
+ use crate::{

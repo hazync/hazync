@@ -1,0 +1,14 @@
+[package]
+name = "wasmv"
+version = "0.1.0"
+edition = "2021"
+[lib]
+crate-type = ["cdylib", "rlib"]
+[dependencies]
+openvm-verify-stark-host = { path = "../../../openvm-wasm/crates/verify"  # OpenVM v2.1.0 + openvm-abi-stable.patch }
+
+getrandom02 = { package = "getrandom", version = "0.2", features = ["js"] }
+getrandom03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+bitcode = { version = "0.6", features = ["serde"] }
+wasm-bindgen = "=0.2.130"
+[workspace]
