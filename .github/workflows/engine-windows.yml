@@ -284,7 +284,7 @@ jobs:
 
       - name: OpenVM stark-backend with the engine's MSVC patches (engine/ci/openvm-patches.sh)
         shell: bash
-        run: bash engine/ci/openvm-patches.sh "$RUNNER_TEMP/stark-backend"
+        run: bash engine/ci/openvm-patches.sh "$RUNNER_TEMP/openvm-src"
 
       - name: Build hzengine with CUDA
         shell: bash

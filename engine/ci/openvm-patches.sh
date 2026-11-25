@@ -21,7 +21,13 @@ repo() {
   [ -n "$rev" ] || { echo "no $name rev in Cargo.lock" >&2; exit 1; }
   src=$(ls -d "$CH"/git/checkouts/"$name"-*/"$rev" | head -1)
   [ -d "$src" ] || { echo "no checkout of $name $rev under $CH" >&2; exit 1; }
-  out="$DST/$name"; rm -rf "$out"; cp -r "$src" "$out"
+  out="$DST/$name"; rm -rf "$out"
+  # Windows (Git bash) cannot recreate the repos' symbolic links (openvm's docs snippets, a riscv-tests header): those
+  # are not part of any crate we build, so only that failure is tolerated; anything else stops here.
+  if ! cp -r "$src" "$out" 2> "$DST/cp-$name.err"; then
+    if grep -v "cannot create symbolic link" "$DST/cp-$name.err" | grep -q .; then cat "$DST/cp-$name.err" >&2; exit 1; fi
+    echo "$name: $(wc -l < "$DST/cp-$name.err") symbolic links not copied (not in any built crate)"
+  fi
   for p in "$CI"/"$prefix"-*.patch; do (cd "$out" && patch -p1 --forward < "$p"); echo "$name: applied $(basename "$p")"; done
   d=$out; command -v cygpath >/dev/null && d=$(cygpath -m "$out")
   echo "[patch.\"$url\"]" >> "$H/.cargo/config.toml"
