@@ -116,11 +116,16 @@ pub fn prove(
     stdin_file: &Path,
     workers: &[crate::block::Worker],
 ) -> Result<(VmStarkProof, openvm_verify_stark_host::vk::VerificationBaseline)> {
+    let t0 = std::time::Instant::now();
+    let lap = |what: &str| eprintln!("segpar: {what} at {:.2} s", t0.elapsed().as_secs_f64());
     let mut prover = e.sdk.prover(exe.clone())?;
+    lap("stark prover");
     let has_deferrals = prover.deferral_setup.hook_commit().is_some();
     let memory_dimensions = prover.app_prover.memory_dimensions();
     let mut inst = instance(e, exe)?;
+    lap("instance");
     let segs = segments(&mut inst, &prove)?;
+    lap("metered execution");
     let runs = plan(&segs, workers.len() + 1);
     let mine = *runs.last().unwrap();
     eprintln!("segpar: {} segments, runs {:?} ({} on workers, the last here)", segs.len(), runs, runs.len() - 1);
@@ -128,7 +133,9 @@ pub fn prove(
     let initial_tree = has_deferrals.then(|| {
         MerkleTree::from_memory(&inst.state().as_ref().unwrap().memory.memory, &memory_dimensions, &vm_poseidon2_hasher())
     });
+    lap("initial memory tree");
     write_object_to_file(stdin_file, &prove)?;
+    lap("stdin written");
     let tmp = stdin_file.with_extension("segs");
     std::fs::create_dir_all(&tmp)?;
     let n_segs = segs.len();
@@ -141,6 +148,7 @@ pub fn prove(
                 let out = tmp.join(format!("run{i}.bin"));
                 s.spawn(move || -> Result<Vec<Proof<SC>>> {
                     let n = w.prove_segments(stdin_file, lo, hi, &out)?;
+                    lap(&format!("worker run {lo}..{hi} done"));
                     ensure!(n == n_segs, "a worker cut {n} segments, this process {n_segs}");
                     let p: Vec<Proof<SC>> = read_object_from_file(&out)?;
                     ensure!(p.len() == hi - lo, "worker run {lo}..{hi}: {} proofs", p.len());
@@ -150,6 +158,7 @@ pub fn prove(
             .collect();
         // this process's run (the last), while the workers prove theirs
         let ours = run(&mut inst, &segs, mine.0, mine.1);
+        lap(&format!("own run {}..{} done", mine.0, mine.1));
         let mut all = Vec::new();
         for h in hs {
             match h.join() {
@@ -177,9 +186,11 @@ pub fn prove(
         top,
     );
     let continuation_proof = ContinuationVmProof { per_segment, user_public_values };
+    lap("app proof assembled");
 
     // StarkProver::prove from here on, unchanged
     let (mut stark_proof, mut internal_metadata) = prover.agg_prover.prove_vm(continuation_proof)?;
+    lap("leaf/internal aggregation");
     if def_inputs.iter().any(|input| !input.is_empty()) {
         let def_agg_prover = prover
             .deferral_setup
@@ -190,7 +201,9 @@ pub fn prove(
         stark_proof =
             prover.agg_prover.prove_mixed(stark_proof, def_proof, &mut internal_metadata, def_internal_recursive_layer)?;
     }
+    lap("deferral proofs");
     stark_proof = prover.agg_prover.wrap_proof(stark_proof, &mut internal_metadata)?;
+    lap("wrap");
     if has_deferrals {
         let final_tree = MerkleTree::from_memory(final_memory, &memory_dimensions, &vm_poseidon2_hasher());
         let def_pvs: &DeferralPvs<F> = std::borrow::Borrow::borrow(stark_proof.inner.public_values[DEF_PVS_AIR_ID].as_slice());
@@ -202,6 +215,7 @@ pub fn prove(
             depth,
         ));
     }
+    lap("deferral merkle proofs");
     let baseline = prover.generate_baseline();
     Ok((stark_proof, baseline))
 }

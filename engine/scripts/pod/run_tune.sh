@@ -8,7 +8,7 @@ mkdir -p out; H=host/target/release/hzengine; T=out/times.tsv
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader > out/gpu.txt
 for j in ${JOBS:-}; do
   IFS=: read -r x w g <<< "$j"; ng=""; sp=""
-  case $x in *~) sp=_noseg; x=${x%~};; esac
+  case $x in *\~) sp=_noseg; x=${x%\~};; esac
   if [ -n "$sp" ]; then export HZ_SEGPAR=0; else unset HZ_SEGPAR; fi
   case $x in *@*) ng=${x#*@}; x=${x%@*};; esac
   if [ -n "$ng" ]; then export CUDA_VISIBLE_DEVICES=$(seq -s, 0 $((ng-1))); else unset CUDA_VISIBLE_DEVICES; fi
