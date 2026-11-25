@@ -182,3 +182,46 @@
      }
  
      __device__ RowSlice ending_full_post(size_t round) const {
+--- a/crates/recursion/cuda/include/switch_macro.h
++++ b/crates/recursion/cuda/include/switch_macro.h
+@@ -24,6 +24,10 @@
+     APPLY_CASES_7(name, body, c1, c2, c3, c4, c5, c6, c7) CASE_BLOCK(c8, name, body)
+ 
+ #define GET_MACRO(_1, _2, _3, _4, _5, _6, _7, _8, NAME, ...) NAME
++// engine (MSVC): MSVC's traditional preprocessor passes __VA_ARGS__ on as ONE argument, so GET_MACRO picked
++// APPLY_CASES_1 with "1, 2, ..., 8" as its case. An identity re-scan fixes that; a conforming preprocessor (GCC)
++// produces the same tokens either way.
++#define HZ_EXPAND(x) x
+ 
+ // Dispatches a runtime `value` into a switch statement where each case binds the value as a
+ // compile-time `constexpr`, allowing it to be used as a template parameter. The caller supplies
+@@ -34,7 +38,7 @@
+ // if new use cases require additional cases.
+ #define SWITCH_BLOCK(value, name, body, ...)                                                                                                            \
+     switch (value) {                                                                                                                                    \
+-        GET_MACRO(__VA_ARGS__, APPLY_CASES_8, APPLY_CASES_7, APPLY_CASES_6, APPLY_CASES_5, APPLY_CASES_4, APPLY_CASES_3, APPLY_CASES_2, APPLY_CASES_1)( \
++        HZ_EXPAND(HZ_EXPAND(GET_MACRO(__VA_ARGS__, APPLY_CASES_8, APPLY_CASES_7, APPLY_CASES_6, APPLY_CASES_5, APPLY_CASES_4, APPLY_CASES_3, APPLY_CASES_2, APPLY_CASES_1))( \
+             name, body, __VA_ARGS__                                                                                                                     \
+-        ) default : return cudaErrorInvalidConfiguration;                                                                                               \
++        )) default : return cudaErrorInvalidConfiguration;                                                                                              \
+     }
+--- a/crates/recursion/cuda/src/scan.cu
++++ b/crates/recursion/cuda/src/scan.cu
+@@ -9,6 +9,17 @@
+ #include <driver_types.h>
+ #include <thrust/iterator/reverse_iterator.h>
+ 
++#if defined(_MSC_VER)
++// engine (MSVC): InclusiveSum deduces its accumulator from cuda::std::plus<>(Fp, Fp), and Fp's + is a device-only
++// friend (sppark defines `inline` as __device__ __forceinline__): under MSVC that deduction fails. The same sum
++// through InclusiveScan with an operator whose return type is spelled out; field addition is exact, so the scan
++// gives the same values.
++struct HzFpSum {
++    template <typename T> __host__ __device__ __forceinline__ T operator()(const T &a, const T &b) const { return a + b; }
++};
++#define InclusiveSum(TEMP, BYTES, IN, OUT, N, STREAM) InclusiveScan(TEMP, BYTES, IN, OUT, HzFpSum{}, N, STREAM)
++#endif
++
+ __host__ int prefix_scan(Fp *d_arr, size_t n, void *d_temp, size_t temp_n, cudaStream_t stream) {
+     if (!d_arr || n == 0) {
+         return 0;
