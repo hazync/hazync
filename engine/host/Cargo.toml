@@ -19,7 +19,6 @@ eyre = "0.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
-libc = "0.2"
 sha2 = "0.10"
 openvm-build = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-sdk = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
@@ -38,3 +37,10 @@ profile = ["openvm-sdk/perf-metrics", "openvm-sdk/metrics", "openvm-stark-sdk/me
 
 [profile.release]
 debug = 1
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# Windows (FEASIBILITY Q12): stdout redirection through the process's standard handles (capture.rs, serve.rs)
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
