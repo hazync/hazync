@@ -1,1 +1,2 @@
 request 1, 25.11.2026: first Windows CUDA build of hzengine (CUDA_ARCH 61,75,80,86,89,120)
+request 2, 25.11.2026: stark-backend MSVC patch (vpmm_shim designated initializers) + msvc_builtins.h (__builtin_clz/ctz)

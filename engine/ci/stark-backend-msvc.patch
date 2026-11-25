@@ -1,0 +1,21 @@
+--- a/crates/cuda-common/cuda/src/vpmm_shim.cu
++++ b/crates/cuda-common/cuda/src/vpmm_shim.cu
+@@ -55,13 +55,11 @@
+ }
+ 
+ int _vpmm_set_access(CUdeviceptr va, size_t bytes, const int device_ordinal) {
+-    const CUmemAccessDesc acc = {
+-        .location = {
+-            .type = CU_MEM_LOCATION_TYPE_DEVICE,
+-            .id = device_ordinal
+-        },
+-        .flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE
+-    };
++    // member assignments rather than C++20 designated initializers: MSVC (Windows) rejects those under --std=c++17
++    CUmemAccessDesc acc{};
++    acc.location.type = CU_MEM_LOCATION_TYPE_DEVICE;
++    acc.location.id = device_ordinal;
++    acc.flags = CU_MEM_ACCESS_FLAGS_PROT_READWRITE;
+     return (int)cuMemSetAccess(va, bytes, &acc, 1);
+ }
+ 

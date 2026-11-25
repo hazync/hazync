@@ -282,19 +282,28 @@ jobs:
           # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
           "$PROTOC_EXE" --version
 
+      - name: OpenVM stark-backend with the engine's MSVC patches (engine/ci/openvm-patches.sh)
+        shell: bash
+        run: bash engine/ci/openvm-patches.sh "$RUNNER_TEMP/stark-backend"
+
       - name: Build hzengine with CUDA
         shell: bash
         env:
           ARCHS: ${{ inputs.cuda_arch || '61,75,80,86,89,120' }}
         run: |
-          set -o pipefail
+          set +e
           export CUDA_ARCH="$ARCHS" CUDA_LIB_DIR="$CUDA_PATH\lib\x64"
-          echo "CUDA_ARCH=$CUDA_ARCH CUDA_LIB_DIR=$CUDA_LIB_DIR NVCC_CCBIN=${NVCC_CCBIN:-} supported=${CUDA_HOST_SUPPORTED:-}"
-          cd engine/host
-          # the whole log is kept: the error of a failed cargo build sits ABOVE the trailing warnings
-          cargo +1.91.1 build --release --locked --features cuda > ../../build.log 2>&1; rc=$?
+          # GCC builtins OpenVM's CUDA sources use, for MSVC (engine/ci/msvc_builtins.h)
+          NVCC_APPEND_FLAGS="--pre-include $(cygpath -m "$PWD/engine/ci/msvc_builtins.h")"
+          export NVCC_APPEND_FLAGS
+          echo "CUDA_ARCH=$CUDA_ARCH CUDA_LIB_DIR=$CUDA_LIB_DIR NVCC_CCBIN=${NVCC_CCBIN:-} supported=${CUDA_HOST_SUPPORTED:-} NVCC_APPEND_FLAGS=$NVCC_APPEND_FLAGS"
+          cd engine/host || exit 1
+          # not --locked: the stark-backend [patch] moves those crates' lock entries to the patched path.
+          # The whole log is kept: the error of a failed cargo build sits ABOVE the trailing warnings.
+          cargo +1.91.1 build --release --features cuda > ../../build.log 2>&1
+          rc=$?
           echo "cargo rc=$rc"
-          grep -n "^error\|error\[\|error:" ../../build.log | head -40 || true
+          grep -n "error" ../../build.log | grep -v "thiserror" | head -60
           exit $rc
 
       - name: The binary runs, and what it imports
