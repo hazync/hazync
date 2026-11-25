@@ -147,6 +147,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        of memory is re-split; mem_k1140 (regtest block 126) then proves in 7 chunks on RISC Zero (dev mode,
        /root/oomfix/runs/mem_k1140.log). The engine needs the same re-split in its own chunking (engine-export /
        prove-block cut chunks by cost, not memory): TO DO.
+     - FOUND (25.11.2026): #795 (874454fc, on main, NOT yet on engine/openvm) detects a guest out of memory by RISC
+       Zero's exact panic text ("Out of memory! You have been using the default bump allocator ...", lz.rs
+       `is_guest_oom`). OpenVM's allocator says "ERROR: Maximum memory exceeded, program terminating." and exits 1
+       (openvm-platform heap/bump.rs). On the engine the re-split would never trigger: `is_guest_oom` must also
+       recognise OpenVM's message (as reported by hzengine) when the branch takes #795. Small, but required.
      - Test plan: regtest engine guest (Cargo feature `regtest` exists in engine/guest/Cargo.toml.in), product host
        built HAZYNC_NETWORK=regtest, block JSON from worst.py's regtest node (mkblock.py), engine-export, then execute
        every chunk on the engine (CPU) and compare journals; the single-tapscript and SIGHASH_NONE cases likewise.
