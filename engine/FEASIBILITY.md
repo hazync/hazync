@@ -182,6 +182,21 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   14. Is there a CPU-only prover, and how fast is it?
   15. Reproducible ids: do two clean builds on different machines give the same image id? Can that be pinned the way reproduce/LIBZYNC_IDS is pinned today?
 
+     **Answer (25.11.2026): MEASURED on one machine, two setups.**
+     - Before (d4893fac-era host): the same commit built twice on the build box, once at another path with another
+       CARGO_HOME, gave DIFFERENT exe commitments (a1112967... vs 532c4d1b...; vm commitment equal). Strings in the
+       program named /root/.rustup (std sources), the CARGO_HOME (git deps), the C/C++ base tree (Core's __FILE__),
+       the assembled tree and the engine kit.
+     - Fix d1190c2a: `--remap-path-prefix` for CARGO_HOME, RUSTUP_HOME, the assembled tree and the engine kit
+       (engine.rs `remap_flags`), `-ffile-prefix-map` for the base and the tree (engine/guest/build.rs).
+     - After: the two builds are **byte-identical** (guest.vmexe cmp equal), exe e635105e3b569a54...,
+       vm 00e00077450a5a56... (repro2.out on the build box).
+     - Not yet tested: a second machine. Remaining inputs that must match: the Rust nightly (nightly-2026-02-28, from
+       OpenVM's toolchain pin), the riscv32 gcc/g++ 13.2 (~/.risc0/cpp; its own baked-in source paths are constant
+       strings like /home/flaub/src, the same in every copy), the base tree's sources (base.sh: pinned Core v28.0 and
+       libsecp v0.5.1 plus the patches) and OpenVM v2.1.0. A container build (as the product's reproduce/ does) pins
+       all of these; with it, the ids can be pinned the same way reproduce/LIBZYNC_IDS is.
+
   D. Cost and speed
   16. What is the whole-chain cost, from genesis to the tip, in GPU-hours and dollars? Use measured per-block costs across eras, and say which blocks the
   estimate rests on.
