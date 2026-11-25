@@ -157,6 +157,12 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        every chunk on the engine (CPU) and compare journals; the single-tapscript and SIGHASH_NONE cases likewise.
   8. Does it prove an old block with many inputs (364,292), plus a few of the edge blocks from blocks.sh?
   9. Do all 22,666 Core test vectors and the 97 rig cases pass with verdicts identical to risc0's?
+
+     **Answer (25.11.2026): Core vectors MEASURED, all identical; rig cases NOT YET.** All 22,666 of Core's script and
+     transaction vectors through mode 10 on both: 21,987 cases with a verdict (176 streams) IDENTICAL, 0 differing;
+     the 679 cases RISC Zero's guest aborts on are refused by the engine too (0 accepted), and no engine-only abort
+     (results/core_vectors). The 97 rig cases (real Core + regtest guest on crafted blocks) need a regtest engine
+     build, like Q7.
   10. What are the limits on memory, cycles per segment and input size, and where do they come from?
 
      **Answer (25.11.2026, from OpenVM v2.1.0's source and the engine; MEASURED where marked):**
@@ -308,6 +314,6 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      - Could rule it out: Q1 (if the v2.1.0 changes to the deferral/recursion path or the ECC extensions turned out
        unreviewed AND the OpenVM team will not cover them), Q9 (any verdict differing from RISC Zero / Core on the
        test vectors), Q7 (a Core-valid block the engine cannot prove at all).
-       So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 running; Q7 untested.
+       So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 Core vectors ALL IDENTICAL (rig cases to do); Q7 untested.
      - Just work: Q11 (WASM: the probe works), Q15 (ids: fixed on one machine, container next), Q12/Q13 (Windows,
        consumer cards), Q16-Q19 (cost/speed: measured strong), Q20-Q24 (migration).
