@@ -225,3 +225,33 @@
  __host__ int prefix_scan(Fp *d_arr, size_t n, void *d_temp, size_t temp_n, cudaStream_t stream) {
      if (!d_arr || n == 0) {
          return 0;
+--- a/crates/recursion/cuda/src/stacking/opening.cu
++++ b/crates/recursion/cuda/src/stacking/opening.cu
+@@ -17,6 +17,16 @@
+ #include <cub/device/device_scan.cuh>
+ #include <driver_types.h>
+ 
++#if defined(_MSC_VER)
++// engine (MSVC): ExclusiveSum deduces its accumulator from cuda::std::plus<>(Fp, Fp), and Fp's + is a device-only
++// friend: under MSVC that deduction fails (as in scan.cu). The same scan through ExclusiveScan with an operator whose
++// return type is spelled out and Fp() (zero, ExclusiveSum's initial value); field addition is exact: same values.
++struct HzFpSum {
++    template <typename T> __host__ __device__ __forceinline__ T operator()(const T &a, const T &b) const { return a + b; }
++};
++#define ExclusiveSum(TEMP, BYTES, IN, OUT, N, STREAM) ExclusiveScan(TEMP, BYTES, IN, OUT, HzFpSum{}, Fp(), N, STREAM)
++#endif
++
+ template <typename T> struct OpeningClaimsCols {
+     T proof_idx;
+     T is_valid;
+--- a/crates/recursion/cuda/src/whir/initial_opened_values.cu
++++ b/crates/recursion/cuda/src/whir/initial_opened_values.cu
+@@ -122,7 +122,7 @@
+     } else {
+         const size_t total_width = stacking_widths_psums[cp_start + commit_idx + 1] -
+                                    stacking_widths_psums[cp_start + commit_idx];
+-        chunk_len = (total_width % CHUNK ?: CHUNK);
++        chunk_len = (total_width % CHUNK ? total_width % CHUNK : CHUNK); // engine: no GNU `?:` (MSVC)
+     };
+ 
+     COL_WRITE_VALUE(row, InitialOpenedValuesCols, proof_idx, proof_idx);
