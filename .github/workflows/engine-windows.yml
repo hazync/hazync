@@ -1,0 +1,321 @@
+name: engine-windows
+# The OpenVM engine's prover (hzengine.exe, engine/host) built for Windows with CUDA (engine/FEASIBILITY.md Q12).
+# Dispatch only: Windows minutes bill 2x (docs: CI minutes cost money). Builds for every GPU generation from Pascal
+# (sm_61, the GTX 1050 Ti) to Blackwell (sm_120) unless told otherwise, checks the binary runs and which DLLs it
+# imports, and uploads it with the CUDA runtime it needs. Proving happens on a real card (Xesktop, the 1050 Ti laptop).
+# The MSVC, CUDA and protoc steps are windows-prove.yml's, copied as they are (their comments explain each choice).
+
+on:
+  # On the engine branch a run is requested by changing engine/ci/windows-build.request (dispatch needs the workflow on
+  # the default branch). Nothing else triggers it, so every run is deliberate.
+  push:
+    branches: [engine/openvm]
+    paths:
+      - 'engine/ci/windows-build.request'
+  workflow_dispatch:
+    inputs:
+      cuda_arch:
+        description: "GPU architectures, comma-separated (CUDA_ARCH)"
+        default: "61,75,80,86,89,120"
+      toolset:
+        description: "MSVC toolset prefix (blank = the newest CUDA 12.9 supports)"
+        default: ''
+      cuda:
+        description: "CUDA redist set"
+        default: '12.9.1'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: 1.91.1
+
+      - name: Put MSVC on PATH, preferring a toolset CUDA 12.9 supports
+        shell: pwsh
+        # ⛔⛔ THE DISPATCH INPUT COMES THROUGH env:, NOT SPLICED INTO THE SCRIPT — and this is the
+        # vector for real, not the benign case. `inputs.toolset` is operator-supplied, so anyone
+        # with write access chooses the string; GitHub substitutes ${{ }} BEFORE pwsh parses the
+        # block, so a value with shell metacharacters would execute as code. That is exactly how
+        # release-sign.yml once took a release tag while holding GPG_PRIVATE_KEY.
+        # ⚠ I wrote the interpolated form here one commit after fixing the same thing in #640, and
+        # check-workflow-injection.sh caught it locally before it was pushed. The gate is load-bearing.
+        env:
+          TOOLSET: ${{ inputs.toolset }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) { throw "vswhere not found at $vswhere" }
+          $vs = & $vswhere -latest -products * `
+                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+                  -property installationPath
+          if (-not $vs) { throw "no VC x86/x64 toolset found" }
+          $bat = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
+          if (-not (Test-Path $bat)) { throw "no vcvars64.bat at $bat" }
+
+          # Which toolsets are actually installed?
+          $tsRoot = Join-Path $vs 'VC\Tools\MSVC'
+          $all = @()
+          if (Test-Path $tsRoot) {
+            $all = Get-ChildItem $tsRoot -Directory | ForEach-Object { $_.Name } | Sort-Object
+          }
+          Write-Host "installed MSVC toolsets: $($all -join ', ')"
+
+          # CUDA 12.9 accepts VS 2017-2022 == MSVC 14.1x-14.4x. Take the NEWEST such toolset.
+          # CUDA 12.9 accepts VS 2017-2022 == MSVC 14.1x-14.4x. Default: the NEWEST such toolset.
+          $eligible = $all | Where-Object {
+            $p = $_.Split('.'); [int]$p[0] -eq 14 -and [int]$p[1] -lt 50
+          } | Sort-Object { [version]$_ }
+          # ⛔⛔ AN EXACT PREFIX IS SELECTABLE, BECAUSE "newest supported" IS A GUESS ABOUT WHICH
+          # ONE WORKS. Run 37021932694 reached ZERO compilation errors on 14.44 and still died with
+          # `cudafe++ died with status 0xC0000005 (ACCESS_VIOLATION)` on all seven .cu files — a
+          # crash inside NVIDIA's closed-source front end, on a toolset CUDA DECLARES supported.
+          # 14.29 (VS 2019) is also installed here and is a different front-end/host pairing, so it
+          # is worth one run. ⚠ This is an experiment, not a fix: if it also crashes, the blocker is
+          # upstream and no toolset on this runner will move it.
+          $want = $env:TOOLSET
+          if ($want -and $want -ne 'newest-supported') {
+            $pick = $eligible | Where-Object { $_.StartsWith($want) } | Select-Object -Last 1
+            if (-not $pick) {
+              Write-Host "requested toolset '$want' is not installed; have: $($all -join ', ')"
+              exit 1
+            }
+            $supported = $pick
+            Write-Host "toolset pinned by dispatch input: $want -> $supported"
+          } else {
+            $supported = $eligible | Select-Object -Last 1
+          }
+
+          $vcvarsArgs = @()
+          if ($supported) {
+            # -vcvars_ver takes major.minor, e.g. 14.44
+            $mm = ($supported.Split('.')[0..1]) -join '.'
+            $vcvarsArgs += "-vcvars_ver=$mm"
+            Write-Host "SELECTED toolset $supported (CUDA 12.9 supports this)"
+            "CUDA_HOST_SUPPORTED=1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            # ⛔⛔ PUTTING cl.exe ON PATH IS NOT ENOUGH, AND RUN 37016761710 PROVES IT. vcvars
+            # selected 14.44 and `cl.exe` reported 19.44 — yet nvcc was still invoked as
+            #     -ccbin=C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\...
+            # i.e. the 14.51 toolset, and host_config.h rejected it exactly as before.
+            #
+            # WHY: the vendored builder does `.ccbin(env::var("NVCC_CCBIN").is_err())`, so with
+            # NVCC_CCBIN unset the `cc` crate computes -ccbin from ITS OWN Visual Studio detection,
+            # which takes the NEWEST toolset and never looks at PATH.
+            #
+            # ⇒ Setting NVCC_CCBIN does both halves of the job: it makes `.ccbin(false)` so cc adds
+            # no -ccbin of its own, and nvcc reads NVCC_CCBIN as its host-compiler default. The
+            # builder left this hook deliberately; it just has to be used.
+            $hostBin = Join-Path $tsRoot (Join-Path $supported 'bin\HostX64\x64')
+            if (-not (Test-Path (Join-Path $hostBin 'cl.exe'))) {
+              throw "no cl.exe under $hostBin — cannot point nvcc at the supported toolset"
+            }
+            "NVCC_CCBIN=$hostBin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            Write-Host "NVCC_CCBIN=$hostBin"
+            $sel = (& (Join-Path $hostBin 'cl.exe') 2>&1 | Select-Object -First 1 | Out-String).Trim()
+            Write-Host "that toolset's cl.exe reports: $sel"
+          } else {
+            Write-Host "NO SUPPORTED TOOLSET: every installed toolset is 14.50+, which CUDA 12.9"
+            Write-Host "refuses. Falling back to -allow-unsupported-compiler, which nvcc warns may"
+            Write-Host "produce incorrect runtime behaviour. The receipt check is what would catch that."
+            "CUDA_HOST_SUPPORTED=0" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          }
+
+          $want = @("PATH","INCLUDE","LIB","LIBPATH")
+          $argline = if ($vcvarsArgs) { " " + ($vcvarsArgs -join " ") } else { "" }
+          cmd /c "`"$bat`"$argline >nul 2>&1 && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$' -and $want -contains $matches[1].ToUpper()) {
+              "$($matches[1].ToUpper())=$($matches[2])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+            }
+          }
+          # ⛔ POSITIVE: assert cl.exe is reachable AND report the version actually selected, rather
+          # than trusting that -vcvars_ver did what was asked.
+          $newPath = (Get-Content $env:GITHUB_ENV | Select-String '^PATH=' | Select-Object -Last 1) -replace '^PATH=',''
+          if (-not $newPath) { throw "vcvars exported no PATH" }
+          $env:PATH = $newPath
+          $clv = (& cl.exe 2>&1 | Select-Object -First 1 | Out-String).Trim()
+          Write-Host "cl.exe reports: $clv"
+          if ($clv -notmatch '19\.\d+') { throw "cl.exe did not report a version: $clv" }
+      - name: Install CUDA nvcc + cudart + cccl, each verified by sha256
+        shell: pwsh
+        # ⛔ The set name comes through env:, never spliced — inputs are operator-supplied.
+        env:
+          CUDA_SET: ${{ inputs.cuda }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # name, path under the redist root, and the sha256 from NVIDIA's redistrib_12.9.1.json.
+          # ⛔ CUDA 12.x, NOT 13.x: CUDA 13 dropped Pascal (sm_61) and the card this is for is a
+          # GTX 1050 Ti.
+          $base = 'https://developer.download.nvidia.com/compute/cuda/redist'
+          # ⛔⛔ TWO FULLY PINNED SETS, SELECTED BY INPUT — NOT A MANIFEST FETCHED AT RUNTIME.
+          # Resolving hashes from NVIDIA's manifest at build time would make the manifest the trust
+          # anchor instead of this file, which is a weaker property than the one this step was
+          # written to have.
+          # ⚠ 12.9.1's four archives were downloaded and hash-checked locally before committing.
+          # 12.6.3's hashes come from the same NVIDIA manifest and have NOT been downloaded here —
+          # the step's own sha256 check is what verifies them, loudly, on first use. Claiming both
+          # were pre-verified would be a claim I did not earn.
+          # ⚠ 12.6.3 exists here as the LAST untried #631 experiment: 12.9.1 reached zero
+          # compilation errors on toolsets 14.44 AND 14.29 and died identically in cudafe++ both
+          # times, which rules the host-compiler pairing out and leaves the CUDA version itself.
+          $sets = @{
+            '12.9.1' = @(
+              @{ n='cuda_nvcc';         p='cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.86-archive.zip';                 s='227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85' },
+              @{ n='cuda_cudart';       p='cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip';             s='179e9c43b0735ffe67207b3da556eb5a0c50f3047961882b7657d3b822d34ef8' },
+              @{ n='cuda_cccl';         p='cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.9.27-archive.zip';                 s='17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5' },
+              @{ n='cuda_profiler_api'; p='cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.9.79-archive.zip'; s='b05519f8ce4f02167bfc859358f62eb771d89ac2af3a6952a82317f2af4bc5bd' }
+            )
+            '12.6.3' = @(
+              @{ n='cuda_nvcc';         p='cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.6.85-archive.zip';                 s='3fb9f76b87c37d02f947354be89b718ad5f2c76b6ab47995265bfa3a068a5e14' },
+              @{ n='cuda_cudart';       p='cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.6.77-archive.zip';             s='7a313bc0c93b1a50bb03aa9783a199ae70c3b66e2d8084da65e8254a8577b925' },
+              @{ n='cuda_cccl';         p='cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.6.77-archive.zip';                 s='469b783b6731964170b3d27ae214e97e2a63ec93c57ace3ed4052e6d01261f2e' },
+              @{ n='cuda_profiler_api'; p='cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.6.77-archive.zip'; s='d0ed383bac1a84d5c1e1d6a3076b80bc581e488093fef5655d55c39a198aea29' }
+            )
+          }
+          $cudaVer = $env:CUDA_SET
+          if (-not $cudaVer) { $cudaVer = '12.9.1' }
+          if (-not $sets.ContainsKey($cudaVer)) {
+            Write-Host "unknown CUDA set '$cudaVer'; have: $($sets.Keys -join ', ')"; exit 1
+          }
+          Write-Host "CUDA redist set: $cudaVer"
+          $components = $sets[$cudaVer]
+          $root = Join-Path $env:RUNNER_TEMP 'cuda'
+          New-Item -ItemType Directory -Force -Path $root | Out-Null
+          foreach ($c in $components) {
+            Write-Host "-- $($c.n)"
+            $zip = Join-Path $env:RUNNER_TEMP (Split-Path $c.p -Leaf)
+            Invoke-WebRequest -Uri "$base/$($c.p)" -OutFile $zip -UseBasicParsing
+            $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
+            if ($got -ne $c.s) {
+              Write-Host "   SHA256 MISMATCH for $($c.n)"
+              Write-Host "      want $($c.s)"
+              Write-Host "      got  $got"
+              exit 1
+            }
+            Write-Host "   sha256 ok ($([math]::Round((Get-Item $zip).Length/1MB)) MB)"
+            $ex = Join-Path $env:RUNNER_TEMP "x-$($c.n)"
+            if (Test-Path $ex) { Remove-Item -Recurse -Force $ex }
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $ex)
+            # ⛔ ASSERT THE EXTRACTION PRODUCED SOMETHING. An extractor that fails quietly turns the
+            # layout handling below into a guess -- that is exactly how an earlier version of this
+            # step came to run `cp -r /.` and start copying the whole filesystem.
+            $kids = Get-ChildItem -Path $ex -ErrorAction SilentlyContinue
+            if (-not $kids) { Write-Host "   $($c.n) extracted to NOTHING"; exit 1 }
+            # each archive holds ONE versioned top directory; merge them into a single CUDA root
+            $dirs = @($kids | Where-Object { $_.PSIsContainer })
+            $srcDir = if ($dirs.Count -eq 1) { $dirs[0].FullName } else { $ex }
+            Copy-Item -Path (Join-Path $srcDir '*') -Destination $root -Recurse -Force
+          }
+          # ⛔ TWO PATH FORMS, BECAUSE TWO CONSUMERS WANT DIFFERENT THINGS. CUDA_PATH and
+          # GITHUB_PATH are read by the runner and by nvcc/cargo (Windows form); CUDA_POSIX is for
+          # the bash step that globs for the runtime DLL, where `D:\...` never matches.
+          $posix = ($root -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
+          $posix = $posix.Substring(0,2).ToLower() + $posix.Substring(2)
+          "CUDA_PATH=$root"     | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "CUDA_POSIX=$posix"   | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          (Join-Path $root 'bin') | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+          Write-Host "CUDA_PATH=$root"
+          Write-Host "CUDA_POSIX=$posix"
+          # ⛔ POSITIVE CONTROLS: nvcc must RUN and report 12.9, and the headers the kernels include
+          # must be present. "the files exist" is not the claim; "the toolchain works" is.
+          $nvcc = Join-Path $root 'bin\nvcc.exe'
+          if (-not (Test-Path $nvcc)) { Write-Host "no nvcc.exe at $nvcc"; exit 1 }
+          $ver = & $nvcc --version 2>&1 | Out-String
+          Write-Host $ver
+          # ⛔ ASSERT THE SELECTED SET, NOT A HARDCODED 12.9 — otherwise choosing 12.6 fails on
+          # this check rather than on the experiment, and the run would say nothing about #631.
+          $mm = ($cudaVer.Split('.')[0..1]) -join '.'
+          if ($ver -notmatch [regex]::Escape("release $mm")) {
+            Write-Host "nvcc does not report release $mm (asked for $cudaVer)"; exit 1
+          }
+          if ($mm -notmatch '^12\.') {
+            Write-Host "CUDA $mm is not 12.x -- Pascal (sm_61) support requires 12.x"; exit 1
+          }
+          foreach ($h in @('include\thrust\scan.h','include\thrust\execution_policy.h','include\cuda\atomic','include\cuda\std\array')) {
+            if (-not (Test-Path (Join-Path $root $h))) { Write-Host "missing header: $h (cccl incomplete)"; exit 1 }
+          }
+          Write-Host "nvcc 12.9 runs, and thrust + libcu++ headers are present"
+      - name: Install protoc, pinned and sha256-verified (#631)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # ⛔⛔ THIS IS WHAT ACTUALLY FAILED TWO 2-HOUR RUNS, AND IT IS NOT A CUDA PROBLEM AT ALL.
+          #
+          # `circom-witnesscalc v0.2.1` runs a prost-build build script that shells out to `protoc`,
+          # which is not on a windows runner. The build spent ~2 h happily compiling sppark,
+          # risc0-sys and risc0-circuit-keccak-sys's CUDA kernels and then died here:
+          #
+          #     error: failed to run custom build command for `circom-witnesscalc v0.2.1`
+          #       Error: Could not find `protoc`. ... Try installing `protobuf-compiler`
+          #
+          # ⛔ AND IT WAS IN THE LOG THE WHOLE TIME, AT LINE 895 OF 962. I read the TAIL and
+          # concluded "no error message, so the build was killed" -- twice, and once in writing. Cargo
+          # flushes buffered build-script WARNINGS after the error, so the tail of a failed cargo log
+          # is warnings and the error sits above them. ⇒ grep the whole file; never read the tail of
+          # a cargo log and conclude anything about whether it failed.
+          #
+          # ⚠ Memory was never the constraint: 13.8 GB of 16 GB free at the moment of failure, 83 GB
+          # of disk. `CARGO_BUILD_JOBS=2` was added on that wrong hypothesis and made the run SLOWER
+          # (2 h 17 m vs 1 h 53 m); it is gone again.
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-win64.zip"
+          SHA="f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3"
+          curl -sSL --retry 3 -o protoc.zip "$URL"
+          # ⛔ sha256sum ESCAPES its output with a leading backslash when the name contains one, and
+          # on MSYS it can. Feed the file on STDIN so there is no name in the output to mangle.
+          got=$(sha256sum < protoc.zip | cut -d' ' -f1)
+          [ "$got" = "$SHA" ] || { echo "protoc sha256 MISMATCH: got $got want $SHA" >&2; exit 1; }
+          echo "protoc archive verified: $got"
+          mkdir -p "$RUNNER_TEMP/protoc"
+          unzip -q -o protoc.zip -d "$RUNNER_TEMP/protoc"
+          PROTOC_EXE="$RUNNER_TEMP/protoc/bin/protoc.exe"
+          [ -x "$PROTOC_EXE" ] || { echo "protoc.exe absent after unzip" >&2; exit 1; }
+          # ⚠ prost-build reads PROTOC as a native path; cygpath it or it gets an MSYS path it
+          # cannot exec. This project has the scar: a lone /DNOMINMAX became C:/Program Files/Git/...
+          echo "PROTOC=$(cygpath -w "$PROTOC_EXE")" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
+          # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
+          "$PROTOC_EXE" --version
+
+      - name: Build hzengine with CUDA
+        shell: bash
+        env:
+          ARCHS: ${{ inputs.cuda_arch || '61,75,80,86,89,120' }}
+        run: |
+          set -o pipefail
+          export CUDA_ARCH="$ARCHS" CUDA_LIB_DIR="$CUDA_PATH\lib\x64"
+          echo "CUDA_ARCH=$CUDA_ARCH CUDA_LIB_DIR=$CUDA_LIB_DIR NVCC_CCBIN=${NVCC_CCBIN:-} supported=${CUDA_HOST_SUPPORTED:-}"
+          cd engine/host
+          # the whole log is kept: the error of a failed cargo build sits ABOVE the trailing warnings
+          cargo +1.91.1 build --release --locked --features cuda > ../../build.log 2>&1; rc=$?
+          echo "cargo rc=$rc"
+          grep -n "^error\|error\[\|error:" ../../build.log | head -40 || true
+          exit $rc
+
+      - name: The binary runs, and what it imports
+        shell: bash
+        run: |
+          set -euo pipefail
+          exe=engine/host/target/release/hzengine.exe
+          ls -la "$exe"
+          "$exe" --help | head -20
+          dumpbin_path=$(cygpath -u "$(dirname "$(which cl.exe)")")/dumpbin.exe
+          "$dumpbin_path" //DEPENDENTS "$exe" | grep -i "\.dll" || true
+          mkdir -p out
+          cp "$exe" out/
+          dll=$(ls "$CUDA_POSIX"/bin/cudart64_*.dll | head -1); cp "$dll" out/
+          ls -la out
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: hzengine-windows-x86_64-cuda
+          path: |
+            out/
+            build.log
+          if-no-files-found: warn
