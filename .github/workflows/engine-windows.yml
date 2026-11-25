@@ -1,7 +1,7 @@
 name: engine-windows
 # The OpenVM engine's prover (hzengine.exe, engine/host) built for Windows with CUDA (engine/FEASIBILITY.md Q12).
 # Dispatch only: Windows minutes bill 2x (docs: CI minutes cost money). Builds for every GPU generation from Pascal
-# (sm_70; OpenVM's kernels use __match_any_sync, Volta+, so Pascal is out as shipped) to Blackwell (sm_120) unless told otherwise, checks the binary runs and which DLLs it
+# (sm_61, the GTX 1050 Ti: OpenVM's one Volta-only instruction, __match_any_sync in histogram.cuh, has a plain-atomicAdd fallback below sm_70 in openvm-msvc.patch) to Blackwell (sm_120) unless told otherwise, checks the binary runs and which DLLs it
 # imports, and uploads it with the CUDA runtime it needs. Proving happens on a real card (Xesktop, the 1050 Ti laptop).
 # The MSVC, CUDA and protoc steps are windows-prove.yml's, copied as they are (their comments explain each choice).
 
@@ -16,7 +16,7 @@ on:
     inputs:
       cuda_arch:
         description: "GPU architectures, comma-separated (CUDA_ARCH)"
-        default: "70,75,80,86,89,120"
+        default: "61,70,75,80,86,89,120"
       toolset:
         description: "MSVC toolset prefix (blank = the newest CUDA 12.9 supports)"
         default: ''
@@ -289,7 +289,7 @@ jobs:
       - name: Build hzengine with CUDA
         shell: bash
         env:
-          ARCHS: ${{ inputs.cuda_arch || '70,75,80,86,89,120' }}
+          ARCHS: ${{ inputs.cuda_arch || '61,70,75,80,86,89,120' }}
         run: |
           set +e
           export CUDA_ARCH="$ARCHS" CUDA_LIB_DIR="$CUDA_PATH\lib\x64"

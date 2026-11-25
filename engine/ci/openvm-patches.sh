@@ -6,7 +6,9 @@
 #   stark-backend-*.patch: vpmm_shim.cu's C++20 designated initializers as member assignments.
 #   openvm-*.patch: C99 compound literals as std::array temporaries (rv32im mul/mulh/divrem, bigint); GCC's
 #     -Wno-maybe-uninitialized passed only when the target is not MSVC (crates/vm, crates/recursion build.rs).
-#   All are MSVC portability edits that keep the same values and the same Linux build; upstream candidates.
+#     histogram.cuh: below sm_70 (Pascal, e.g. the GTX 1050 Ti) each thread adds its own count, where sm_70+ uses
+#     __match_any_sync to add a warp's counts once: the same final counts.
+#   All keep the same values and the same build for sm_70+ on Linux; upstream candidates.
 set -euo pipefail
 DST=${1:?usage: openvm-patches.sh <dir>}
 H=$(cd "$(dirname "$0")/../host" && pwd); CI=$(cd "$(dirname "$0")" && pwd)

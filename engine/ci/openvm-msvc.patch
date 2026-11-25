@@ -255,3 +255,25 @@
      };
  
      COL_WRITE_VALUE(row, InitialOpenedValuesCols, proof_idx, proof_idx);
+--- a/crates/circuits/primitives/cuda/include/primitives/histogram.cuh
++++ b/crates/circuits/primitives/cuda/include/primitives/histogram.cuh
+@@ -24,6 +24,11 @@
+ 
+     __device__ void add_count(uint32_t idx) {
+         if (idx < num_bins) {
++#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
++            // engine (Pascal, sm_61): __match_any_sync needs sm_70+. Each thread adds its own 1: the same final
++            // counts as the warp-deduplicated add below, with more atomics.
++            atomicAdd(&global_hist[idx], 1u);
++#else
+             // Warp-level deduplicated atomicAdd
+             auto curr_mask = __activemask();
+             auto same_mask = __match_any_sync(curr_mask, idx);
+@@ -33,6 +38,7 @@
+             if ((threadIdx.x & WARP_MASK) == leader) {
+                 atomicAdd(&global_hist[idx], __popc(same_mask));
+             }
++#endif
+         }
+     }
+ };
