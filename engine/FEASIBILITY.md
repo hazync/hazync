@@ -227,6 +227,24 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   D. Cost and speed
   16. What is the whole-chain cost, from genesis to the tip, in GPU-hours and dollars? Use measured per-block costs across eras, and say which blocks the
   estimate rests on.
+
+     **Answer (25.11.2026): costs MEASURED on 11 blocks, the total ESTIMATED.**
+     - MEASURED (engine/results/era_costs: CPU-metered cost, chunks + trie + aggregate, every journal identical to
+       RISC Zero's): 100,000: 0.11B; 200,000: 4.10B; 250,000: 1.57B; 300,000: 2.44B; 400,000: 17.2B; 500,000: 20.5B;
+       600,000: 15.8B; 700,000: 27.2B; 800,000: 25.8B; 900,000: 15.8B; plus 976,379: 25.8B. (364,292, an outlier:
+       ~113B.)
+     - ESTIMATE: costs interpolated between those heights (one block per height: noisy), converted at 976,379's
+       measured rate on ONE RTX PRO 6000 Blackwell (65 s for 25.8B, ~2.5 s per B), plus a fixed cost per block for the
+       three proofs' overheads, F (not measured on Blackwell for small blocks; 5-15 s assumed):
+       | F | Blackwell GPU-hours | at $2.69/h (secure) | on A40s (2.46x slower, $0.59/h) |
+       |---|---|---|---|
+       | 5 s | ~10,900 | ~$29k | ~$16k |
+       | 10 s | ~12,300 | ~$33k | ~$18k |
+       | 15 s | ~13,600 | ~$37k | ~$20k |
+       By era (F = 10 s): blocks 1-200k ~710 GPU-h, 200k-400k ~1,400, 400k-977k ~10,100 (83%). The fixed part is ~22%.
+     - So the modern chain dominates; multi-block proofs for small blocks would save at most the early fixed costs
+       (~6% of the total); per-block cost work on modern blocks is the bigger lever. To firm up: more blocks per era,
+       and F measured on a small block on Blackwell.
   17. How do the tip-block times compare (detect to verified) with risc0's current 191 s on 4× PRO 6000?
 
      **Answer so far (25.11.2026): proving MEASURED, detect-to-verified NOT YET.**

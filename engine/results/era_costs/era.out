@@ -1,0 +1,11 @@
+block 100000: inputs 3, chunks 1, journals 2/2 identical, chunk+trie cost 22264649, aggregate cost 83664010
+block 200000: inputs 1231, chunks 1, journals 2/2 identical, chunk+trie cost 3476829742, aggregate cost 626771302
+block 250000: inputs 493, chunks 1, journals 2/2 identical, chunk+trie cost 1250548952, aggregate cost 318198405
+block 300000: inputs 628, chunks 1, journals 2/2 identical, chunk+trie cost 2006341178, aggregate cost 432599490
+block 400000: inputs 4806, chunks 3, journals 4/4 identical, chunk+trie cost 14392408556, aggregate cost 2793129893
+block 500000: inputs 4370, chunks 4, journals 5/5 identical, chunk+trie cost 17357352507, aggregate cost 3147898513
+block 600000: inputs 3761, chunks 3, journals 4/4 identical, chunk+trie cost 13688093800, aggregate cost 2113731446
+block 700000: inputs 6342, chunks 5, journals 6/6 identical, chunk+trie cost 23309361973, aggregate cost 3891130292
+block 800000: inputs 4911, chunks 3, journals 4/4 identical, chunk+trie cost 21816371048, aggregate cost 4017038810
+block 900000: inputs 4386, chunks 3, journals 4/4 identical, chunk+trie cost 13461426995, aggregate cost 2385500480
+ERA_DONE
