@@ -44,6 +44,25 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   3. Is OpenVM still actively maintained? Give its release pace, how it discloses security issues, and who maintains it.
   4. The compatibility layer that runs risc0's guest API on OpenVM is our own code on the soundness path. List every place where it could accept something
      risc0 would refuse, and what tests cover each one.
+
+     **Answer (25.11.2026, from engine/platform/risc0-zkvm/src/lib.rs, 232 lines; every point below is in that file):**
+     | place | could it accept more than RISC Zero? | covered by |
+     |---|---|---|
+     | `env::verify` | No, if OpenVM's deferral is sound: verify_stark on the next supplied input commitment (the commitment is a hash of the child proof's transcript, checked in-circuit), then asserts SHA-256(exe ‖ vm) == the image id and the 32 public-value bytes == SHA-256(journal). "unchecked" in `verify_stark_unchecked` only means it returns the output for the caller to compare, which the shim does. Audit Low #10 (output_len an unauthenticated hint) cannot widen this: a shorter or padded output fails the exact 32-byte comparison. | M1 negative controls (wrong image, wrong journal refused); every block's aggregate |
+     | proofs supplied but not used | No: `finalize` asserts every supplied commitment was verified | code |
+     | dry runs (flag bit 1: every env::verify skipped) | No: `finalize` refuses a dry run ("a dry run cannot commit a journal"), and a dry run must take no proofs. Collect runs end in env::exit before any commit. | code |
+     | `bench-noverify` feature (env::verify always accepts) | Only in a metering build, whose image id is its own; a chain pins the image id, so its proofs cannot stand for the real image's | build feature; ids differ (b13 vs hz13 etc.) |
+     | input reads past the end | No: asserts ("input exhausted") | code |
+     | serde word format | Vendored from risc0-zkvm 3.1.0 unchanged | journals identical on every block |
+     | `read_slice_ref` (lent words) | Same bytes as read_slice | journals |
+     | `env::exit(code)` | Panics after printing the code: no journal, no proof (RISC Zero: a non-zero exit, no receipt claim the chain accepts) | code |
+     | `env::cycle_count` returns 0 | Used only in log lines (batch_ecdsa timing, TXCYC); no verdict depends on it | grep of the guest |
+     | control chunk (flags, commitment list) | Unknown flags refused; length checked; the commitments are only names of proofs that must verify | code |
+     - The soundness this rests on that is NOT ours: OpenVM's deferral / verify-stark circuits (Q1: audited at
+       f01c912, post-audit changes in v2.1.0) and the outer verifier.
+     - Not yet tested directly: a hostile host supplying a commitment of a proof of ANOTHER image with a matching
+       journal (must fail the image check), and one of this image with a different journal (must fail the journal
+       check). The M1 negative controls cover both at the CPU level; a GPU-era re-run of them is cheap and worth doing.
   5. How is the image id bound? What exactly does "exe commitment + vm" commit to? Can two different guests or configurations share an id? Can a proof from
      one configuration verify under another?
 
