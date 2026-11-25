@@ -321,6 +321,23 @@ pub struct ChildCall {
     pub pvs: Vec<u8>,
 }
 
+/// Reproducible ids (engine/FEASIBILITY.md Q15): two builds of the same source on different paths gave different exe
+/// commitments, because file paths reach the program (panic locations, std's sources). Map every machine-specific root
+/// to a fixed name: CARGO_HOME, RUSTUP_HOME, the assembled tree (guest/../../..) and the engine kit the guest's
+/// Cargo.toml points its platform crates at. (The C/C++ half is in engine/guest/build.rs.)
+fn remap_flags(guest: &Path) -> Result<Vec<String>> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let canon = |p: String| std::fs::canonicalize(&p).map(|c| c.to_string_lossy().into_owned()).unwrap_or(p);
+    let cargo = canon(std::env::var("CARGO_HOME").unwrap_or(format!("{home}/.cargo")));
+    let rustup = canon(std::env::var("RUSTUP_HOME").unwrap_or(format!("{home}/.rustup")));
+    let tree = canon(guest.join("../../..").to_string_lossy().into_owned());
+    let toml = std::fs::read_to_string(guest.join("Cargo.toml"))?;
+    let engine = toml.lines().find_map(|l| l.split("path = \"").nth(1).and_then(|r| r.split("/platform/").next()).filter(|p| p.starts_with('/')))
+        .map(|p| canon(p.to_string())).ok_or_else(|| eyre!("guest Cargo.toml: no platform path"))?;
+    Ok([(cargo, "/hz-cargo"), (rustup, "/hz-rustup"), (tree, "/hz-tree"), (engine, "/hz-engine")]
+        .iter().map(|(from, to)| format!("--remap-path-prefix={from}={to}")).collect())
+}
+
 pub fn build(dir: &Path, guest: &Path) -> Result<()> {
     let e = Engine::load(dir)?;
     let t = std::time::Instant::now();
@@ -329,7 +346,7 @@ pub fn build(dir: &Path, guest: &Path) -> Result<()> {
     if !feats.is_empty() {
         eprintln!("guest features: {}", feats.join(","));
     }
-    let elf = e.sdk.build(GuestOptions::default().with_features(feats), guest, &None, None)?;
+    let elf = e.sdk.build(GuestOptions { rustc_flags: remap_flags(guest)?, ..GuestOptions::default() }.with_features(feats), guest, &None, None)?;
     let exe = e.sdk.convert_to_exe(elf)?;
     let prover = e.sdk.prover(exe.clone())?;
     let baseline = prover.generate_baseline();

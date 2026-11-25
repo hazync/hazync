@@ -20,8 +20,15 @@ fn main() {
     let core = format!("{base}/bitcoin-core/src"); let shim = format!("{base}/coreshim");
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_BATCH_ECDSA");
     let feat = |f: &str| std::env::var(format!("CARGO_FEATURE_{f}")).is_ok();
+    // Reproducible ids (engine/FEASIBILITY.md Q15): the build machine's paths reach the program through __FILE__
+    // (Core's asserts) and the generated includes. Map the base tree and the assembled tree (guest dir ../../..,
+    // which also holds target/) to fixed names, as the Rust side does with --remap-path-prefix (engine.rs build).
+    let tree = std::fs::canonicalize(format!("{hzc}/../../..")).unwrap().to_string_lossy().into_owned();
+    let base_c = std::fs::canonicalize(&base).unwrap().to_string_lossy().into_owned();
+    let maps = [format!("-ffile-prefix-map={base_c}=/hz-base"), format!("-ffile-prefix-map={tree}=/hz-tree")];
 
     let mut s = cc::Build::new();
+    for m in &maps { s.flag(m); }
     s.compiler(&gcc).archiver(&ar).flag("-march=rv32im").flag("-mabi=ilp32").opt_level(3).warnings(false)
         .flag("-fno-strict-aliasing").flag("-ffunction-sections").flag("-fdata-sections")
         .include(&secp).include(format!("{secp}/src")).include(format!("{secp}/include"))
@@ -43,6 +50,7 @@ fn main() {
         "consensus/tx_check.cpp", "consensus/merkle.cpp", "arith_uint256.cpp", "pow.cpp", "chain.cpp",
         "kernel/chainparams.cpp", "primitives/block.cpp", "util/chaintype.cpp", "util/moneystr.cpp"];
     let mut b = cc::Build::new();
+    for m in &maps { b.flag(m); }
     b.cpp(true).compiler(&gpp).archiver(&ar).flag("-march=rv32im").flag("-mabi=ilp32").flag("-std=c++20")
         .flag("-fexceptions").flag("-fno-rtti").opt_level(3).warnings(false).flag("-fno-strict-aliasing")
         .flag("-ffunction-sections").flag("-fdata-sections")
