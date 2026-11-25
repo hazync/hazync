@@ -1524,6 +1524,10 @@ fn main() {
         agg_chunks();
         return;
     }
+    if args.iter().any(|a| a == "core-vectors-export") {
+        bench::core_vectors_export_cmd(&args);
+        return;
+    }
     if args.iter().any(|a| a == "core-vectors") {
         bench::core_vectors_cmd(&args);
         return;

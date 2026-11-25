@@ -548,3 +548,68 @@ pub(crate) fn segment_mem_cmd() {
     println!("  the witness. Subtract the pre-prove VmHWM above to get that.");
     println!("  VRAM is invisible from inside the process: sample nvidia-smi alongside for CUDA.");
 }
+
+/// Engine (engine/FEASIBILITY.md Q9): `core-vectors-export <cases.json> <dir> [batch, default 500]` writes Core's test
+/// vectors as mode-10 input streams for the OpenVM engine, each batch exactly the words RISC Zero's guest reads
+/// (`<dir>/cv_NNNNN.in`, plain libsecp path), with RISC Zero's journal (`cv_NNNNN.r0journal`: one verdict code per
+/// case). A batch RISC Zero aborts is halved until each abort is alone; a lone aborting case is written with
+/// `cv_NNNNN.abort` and no journal (the engine must abort on it too). Identical journals = identical verdicts.
+pub(crate) fn core_vectors_export_cmd(args: &[String]) {
+    use crate::sink::{Sink, Stream};
+    #[derive(Deserialize)]
+    struct Case { kind: u32, tx: String, prevouts: String, input: u32, flags: u32 }
+    let i = args.iter().position(|a| a == "core-vectors-export").unwrap();
+    let path = args.get(i + 1).expect("usage: core-vectors-export <cases.json> <dir> [batch]");
+    let dir = args.get(i + 2).expect("usage: core-vectors-export <cases.json> <dir> [batch]");
+    let batch: usize = args.get(i + 3).map(|x| x.parse().expect("batch")).unwrap_or(500);
+    std::fs::create_dir_all(dir).unwrap();
+    let cases: Vec<Case> = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| panic!("{path}: {e}"))).expect("cases JSON");
+    let unhex = |h: &str| -> Vec<u8> { (0..h.len()).step_by(2).map(|j| u8::from_str_radix(&h[j..j + 2], 16).unwrap()).collect() };
+    fn fill<S: Sink>(b: &mut S, chunk: &[Case], unhex: &dyn Fn(&str) -> Vec<u8>) {
+        b.write(&10u32);
+        b.write(&(chunk.len() as u32));
+        for c in chunk {
+            b.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags, 0u32, Vec::<u8>::new()));
+        }
+    }
+    let image = risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image");
+    let mut n = 0usize;
+    let (mut written, mut aborts) = (0usize, 0usize);
+    fn go(chunk: &[Case], n: &mut usize, dir: &str, image: &risc0_binfmt::MemoryImage, unhex: &dyn Fn(&str) -> Vec<u8>,
+          written: &mut usize, aborts: &mut usize) {
+        let s = {
+            let mut b = ExecutorEnv::builder();
+            fill(&mut b, chunk, unhex);
+            risc0_zkvm::ExecutorImpl::new(b.build().unwrap(), image.clone()).ok().and_then(|mut e| e.run().ok())
+        };
+        match s {
+            Some(s) => {
+                let mut st = Stream::default();
+                fill(&mut st, chunk, unhex);
+                std::fs::write(format!("{dir}/cv_{n:05}.in"), &st.0).unwrap();
+                std::fs::write(format!("{dir}/cv_{n:05}.r0journal"), &s.journal.as_ref().expect("mode 10 journal").bytes).unwrap();
+                std::fs::write(format!("{dir}/cv_{n:05}.cases"), format!("{}\n", chunk.len())).unwrap();
+                *n += 1;
+                *written += chunk.len();
+            }
+            None if chunk.len() == 1 => {
+                let mut st = Stream::default();
+                fill(&mut st, chunk, unhex);
+                std::fs::write(format!("{dir}/cv_{n:05}.in"), &st.0).unwrap();
+                std::fs::write(format!("{dir}/cv_{n:05}.abort"), b"1\n").unwrap();
+                *n += 1;
+                *aborts += 1;
+            }
+            None => {
+                let (l, r) = chunk.split_at(chunk.len() / 2);
+                go(l, n, dir, image, unhex, written, aborts);
+                go(r, n, dir, image, unhex, written, aborts);
+            }
+        }
+    }
+    for chunk in cases.chunks(batch) {
+        go(chunk, &mut n, dir, &image, &unhex, &mut written, &mut aborts);
+        println!("  {} streams, {written} cases with a journal, {aborts} aborts", n);
+    }
+    println!("CORE_VECTORS_EXPORT_DONE {} cases: {written} with RISC Zero verdicts, {aborts} RISC Zero aborts, {n} streams", cases.len());
+}
