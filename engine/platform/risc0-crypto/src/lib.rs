@@ -8,13 +8,15 @@ pub mod curves { pub mod secp256k1 {
     type C = k256::Secp256k1Coord;
     #[derive(Clone, PartialEq, Eq)]
     pub struct Fq(C);
-    fn le(l: &[u32; 8]) -> [u8; 32] { let mut b = [0u8; 32]; for k in 0..8 { b[4*k..4*k+4].copy_from_slice(&l[k].to_le_bytes()); } b }
+    // little-endian target (riscv32): 8 little-endian limbs ARE their 32 little-endian bytes
+    const _: () = assert!(cfg!(target_endian = "little"));
+    fn le(l: &[u32; 8]) -> [u8; 32] { unsafe { core::mem::transmute::<[u32; 8], [u8; 32]>(*l) } }
     impl Fq {
         pub fn from_bigint(b: BigInt) -> Option<Fq> { C::from_le_bytes(&le(&b.0)).map(Fq) }
         pub fn from_u32(v: u32) -> Fq { Fq(C::from_u32(v)) }
         pub fn as_bigint(&self) -> BigInt {
-            let b = self.0.as_le_bytes(); let mut l = [0u32; 8];
-            for k in 0..8 { l[k] = u32::from_le_bytes(b[4*k..4*k+4].try_into().unwrap()); } BigInt(l)
+            let b: [u8; 32] = self.0.as_le_bytes().try_into().unwrap();
+            BigInt(unsafe { core::mem::transmute::<[u8; 32], [u32; 8]>(b) })
         }
     }
     impl<'a> core::ops::Mul<&'a Fq> for &'a Fq { type Output = Fq; fn mul(self, o: &Fq) -> Fq { Fq(&self.0 * &o.0) } }
