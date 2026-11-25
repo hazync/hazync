@@ -171,7 +171,12 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        executor) — upstream PR or a fork, then measure size/time in a browser; (b) OpenVM's STARK -> Halo2/KZG wrapper
        (root prover, EVM proof): a SNARK proof is small and its verifier runs in WASM, at the cost of a wrapping step
        per proof and a trusted setup (KZG); (c) a verifier of our own over the proof format (most work, most risk).
-     - UNKNOWN: phone check time and verifier size until (a) or (b) builds.
+     - **MEASURED (later the same day): option (a) works.** With `abi_stable` removed from openvm-circuit (one type,
+       engine/wasm-verify/openvm-abi-stable.patch), OpenVM's own verifier builds for wasm32 and, in Node on a laptop,
+       ACCEPTS a real engine proof (block 130,000's aggregate) in 24-45 ms and REJECTS it with one encoded byte flipped.
+       Sizes: wasm 709 KB, verifying key 96 KB, proof 229 KB (zstd). engine/wasm-verify/README.md.
+     - Still to do: the image and journal checks on top (cheap), a browser and a phone run, and the patch upstream
+       (or carried as our one fork line). UNKNOWN: phone time (expect a small multiple of the laptop's).
   12. Windows: does the GPU prover build and prove on Windows with a native CUDA toolchain? What's the minimum driver version?
   13. Cards: which GPUs are supported (oldest architecture, minimum memory)? Do consumer cards like a 3060 or 4090 work, and how fast?
   14. Is there a CPU-only prover, and how fast is it?
