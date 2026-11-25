@@ -1,0 +1,85 @@
+total app trace cells (padded) 11,100,740,766
+ 28.34 Poseidon2PeripheryAir<BabyBearParameters>, 1>
+ 20.60 VmAirWrapper<Rv32LoadStoreAdapterAir, LoadStoreCoreAir<4>
+ 16.98 Sha2BlockHasherVmAir<Sha256Config>
+ 11.16 VmAirWrapper<Rv32BaseAluAdapterAir, BaseAluCoreAir<4, 8>
+  6.64 VmAirWrapper<Rv32BaseAluAdapterAir, ShiftCoreAir<4, 8>
+  4.03 MemoryMerkleAir<8>
+  2.55 ProgramAir
+  2.51 PersistentBoundaryAir<8>
+  1.23 VmAirWrapper<Rv32BranchAdapterAir, BranchEqualCoreAir<4>
+  1.20 VmAirWrapper<Rv32BranchAdapterAir, BranchLessThanCoreAir<4, 8>
+  0.66 Sha2MainAir<Sha256Config>
+  0.64 RangeTupleCheckerAir<2>
+instruction cells used 3,682,026,479 (33.2% of padded)
+SELF
+ 27.23 hazync_engine_guest[38341341d359e4ec]::coinlog_forest::update
+ 19.39 hazync_engine_guest[38341341d359e4ec]::agg_lite::validate_block_lite
+ 18.95 memcpy
+  6.56 hazync_engine_guest[38341341d359e4ec]::swiftsync::point
+  5.35 hazync_engine_guest[38341341d359e4ec]::swiftsync::x_for
+  5.35 <sha2[80f963e01a63c042]::Sha256 as sha2[80f963e01a63c042]::Digest>::finalize
+  2.58 hazync_engine_guest[38341341d359e4ec]::ttree::list_digest
+  2.55 _ZN12_GLOBAL__N_112_GLOBAL__N_16hz_d64EPhPKh
+  2.00 memset
+  1.64 core[26b0920814c15358]::slice::sort::unstable::quicksort::quicksort::<(u64, u32), <(u64, u32) as cor
+  1.53 memcmp
+  1.36 <hazync_engine_guest[38341341d359e4ec]::batch_ecdsa::Acc>::add
+  1.19 sha2[80f963e01a63c042]::compress256
+  1.05 hazync_engine_guest[38341341d359e4ec]::swiftsync::sub
+  0.97 openvm[a6aa6d7450b1d551]::io::read_vec
+  0.85 zkvm_sha256_impl
+  0.36 <k256[6660575f545e8223]::internal::Secp256k1Coord as openvm_algebra_guest[3fa6d134788a6780]::IntMod>
+  0.35 hazync_engine_guest[38341341d359e4ec]::smt_roots::compute_root
+  0.15 core[26b0920814c15358]::slice::sort::shared::smallsort::sort8_stable::<(u64, u32), <(u64, u32) as co
+  0.08 _Z17ComputeMerkleRootSt6vectorI7uint256SaIS0_EEPb
+  0.07 _Z9SHA256D64PhPKhj
+  0.05 risc0_zkvm[32e0a3c5f67eddbe]::guest::env::st
+  0.04 core[26b0920814c15358]::slice::sort::shared::pivot::median3_rec::<(u64, u32), <(u64, u32) as core[26
+  0.03 <risc0_zkvm[32e0a3c5f67eddbe]::serde::deserializer::SeqAccess<&[u32]> as serde_core[7425a428c9ff6a5]
+  0.03 <risc0_zkvm[32e0a3c5f67eddbe]::serde::deserializer::SeqAccess<&mut risc0_zkvm[32e0a3c5f67eddbe]::gue
+  0.03 <[u8; 32usize] as serde_core[7425a428c9ff6a5]::de::Deserialize>::deserialize::<&mut risc0_zkvm[32e0a
+  0.03 <&mut risc0_zkvm[32e0a3c5f67eddbe]::serde::serializer::Serializer<&mut alloc[7f19ea27dc9f1f55]::vec:
+  0.03 hazync_engine_guest[38341341d359e4ec]::main
+INCL
+100.00 __start
+100.00 hazync_engine_guest[38341341d359e4ec]::main
+ 94.60 hazync_engine_guest[38341341d359e4ec]::agg_lite::validate_block_lite
+ 27.23 hazync_engine_guest[38341341d359e4ec]::coinlog_forest::update
+ 21.22 hazync_engine_guest[38341341d359e4ec]::swiftsync::point
+ 18.95 memcpy
+ 13.92 hazync_engine_guest[38341341d359e4ec]::swiftsync::x_for
+ 13.76 hazync_engine_guest[38341341d359e4ec]::swiftsync::sub
+  9.33 <sha2[80f963e01a63c042]::Sha256 as sha2[80f963e01a63c042]::Digest>::finalize
+  7.48 hazync_engine_guest[38341341d359e4ec]::ttree::list_digest
+  4.58 _Z17ComputeMerkleRootSt6vectorI7uint256SaIS0_EEPb
+  4.02 _Z9SHA256D64PhPKhj
+  3.96 _ZN12_GLOBAL__N_112_GLOBAL__N_16hz_d64EPhPKh
+  2.62 merkle_root
+  2.51 hz_block_rules_c
+  2.51 _Z14hz_block_rulesPKhRK19CMutableTransactionS0_mbixx
+  2.51 _ZL22CheckWitnessMalleationRK6CBlockbR20BlockValidationState
+  2.04 hazync_engine_guest[38341341d359e4ec]::bip30::apply_block
+  2.04 hazync_engine_guest[38341341d359e4ec]::smt_roots::compute_root
+  2.00 memset
+  1.82 core[26b0920814c15358]::slice::sort::unstable::ipnsort::<(u64, u32), <(u64, u32) as core[26b0920814c
+  1.82 core[26b0920814c15358]::slice::sort::unstable::quicksort::quicksort::<(u64, u32), <(u64, u32) as cor
+  1.53 memcmp
+  1.46 <hazync_engine_guest[38341341d359e4ec]::batch_ecdsa::Acc>::add
+  1.19 sha2[80f963e01a63c042]::compress256
+  1.02 risc0_zkvm[32e0a3c5f67eddbe]::guest::env::st
+  0.97 openvm[a6aa6d7450b1d551]::io::read_vec
+  0.85 zkvm_sha256_impl
+  0.75 <alloc[7f19ea27dc9f1f55]::raw_vec::RawVecInner>::finish_grow
+  0.42 <alloc[7f19ea27dc9f1f55]::raw_vec::RawVec<([u8; 32usize], [u8; 32usize])>>::grow_one
+MEM*
+  5.30 memcpy <- hazync_engine_guest[38341341d359e4ec]::agg_lite::validate_block_lite
+  4.02 memcpy <- hazync_engine_guest[38341341d359e4ec]::main
+  3.98 memcpy <- hazync_engine_guest[38341341d359e4ec]::ttree::list_digest
+  2.73 memcpy <- <sha2[80f963e01a63c042]::Sha256 as sha2[80f963e01a63c042]::Digest>::finalize
+  1.25 memset <- <sha2[80f963e01a63c042]::Sha256 as sha2[80f963e01a63c042]::Digest>::finalize
+  0.74 memcpy <- <alloc[7f19ea27dc9f1f55]::raw_vec::RawVecInner>::finish_grow
+  0.67 memcpy <- hazync_engine_guest[38341341d359e4ec]::smt_roots::compute_root
+  0.64 memcpy <- hazync_engine_guest[38341341d359e4ec]::swiftsync::point
+  0.55 memset <- _ZN12_GLOBAL__N_112_GLOBAL__N_16hz_d64EPhPKh
+  0.39 memcpy <- _Z17ComputeMerkleRootSt6vectorI7uint256SaIS0_EEPb

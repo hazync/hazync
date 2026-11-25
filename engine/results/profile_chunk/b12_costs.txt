@@ -1,0 +1,11 @@
+d5970fbc list_digest appends each value as one 32-byte piece; risc0-crypto shim converts limbs by reinterpretation
+hz12 build: 68.0 s; image exe 14b6dc61cfe7d013af145153eb866f316fbe765d14323d1c5accdd35f0e5030b vm 00e00077450a5a5657b99e459ec
+b12 build: 69.0 s; image exe e749563b267a785653dcc547ecf5661825e29f1f5a33096148172c12e3bfcf2b vm 00e00077450a5a5657b99e459ec
+chunk_00 hz12 IDENTICAL :: execute: 9.8 s, cost 3178737529, instructions 73405904, journal 426760 bytes sha256 975daaf367bb3f04
+chunk_01 hz12 IDENTICAL :: execute: 9.7 s, cost 3281999146, instructions 74314217, journal 399980 bytes sha256 423545ebf152b87c
+chunk_02 hz12 IDENTICAL :: execute: 9.7 s, cost 2717932554, instructions 62016116, journal 310180 bytes sha256 c677c75b74d775fb
+chunk_03 hz12 IDENTICAL :: execute: 9.9 s, cost 3331657097, instructions 76349755, journal 511580 bytes sha256 bf86604b4016615b
+chunk_04 hz12 IDENTICAL :: execute: 9.1 s, cost 3812729007, instructions 88486551, journal 630472 bytes sha256 775dee3327600f49
+trie hz12 IDENTICAL :: execute: 8.8 s, cost 6005117626, instructions 80574601, journal 100 bytes sha256 13b30678ea5a63035fd
+agg b12 :: execute: 8.5 s, cost 4415231494, instructions 72357363, journal 5284 bytes sha256 ff47f8d7ac620ad5bd59344c6d0e4a350a239d9f940901abedb1c2f1d070a3f1 :: vs r0 len/len/diff 5284 5284 32 :: HZHEAP: 31309140 bytes allocated (input 4430480 bytes)
+B12_DONE

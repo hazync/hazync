@@ -1,0 +1,11 @@
+22b758c9 coin log forest: single-spend subtrees walked in a loop (same siblings, same order, differential test vs the recursion); sha2 shim pads in place and compresses aligned input directly (host test vs RustCrypto)
+hz11 build: 70.8 s; image exe 53efa63918bfec1466c861303741d70afcba566e6acb3601bdccaf5817d3f462 vm 00e00077450a5a565
+b11 build: 66.6 s; image exe 6fc2a23419776b4297247a69cfcc7d6728eabe3c517e592201102467b4b69f3f vm 00e00077450a5a565
+chunk_00 hz11 IDENTICAL :: execute: 9.5 s, cost 3178737529, instructions 73405904, journal 426760 bytes sha256 975daaf367bb3f04
+chunk_01 hz11 IDENTICAL :: execute: 10.0 s, cost 3281999146, instructions 74314217, journal 399980 bytes sha256 423545ebf152b87
+chunk_02 hz11 IDENTICAL :: execute: 9.6 s, cost 2717932554, instructions 62016116, journal 310180 bytes sha256 c677c75b74d775fb
+chunk_03 hz11 IDENTICAL :: execute: 9.4 s, cost 3331657097, instructions 76349755, journal 511580 bytes sha256 bf86604b4016615b
+chunk_04 hz11 IDENTICAL :: execute: 8.8 s, cost 3812729007, instructions 88486551, journal 630472 bytes sha256 775dee3327600f49
+trie hz11 IDENTICAL :: execute: 9.5 s, cost 6028204675, instructions 81016651, journal 100 bytes sha256 13b30678ea5a63035fd
+agg b11 :: execute: 8.3 s, cost 4438318543, instructions 72799413, journal 5284 bytes sha256 2576c753e71c2ce83c8756f003ed9b2ba7172ea6db9b07b6fde3ae5f95b427ac :: vs r0 len/len/diff 5284 5284 32 :: HZHEAP: 31309140 bytes allocated (input 4430480 bytes)
+B11_DONE

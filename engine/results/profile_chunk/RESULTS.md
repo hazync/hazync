@@ -108,3 +108,21 @@ stream) was copied out of the input buffer into a fresh vector, doubling its foo
 
 (hz9_lent_reads.txt.) Most of the trie's cost is its hashing and memory, not instructions; beyond this the levers are the
 segment cap (results/gpu_a40_segcap: the trie's padded cells are 17.3B at 11 GiB, 15.5B at 16 GiB) and the format.
+
+### The aggregate (b11-b13, 25.11.2026)
+
+The aggregate's profile (functions_agg_b8.txt; metering image b8, CPU, 8 GiB cap): padded cells 28% Poseidon2 memory
+hashing, 21% load/store, 17% SHA-256, instructions 33% of the total; by instruction cells `coinlog_forest::update`
+27% self, `validate_block_lite` 19%, `memcpy` 19%, the live-coin hash-to-curve (`swiftsync::point`) 21% inclusive,
+the engine's sha2 wrapper's `finalize` 9% inclusive. Changes, each measured on its own build (costs in b11/b12/b13_costs.txt):
+
+| build | change | aggregate | trie | chunk 0 |
+|---|---|---|---|---|
+| b9/hz9 | (before) | 5.038B | 6.159B | 3.2346B |
+| b11/hz11 | coin log forest: a subtree with one spend is walked in a loop, not recursion (same siblings in the same order; libzync test against the recursion, random trees and witnesses); sha2 wrapper pads in place and compresses aligned input directly (host test against RustCrypto, all lengths 0-299, split updates, unaligned input) | 4.438B (−11.9%) | 6.028B | 3.1787B |
+| b12/hz12 | `list_digest` appends each value in one piece; risc0-crypto shim reinterprets limbs | 4.415B | 6.005B | 3.1787B |
+| b13/hz13 | `agg_lite::Rd::h` reads a whole hash in one copy | 4.341B | 6.005B | 3.1787B |
+
+Every chunk and trie journal identical to RISC Zero's at each step; every aggregate journal RISC Zero's except the 32
+image-id bytes. Since keys-hz6 on this block: chunks 20.91B -> 16.32B (−21.9%), trie 6.31B -> 6.01B (−4.9%),
+aggregate 5.36B -> 4.34B (−19.0%, metering images).

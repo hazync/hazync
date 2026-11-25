@@ -1,0 +1,11 @@
+288d0803 agg_lite Rd::h: a whole hash in one copy when its eight words are present (else word by word, as before)
+hz13 build: 70.4 s; image exe 04f01d4dde12443e61572707e0be68463cd156649deb1607366c2e63c1678261 vm 00e00077450a5a5657b99e459ec4ec4fa56ca
+b13 build: 78.4 s; image exe 85cd694950d41a586701762ccfc0a20be80efd57d7a7596426ec2832d3b8d92c vm 00e00077450a5a5657b99e459ec4ec4fa56ca
+chunk_00 hz13 IDENTICAL :: execute: 10.1 s, cost 3178737529, instructions 73405904, journal 426760 bytes sha256 975daaf367bb3f0
+chunk_01 hz13 IDENTICAL :: execute: 10.1 s, cost 3281999146, instructions 74314217, journal 399980 bytes sha256 423545ebf152b87
+chunk_02 hz13 IDENTICAL :: execute: 9.8 s, cost 2717932554, instructions 62016116, journal 310180 bytes sha256 c677c75b74d775fb
+chunk_03 hz13 IDENTICAL :: execute: 10.0 s, cost 3331657097, instructions 76349755, journal 511580 bytes sha256 bf86604b4016615
+chunk_04 hz13 IDENTICAL :: execute: 9.9 s, cost 3812729007, instructions 88486551, journal 630472 bytes sha256 775dee3327600f49
+trie hz13 IDENTICAL :: execute: 9.3 s, cost 6005117626, instructions 80574601, journal 100 bytes sha256 13b30678ea5a63035fd
+agg b13 :: execute: 9.3 s, cost 4340894782, instructions 70452627, journal 5284 bytes sha256 5114d02064d0588da15828de7c7f1e4a23212b6c2c3a8905b1ef74ff1e2bb6af :: vs r0 len/len/diff 5284 5284 32 :: HZHEAP: 31309140 bytes allocated (input 4430480 bytes)
+B13_DONE
