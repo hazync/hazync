@@ -386,6 +386,20 @@ impl Rd<'_> {
         match self.w.get(self.i) { Some(x) => { self.i += 1; *x } None => { self.bad = true; 0 } }
     }
     fn h(&mut self) -> [u8; 32] {
+        // all eight words present (the usual case): one 32-byte copy (words to their LE bytes)
+        if let Some(w) = self.w.get(self.i..self.i + 8) {
+            self.i += 8;
+            let mut h = [0u8; 32];
+            if cfg!(target_endian = "little") {
+                let w: &[u32; 8] = w.try_into().unwrap();
+                // SAFETY: same size; on a little-endian target these are the words' LE bytes
+                h = unsafe { core::mem::transmute::<[u32; 8], [u8; 32]>(*w) };
+            } else {
+                for (c, x) in h.chunks_exact_mut(4).zip(w) { c.copy_from_slice(&x.to_le_bytes()); }
+            }
+            return h;
+        }
+        // past the end: word by word, so a short journal reads zeros and sets `bad`, as before
         let mut h = [0u8; 32];
         for c in h.chunks_exact_mut(4) { c.copy_from_slice(&self.u().to_le_bytes()); }
         h
