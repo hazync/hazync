@@ -210,7 +210,7 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     let workers = workers.min(jobs.len()); // no more provers than leaf proofs (a 1-chunk block has 2)
     // the leaf provers: `workers` serve processes spread round-robin over the GPUs, a card holding ceil(workers / gpus)
     let devs = devices();
-    let pool: Vec<Worker> = if workers > 1 || parts > 0 {
+    let mut pool: Vec<Worker> = if workers > 1 || parts > 0 {
         let share = workers.div_ceil(devs.len().max(1));
         (0..workers).map(|k| Worker::spawn(dir, (devs.len() > 1).then(|| devs[k % devs.len()].as_str()), share)).collect::<Result<_>>()?
     } else {
@@ -307,11 +307,15 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
     let defs = e.attach_children(&baseline, &mut prv, &children)?;
     let t = Instant::now();
     // segpar: one already-loaded worker on each GPU other than this process's (HZ_SEGPAR=0: none)
-    let segw: Vec<&Worker> = if std::env::var("HZ_SEGPAR").is_ok_and(|v| v == "0") || devs.len() < 2 {
+    let keep: Vec<Worker> = if std::env::var("HZ_SEGPAR").is_ok_and(|v| v == "0") || devs.len() < 2 {
         vec![]
     } else {
-        devs[1..].iter().filter_map(|d| pool.iter().find(|w| w.dev.as_deref() == Some(d.as_str()))).collect()
+        devs[1..].iter().filter_map(|d| pool.iter().position(|w| w.dev.as_deref() == Some(d.as_str())).map(|i| pool.swap_remove(i))).collect()
     };
+    // every other leaf worker stops BEFORE the aggregate, so its GPU memory pool is freed: kept alive they ran the
+    // aggregate out of memory on one card (25.11, A40: requested 8.5 GB, 2.7 GB free)
+    drop(pool);
+    let segw: Vec<&Worker> = keep.iter().collect();
     let (proof, journal) = if segw.is_empty() {
         e.prove(exe, emit, prv, &defs)?
     } else {
@@ -321,7 +325,7 @@ pub fn prove_block(dir: &Path, export: &Path, out: &Path, verify_each: bool, wor
         e.prove_split(exe, emit, prv, &defs, &out.join("agg.stdin"), &segw)?
     };
     drop(segw);
-    drop(pool);
+    drop(keep);
     let t_agg = t.elapsed().as_secs_f64();
     let t = Instant::now();
     Sdk::verify_proof(e.agg_vk.as_ref().clone(), baseline.clone(), &proof)?;
