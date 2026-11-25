@@ -318,7 +318,8 @@ jobs:
           set -euo pipefail
           exe=engine/host/target/release/hzengine.exe
           ls -la "$exe"
-          "$exe" --help | head -20
+          # not run here: a CUDA exe imports nvcuda.dll (the GPU driver), which this GPU-less runner lacks (exit 127,
+          # run 45655298948); it runs on a real card. The import table is the check.
           dumpbin_path=$(cygpath -u "$(dirname "$(which cl.exe)")")/dumpbin.exe
           "$dumpbin_path" //DEPENDENTS "$exe" | grep -i "\.dll" || true
           mkdir -p out

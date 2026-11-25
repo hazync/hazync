@@ -8,3 +8,4 @@ request 7, 25.11.2026: zero-register S-box columns for MSVC (poseidon2-air colum
 request 8, 25.11.2026: NVCC_THREADS=1 + own temp dir (nvlink temp-file race, run 45649713360)
 request 9, 25.11.2026: SWITCH_BLOCK for the MSVC preprocessor, Fp prefix scan without plus<> deduction (run 45650254054)
 request 10, 25.11.2026: Fp ExclusiveSum in opening.cu, GNU ?: in initial_opened_values.cu (run 45651978318)
+request 11, 25.11.2026: package the exe without running it (no nvcuda.dll on the runner; run 45655298948 BUILT hzengine.exe, 73 MB)
