@@ -1,0 +1,19 @@
+trie: proved 7.8 s (worker 1, done at 9.2 s), journal 100 bytes sha256 b6889418f361f52f r0 IDENTICAL
+chunk_00: proved 48.5 s (worker 2, done at 50.0 s), journal 46352 bytes sha256 072c2c3ecb79587d r0 IDENTICAL
+chunk_01: proved 48.0 s (worker 0, done at 49.4 s), journal 46232 bytes sha256 79576d4fb4c83ce4 r0 IDENTICAL
+chunk_02: proved 39.4 s (worker 1, done at 48.6 s), journal 46232 bytes sha256 f4b1853beaf464bb r0 IDENTICAL
+chunk_03: proved 35.5 s (worker 1, done at 84.1 s), journal 46232 bytes sha256 64430740d2b1d47c r0 IDENTICAL
+chunk_04: proved 38.7 s (worker 0, done at 88.1 s), journal 46232 bytes sha256 77b32230f81f1409 r0 IDENTICAL
+chunk_05: proved 37.2 s (worker 2, done at 87.2 s), journal 46232 bytes sha256 c02709a39ef587d6 r0 IDENTICAL
+chunk_06: proved 30.6 s (worker 1, done at 114.7 s), journal 46232 bytes sha256 4b8a958a29d06d4b r0 IDENTICAL
+chunk_07: proved 28.7 s (worker 2, done at 115.9 s), journal 46232 bytes sha256 f8ae4b4de8e63300 r0 IDENTICAL
+chunk_08: proved 26.9 s (worker 0, done at 115.0 s), journal 46232 bytes sha256 1855a443e2c49242 r0 IDENTICAL
+chunk_09: proved 21.4 s (worker 1, done at 136.1 s), journal 46232 bytes sha256 1b59fc2ee775f1c6 r0 IDENTICAL
+chunk_10: proved 23.6 s (worker 0, done at 138.7 s), journal 46232 bytes sha256 89025a50aadfca3d r0 IDENTICAL
+chunk_11: proved 22.6 s (worker 2, done at 138.5 s), journal 46232 bytes sha256 44c8952ce139733b r0 IDENTICAL
+chunk_12: proved 20.8 s (worker 1, done at 156.9 s), journal 46232 bytes sha256 f8d92284918d006e r0 IDENTICAL
+chunk_13: proved 18.5 s (worker 2, done at 157.0 s), journal 46232 bytes sha256 fc98f1176c74a261 r0 IDENTICAL
+chunk_14: proved 17.1 s (worker 0, done at 155.8 s), journal 46232 bytes sha256 4754edd9ce06f006 r0 IDENTICAL
+chunk_15: proved 8.3 s (worker 0, done at 164.1 s), journal 44252 bytes sha256 8146ebfcd65ec651 r0 IDENTICAL
+aggregate (17 children verified in-guest): proved 15.8 s, journal 4748 bytes sha256 a05f5039a05d95b15319a6c122e8d7f0939487532ed14a418fa20ee4f1902d62; vs RISC Zero: Some((true, 32)) (same length, differing bytes)
+block: leaves 181.1 s + aggregate 15.8 s = 198.0 s; final proof verified in 0.02 s
