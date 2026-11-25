@@ -14,6 +14,9 @@ K=$(cd "$(dirname "$0")" && pwd); R=$(cd "$K/../.." && pwd)
 git -C "$B/bitcoin-core" apply --check "$K/core-0201-sha-openvm-native.patch"
 git -C "$B/bitcoin-core" apply "$K/core-0201-sha-openvm-native.patch"
 echo "  bitcoin-core <- engine/guest/core-0201-sha-openvm-native.patch (SHA-256 in OpenVM's native layout)"
+git -C "$B/bitcoin-core" apply --check "$K/core-0202-sha-finalize-in-place.patch"
+git -C "$B/bitcoin-core" apply "$K/core-0202-sha-finalize-in-place.patch"
+echo "  bitcoin-core <- engine/guest/core-0202-sha-finalize-in-place.patch (CSHA256::Finalize pads in place)"
 git -C "$B/secp256k1" checkout -q -- . && git -C "$B/secp256k1" clean -qfd
 git -C "$B/secp256k1" apply --check "$K/secp-0201-openvm-batch-liftx.patch"
 git -C "$B/secp256k1" apply "$K/secp-0201-openvm-batch-liftx.patch"

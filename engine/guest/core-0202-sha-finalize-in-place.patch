@@ -1,0 +1,35 @@
+ENGINE core-0202 (applied by engine/guest/base.sh AFTER core-0201): CSHA256::Finalize (HAZYNC_SHA_STREAM) writes its
+padding in place in buf instead of copying a 1-64 byte pad and the 8-byte length through Write. Same blocks
+compressed, same digest, same `bytes` afterwards. Made with diff -u in the laid-out tree.
+
+--- a/src/crypto/sha256.cpp	2026-11-25 08:39:37.072164373 +0100
++++ b/src/crypto/sha256.cpp	2026-11-25 08:39:48.921890597 +0100
+@@ -731,11 +731,23 @@
+ 
+ void CSHA256::Finalize(unsigned char hash[OUTPUT_SIZE])
+ {
+-    static const unsigned char pad[64] = {0x80};
+-    unsigned char sizedesc[8];
+-    WriteBE64(sizedesc, bytes << 3);
+-    Write(pad, 1 + ((119 - (bytes % 64)) % 64));
+-    Write(sizedesc, 8);
++    /* ENGINE core-0202: the padding written in place in buf (0x80, zeros, the bit length; one more block when it does
++     * not fit), where Write copied a 1-64 byte pad and the 8-byte length through the buffer. Same blocks compressed,
++     * same `bytes` afterwards. */
++    const size_t n = bytes % 64;
++    const uint64_t bits = bytes << 3;
++    buf[n] = 0x80;
++    if (n >= 56) {
++        __builtin_memset(buf + n + 1, 0, 63 - n);
++        hz_compress(s, buf, 1);
++        __builtin_memset(buf, 0, 56);
++        bytes += 128 - n;
++    } else {
++        __builtin_memset(buf + n + 1, 0, 55 - n);
++        bytes += 64 - n;
++    }
++    WriteBE64(buf + 56, bits);
++    hz_compress(s, buf, 1);
+     for (int i = 0; i < 8; ++i) hz_ovm_be32(hash + 4 * i, s[i]);   /* ENGINE core-0201: native state */
+ }
+ 
