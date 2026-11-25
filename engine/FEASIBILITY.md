@@ -41,6 +41,18 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        first thing to raise with the OpenVM team (is v2.1.0's diff reviewed? are the 1.x ECC/algebra audits still
        valid for 2.x?).
   2. What security level do the proof parameters give, in bits? Does that rely on any conjectures, and how does it compare with risc0's 3.1.0 settings?
+
+     **Answer (25.11.2026, from stark-backend v2.1.0 crates/stark-sdk/src/config/mod.rs; the engine uses these
+     functions, engine.rs):**
+     - Target: **100 bits of PROVEN round-by-round security** (the file's own words), BabyBear base field with a
+       degree-4 extension, Poseidon2 hashing, WHIR polynomial commitments, LogUp grinding calibrated to the PCS list size.
+     - Proximity regime per layer: app and leaf `UniqueDecoding` (no list decoding at all); internal
+       `ListDecoding { m: 2 }`; root and hook (deferral) `ListDecoding { m: 1 }`. List decoding with a radius set by m
+       stays within the Johnson bound, which is proven for Reed-Solomon codes: no proximity-gap conjecture is used.
+     - Assumptions that remain: Poseidon2 over BabyBear as a random oracle / collision-resistant hash (Fiat-Shamir),
+       and SHA-256 for our image id and journal binding.
+     - TO CONFIRM: RISC Zero 3.1.0's stated level and whether it relies on a conjecture (not quoted from memory
+       here). The comparison belongs in the decision write-up with a source.
   3. Is OpenVM still actively maintained? Give its release pace, how it discloses security issues, and who maintains it.
 
      **Answer (25.11.2026; source https://github.com/openvm-org/openvm/releases, https://blog.openvm.dev/2.0-production):**
