@@ -11,6 +11,8 @@ name = "hzengine"
 path = "src/main.rs"
 
 [dependencies]
+bitcode = { version = "0.6.9", features = ["serde"] }
+zstd = "0.14.5"
 cfg-if = "1.0"
 clap = { version = "4", features = ["derive"] }
 eyre = "0.6"

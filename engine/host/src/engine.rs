@@ -393,6 +393,32 @@ pub fn with_ext(p: &Path, ext: &str) -> std::path::PathBuf {
     s.into()
 }
 
+/// See `Cmd::WasmInputs`.
+pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
+    use openvm_stark_backend::codec::Encode;
+    let e = Engine::load(dir)?;
+    let baseline = Engine::baseline(dir)?;
+    let (proof, _) = read_proof(&e, &baseline, proof_path)?;
+    std::fs::create_dir_all(out)?;
+    let vk = VmStarkVerifyingKey { mvk: e.agg_vk.as_ref().clone(), baseline };
+    std::fs::write(out.join("vk.bin"), bitcode::serialize(&vk)?)?;
+    let mut enc = Vec::new();
+    proof.encode(&mut enc)?;
+    let z = zstd::encode_all(&enc[..], 19)?;
+    std::fs::write(out.join("proof.zst"), &z)?;
+    let mut bad = enc.clone();
+    let k = bad.len() / 2;
+    bad[k] ^= 1;
+    std::fs::write(out.join("proof_bad.zst"), zstd::encode_all(&bad[..], 19)?)?;
+    // the native verifier on exactly these bytes, for comparison with the WASM build
+    let t = std::time::Instant::now();
+    let ok = openvm_verify_stark_host::verify_vm_stark_proof(&vk, &z).is_ok();
+    let bad_ok = openvm_verify_stark_host::verify_vm_stark_proof(&vk, &std::fs::read(out.join("proof_bad.zst"))?).is_ok();
+    eprintln!("wasm inputs: vk {} bytes, proof {} bytes encoded / {} zstd; native verify {} ({:.3} s), flipped byte {}",
+              std::fs::metadata(out.join("vk.bin"))?.len(), enc.len(), z.len(), ok, t.elapsed().as_secs_f64(), bad_ok);
+    Ok(())
+}
+
 pub fn verify(dir: &Path, proof_path: &Path) -> Result<()> {
     let e = Engine::load(dir)?;
     let baseline = Engine::baseline(dir)?;

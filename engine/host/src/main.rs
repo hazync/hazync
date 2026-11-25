@@ -139,6 +139,17 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
+    /// FEASIBILITY Q11: write the inputs a WASM build of OpenVM's verifier takes: <out>/vk.bin (bitcode of
+    /// VmStarkVerifyingKey = agg.vk + baseline) and <out>/proof.zst (the proof's codec encoding, zstd), plus
+    /// <out>/proof_bad.zst (one byte of the encoding flipped, a negative control).
+    WasmInputs {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        proof: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Verify a proof: STARK against agg.vk + baseline, its public values against its journal, and its image.
     Verify {
         #[arg(long)]
@@ -186,5 +197,6 @@ fn run(cli: Cli) -> Result<()> {
             Ok(())
         }
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
+        Cmd::WasmInputs { dir, proof, out } => engine::wasm_inputs(&dir, &proof, &out),
     }
 }
