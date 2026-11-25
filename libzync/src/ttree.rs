@@ -229,9 +229,14 @@ fn one_sided(r: &mut Rs, d: u32, tag: u32, ups: &[Up], key: fn(&Up) -> &W, old: 
         if lp && !bit(key(f), d) { return Err(TErr::Witness); }
         if !lp && bit(key(l), d) { return Err(TErr::Witness); }
     }
-    let (mut a, mut b) = (ZERO, ZERO);
-    rest(r, d + 1, &mut a, &mut b)?;
-    if lp { parent_w(50, &h, &a, old); parent_w(50, &h, &b, new); } else { parent_w(50, &a, &h, old); parent_w(50, &b, &h, new); }
+    // the pair is the block: the pruned hash on its side, the expanded child written straight into the other
+    let s = lp as usize;
+    let (mut bo, mut bn) = ([ZERO; 2], [ZERO; 2]);
+    bo[1 - s] = h;
+    bn[1 - s] = h;
+    rest(r, d + 1, &mut bo[s], &mut bn[s])?;
+    parent_blk(50, &bo, old);
+    parent_blk(50, &bn, new);
     Ok(())
 }
 
@@ -250,10 +255,13 @@ fn build_sub(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, &W)>, cx: &Cx, acc: 
     if d >= 256 { return Err(TErr::Duplicate); }
     let (ma, mb) = (a.partition_point(|u| !bit(&u.o, d)), b.partition_point(|u| !bit(&u.o, d)));
     let (el, er) = match extra { Some(e) if bit(e.0, d) => (None, Some(e)), e => (e, None) };
-    let (mut l, mut r) = (ZERO, ZERO);
-    build_sub(d + 1, &a[..ma], &b[..mb], el, cx, acc, &mut l)?;
-    build_sub(d + 1, &a[ma..], &b[mb..], er, cx, acc, &mut r)?;
-    parent_w(50, &l, &r, out);
+    let mut lr = [ZERO; 2];
+    {
+        let (l, r) = lr.split_at_mut(1);
+        build_sub(d + 1, &a[..ma], &b[..mb], el, cx, acc, &mut l[0])?;
+        build_sub(d + 1, &a[ma..], &b[mb..], er, cx, acc, &mut r[0])?;
+    }
+    parent_blk(50, &lr, out);
     Ok(())
 }
 
@@ -266,13 +274,17 @@ fn sub_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, acc: &mut Acc, old: &mut W,
             // an inner node splits on key bit d: none exists at depth 256 (a forged witness, refused, not a panic)
             if d >= 256 { return Err(TErr::Witness); }
             let m = ups.partition_point(|u| !bit(&u.o, d));
-            let (mut a0, mut a1, mut b0, mut b1) = (ZERO, ZERO, ZERO, ZERO);
-            let (l0, l1): (&W, &W) = if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {
-                sub_pass(r, d + 1, &ups[..m], cx, acc, &mut a0, &mut a1)?; (&a0, &a1) };
-            let (r0, r1): (&W, &W) = if m == ups.len() && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {
-                sub_pass(r, d + 1, &ups[m..], cx, acc, &mut b0, &mut b1)?; (&b0, &b1) };
-            parent_w(50, l0, r0, old);
-            parent_w(50, l1, r1, new);
+            // the children land side by side ([left, right] is the block as it is); a pruned child's hash is copied in
+            let (mut bo, mut bn) = ([ZERO; 2], [ZERO; 2]);
+            {
+                let ((lo, ro), (ln, rn)) = (bo.split_at_mut(1), bn.split_at_mut(1));
+                if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; lo[0] = *x; ln[0] = *x; } else {
+                    sub_pass(r, d + 1, &ups[..m], cx, acc, &mut lo[0], &mut ln[0])?; }
+                if m == ups.len() && r.peek() == 1 { r.word()?; let x = r.hash()?; ro[0] = *x; rn[0] = *x; } else {
+                    sub_pass(r, d + 1, &ups[m..], cx, acc, &mut ro[0], &mut rn[0])?; }
+            }
+            parent_blk(50, &bo, old);
+            parent_blk(50, &bn, new);
             Ok(())
         }
         t @ (5 | 6) => one_sided(r, d, t, ups, |u| &u.o, old, new, &mut |r, d, o, n| sub_pass(r, d, ups, cx, acc, o, n)),
@@ -335,10 +347,13 @@ fn build_top(d: u32, a: &[Up], b: &[Up], extra: Option<(&W, &W)>, cx: &Cx, out: 
     if d >= 256 { return Err(TErr::Witness); }
     let (ma, mb) = (a.partition_point(|u| !bit(&u.s, d)), b.partition_point(|u| !bit(&u.s, d)));
     let (el, er) = match extra { Some(e) if bit(e.0, d) => (None, Some(e)), e => (e, None) };
-    let (mut l, mut r) = (ZERO, ZERO);
-    build_top(d + 1, &a[..ma], &b[..mb], el, cx, &mut l)?;
-    build_top(d + 1, &a[ma..], &b[mb..], er, cx, &mut r)?;
-    parent_w(50, &l, &r, out);
+    let mut lr = [ZERO; 2];
+    {
+        let (l, r) = lr.split_at_mut(1);
+        build_top(d + 1, &a[..ma], &b[..mb], el, cx, &mut l[0])?;
+        build_top(d + 1, &a[ma..], &b[mb..], er, cx, &mut r[0])?;
+    }
+    parent_blk(50, &lr, out);
     Ok(())
 }
 
@@ -351,13 +366,17 @@ fn top_node(r: &mut Rs, d: u32, ups: &[Up], cx: &Cx, old: &mut W, new: &mut W) -
             // an inner node splits on key bit d: none exists at depth 256 (a forged witness, refused, not a panic)
             if d >= 256 { return Err(TErr::Witness); }
             let m = ups.partition_point(|u| !bit(&u.s, d));
-            let (mut a0, mut a1, mut b0, mut b1) = (ZERO, ZERO, ZERO, ZERO);
-            let (l0, l1): (&W, &W) = if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {
-                top_pass(r, d + 1, &ups[..m], cx, &mut a0, &mut a1)?; (&a0, &a1) };
-            let (r0, r1): (&W, &W) = if m == ups.len() && r.peek() == 1 { r.word()?; let x = r.hash()?; (x, x) } else {
-                top_pass(r, d + 1, &ups[m..], cx, &mut b0, &mut b1)?; (&b0, &b1) };
-            parent_w(50, l0, r0, old);
-            parent_w(50, l1, r1, new);
+            // the children land side by side ([left, right] is the block as it is); a pruned child's hash is copied in
+            let (mut bo, mut bn) = ([ZERO; 2], [ZERO; 2]);
+            {
+                let ((lo, ro), (ln, rn)) = (bo.split_at_mut(1), bn.split_at_mut(1));
+                if m == 0 && r.peek() == 1 { r.word()?; let x = r.hash()?; lo[0] = *x; ln[0] = *x; } else {
+                    top_pass(r, d + 1, &ups[..m], cx, &mut lo[0], &mut ln[0])?; }
+                if m == ups.len() && r.peek() == 1 { r.word()?; let x = r.hash()?; ro[0] = *x; rn[0] = *x; } else {
+                    top_pass(r, d + 1, &ups[m..], cx, &mut ro[0], &mut rn[0])?; }
+            }
+            parent_blk(50, &bo, old);
+            parent_blk(50, &bn, new);
             Ok(())
         }
         t @ (5 | 6) => one_sided(r, d, t, ups, |u| &u.s, old, new, &mut |r, d, o, n| top_pass(r, d, ups, cx, o, n)),
