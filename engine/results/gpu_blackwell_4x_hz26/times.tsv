@@ -1,0 +1,4 @@
+976379t_default	rc=0	verify=0	50s	gpu_util=22%	peak_mem=8812MiB
+976379t_default_noseg	rc=0	verify=0	45s	gpu_util=20%	peak_mem=921MiB
+364292tf_default	rc=0	verify=0	98s	gpu_util=35%	peak_mem=9583MiB
+364292t_default	rc=0	verify=0	79s	gpu_util=43%	peak_mem=921MiB
