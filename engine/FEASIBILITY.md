@@ -68,6 +68,24 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        a different aggregation key is answered by the baseline pinning agg_vk; to be checked against crates/verify.
   6. List every difference between the engine guest and the product guest (CHANGES.md), and explain why each one cannot change a verdict or committed state.
 
+     **Answer (25.11.2026; the full list is engine/CHANGES.md and engine/guest/edits.py, each edit anchored to exactly
+     one place so a product change that moves it fails assembly by name):**
+     | difference | why it cannot change a verdict or committed state | evidence |
+     |---|---|---|
+     | edit 1: cross-version handover stubbed (panics) | an engine chain starts at genesis; the path is unreachable and panics (no proof) if reached | code |
+     | edit 2 + batch_ecdsa_ovm.rs + msm_ovm.rs: batch signature check on OpenVM's secp256k1 | same public items, hint layout, transcript and batch equation; a call without a valid hint is verified directly | msm host test vs openvm's msm with negative controls; journals |
+     | edit 3: pubkey lift via libsecp's sqrt hook (hinted, checked by squaring) | the hint is checked; a wrong root fails the square check | journals |
+     | edit 4: journal hash -> the proof's public values once at the end | the binding the outer verifier and env::verify check (Q5) | M1 negative controls |
+     | edits 5/7 + core-0201/0202 + secp-0202 + sha2 shim: SHA-256 on OpenVM's native layout, padding in place | same bytes in, same digest out | sha2-shim-test vs RustCrypto (all lengths 0-299, splits, unaligned; negative control fails); journals |
+     | edits 8/9: large inputs lent, not copied | read-only views of the same words | journals |
+     | edit 10: x_for on one padded block | same digest, limbs read without swaps | short_digest_limbs host test (0..55 bytes, negative control); aggregate journal identical |
+     | platform (engine/platform): RISC Zero guest API on OpenVM, env::verify = verify-stark deferral | Q4 lists where it could accept more than RISC Zero | M1 tests, journals |
+     | shared libzync changes on this branch (coin log update_one, trie hash pairs, KIND_TRIE_PARTS) | same hashes in the same order; parts = the combine's audited-by-test logic run in the aggregate | libzync tests (76) incl. against the old recursion, negative controls fail |
+     - MEASURED (acceptance): every chunk, trie and part journal byte-identical to RISC Zero's on 976,379, 962,000,
+       741,000, 364,292 (17/17), 130,000; each aggregate identical except its 32-byte image id.
+     - UNKNOWN (rejection): identical journals on VALID blocks show the engine accepts as RISC Zero does, not that it
+       refuses what RISC Zero refuses. That needs Q9 (Core's 22,666 vectors and the 97 rig cases) run on the engine.
+
   B. Completeness: can every block Core accepts still be proved?
   7. Do the #794 attack blocks prove on the engine: the memory block, the single tapscript input, and the costly SIGHASH_NONE block at a small scale? What
   allocator does the guest use, and does it ever free memory?
