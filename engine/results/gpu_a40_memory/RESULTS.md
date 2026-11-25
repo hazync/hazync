@@ -81,3 +81,15 @@ One prover, 2 GiB segments, every proof verified (the rebuilt deferral prover's 
   - On top of that, the largest single step is rs_code_matrix in the leaf layer (1.2-1.6 GiB) and in internal_for_leaf (1.6 GiB), the recursion circuits' own fixed 100-bit presets (leaf 2^21 x blowup 4, internal 2^19 x blowup 8).
   - The app proofs peak lower (2.6 GiB resident at start, including the 1.1 GiB address space).
 - Next lever for a 4 GB card: keep the proving keys on the host and upload only the active layer's (prover-side, inside OpenVM).
+
+## App VM released before aggregation (f38eb2fa), RTX 4090, 25.11.2026 night
+
+- CPU first (hazync-coord, keys-m27, tree 2/2): 130,000 chunk + trie IDENTICAL to RISC Zero, aggregate verified both
+  children in-guest, final proof `verify: OK`.
+- RTX 4090, tree 2/2, 2 GiB segments: 976,379 in **330 s**, verified, nvidia-smi peak **4,160 MiB**; 130,000 14 s,
+  3,796 MiB.
+- The release works: the late aggregation layers now start at 0.34-0.37 GiB resident (were 1.5-1.6). The peak did not
+  move because it is now the app phase (L4 tracker: 3.2 GiB = app key 1.2 + the 2^27 address space image/tree 1.1 +
+  encoding), and the memory pool keeps its high-water mark. Only log tails were harvested (essentials harvest), so the
+  phase attribution of this run's peak is from the L4 run; the next memory run uses HARVEST_FULL=1.
+- Next: 2^26 address space (halves the 1.1 GiB), if every guest input fits in 64 MiB (CPU check m26.sh).
