@@ -123,6 +123,23 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   9. Do all 22,666 Core test vectors and the 97 rig cases pass with verdicts identical to risc0's?
   10. What are the limits on memory, cycles per segment and input size, and where do they come from?
 
+     **Answer (25.11.2026, from OpenVM v2.1.0's source and the engine; MEASURED where marked):**
+     - Guest memory: 2^29 bytes = **512 MiB** address space (openvm-platform memory.rs MEM_BITS = 29; stack top
+       0x00200400, text 0x00200800, heap from the end of data up to 512 MiB). Input, heap and stack share it. The
+       guest's allocator is a bump allocator that never frees, on purpose (the address-keyed caches need it; reuse
+       measured +4% cost anyway, results/profile_chunk). MEASURED heap use, 976,379: chunks ~8 MB, trie ~12 MB,
+       aggregate ~31 MB (mostly capacity never touched) — far below 512 MiB. An adversarial memory block (#794) is
+       the case to test (Q7).
+     - Per segment: the metered executor cuts a segment before its traces exceed 2^24 rows in any chip
+       (max_trace_height_bits = MAX_APP_LOG_STACKED_HEIGHT = 24) or the memory estimate exceeds
+       segmentation_max_memory (OpenVM default 15 GiB; the engine sets it per card: memory / provers - 4, at most 24
+       GiB; 32 GiB made the prover refuse its own trace). Segments are unlimited in number: a long proof is just more
+       segments (MEASURED: the trie of 976,379 = 21 segments).
+     - Input size: no protocol limit beyond guest memory (the input stream is held in memory once, 4-byte aligned).
+       MEASURED largest so far: the trie witness of 976,379, 5.2 MB of a 6.5 MB stream; the aggregate's stream 4.4 MB.
+     - Compared with RISC Zero: RISC Zero's segments are capped by segment_limit_po2 (cycles); OpenVM's by trace rows
+       and memory per chip, so "cycles per segment" has no single number here.
+
   C. Where it has to run
   11. Browser and phone verifier: can a proof be checked in WASM in a browser? How large is the proof and verifier, how long does a check take on a phone,
   and what does the verifier trust?
