@@ -297,7 +297,12 @@ impl Engine {
             (None, None) => eyre::bail!("prove: neither a known journal nor an emit pass"),
         };
         let t = std::time::Instant::now();
-        let (proof, baseline) = self.sdk.prove(exe, prove, def_inputs)?;
+        let (proof, baseline) = if crate::segpar::leaf_children_set() {
+            // the leaf batch is set: the same proof chain through segpar (no workers), which applies it
+            crate::segpar::prove(self, exe, prove, def_inputs, &std::env::temp_dir().join("hz-unused.stdin"), &[])?
+        } else {
+            self.sdk.prove(exe, prove, def_inputs)?
+        };
         eprintln!("prove: {:.1} s", t.elapsed().as_secs_f64());
         let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
         ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");
