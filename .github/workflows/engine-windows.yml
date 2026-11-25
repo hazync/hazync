@@ -296,6 +296,12 @@ jobs:
           # GCC builtins OpenVM's CUDA sources use, for MSVC (engine/ci/msvc_builtins.h)
           NVCC_APPEND_FLAGS="--pre-include $(cygpath -m "$PWD/engine/ci/msvc_builtins.h")"
           export NVCC_APPEND_FLAGS
+          # nvcc's own threads (-t4) raced on Windows over its device-link temp files (run 45649713360: "nvlink fatal:
+          # Could not read file ...vmm_shim_dlink.reg.c", after the same file had compiled in five runs): one thread per
+          # nvcc (cargo still runs build scripts in parallel), and a temp dir of our own with no 8.3 short name in it
+          export NVCC_THREADS=1
+          mkdir -p "$RUNNER_TEMP/nvtmp"
+          TMP=$(cygpath -w "$RUNNER_TEMP/nvtmp"); TEMP=$TMP; export TMP TEMP
           echo "CUDA_ARCH=$CUDA_ARCH CUDA_LIB_DIR=$CUDA_LIB_DIR NVCC_CCBIN=${NVCC_CCBIN:-} supported=${CUDA_HOST_SUPPORTED:-} NVCC_APPEND_FLAGS=$NVCC_APPEND_FLAGS"
           cd engine/host || exit 1
           # not --locked: the stark-backend [patch] moves those crates' lock entries to the patched path.
