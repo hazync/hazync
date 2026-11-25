@@ -19,7 +19,7 @@ for j in ${JOBS:-}; do
   else HZ_SEG_MEM_GB=$g $H prove-block --dir keys --export export/$x --out out/$tag --workers $w > out/$tag.log 2>&1; rc=$?; fi
   e=$(( $(date +%s)-s )); kill $SMI
   u=$(awk -F', ' '{gsub(/ %/,"",$1); s+=$1; n++} END {printf "%.0f", s/n}' out/smi_$tag.log)
-  m=$(awk -F', ' '{gsub(/ MiB/,"",$2); if ($2>m) m=$2} END {print m}' out/smi_$tag.log)
+  m=$(awk -F', ' '{gsub(/ MiB/,"",$2); if ($2+0>m+0) m=$2+0} END {print m}' out/smi_$tag.log)   # numeric (as text "673" > "6643")
   $H verify --dir keys --proof out/$tag/block > out/${tag}_verify.log 2>&1; v=$?
   echo -e "$tag\trc=$rc\tverify=$v\t${e}s\tgpu_util=${u}%\tpeak_mem=${m}MiB" >> $T
   rm -f out/$tag/*.proof.json
