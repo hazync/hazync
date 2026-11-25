@@ -334,7 +334,13 @@ impl Engine {
             (None, None) => eyre::bail!("prove: neither a known journal nor an emit pass"),
         };
         let t = std::time::Instant::now();
-        let (proof, baseline) = self.sdk.prove(exe, prove, def_inputs)?;
+        // segpar's chain with no workers (it releases the app VM's device key before aggregation, the GPU memory
+        // peak); HZ_SDK_PROVE=1: the SDK's own StarkProver::prove
+        let (proof, baseline) = if std::env::var("HZ_SDK_PROVE").as_deref() == Ok("1") {
+            self.sdk.prove(exe, prove, def_inputs)?
+        } else {
+            crate::segpar::prove(self, exe, prove, def_inputs, &std::env::temp_dir().join(format!("hz-prove-{}.stdin", std::process::id())), &[])?
+        };
         eprintln!("prove: {:.1} s", t.elapsed().as_secs_f64());
         let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
         ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");

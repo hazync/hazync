@@ -17,12 +17,19 @@ use openvm_sdk::{
             execution_mode::metered::segment_ctx::Segment, hasher::poseidon2::vm_poseidon2_hasher,
             instructions::exe::VmExe, ContinuationVmProof, PreflightExecutionOutput, VmInstance,
         },
-        system::memory::merkle::{public_values::UserPublicValuesProof, MerkleTree},
+        system::{
+            memory::merkle::{public_values::UserPublicValuesProof, MerkleTree},
+            program::trace::compute_initial_memory_commit,
+        },
     },
     prover::{compute_deferral_merkle_proofs, vm::new_local_prover},
     DefaultStarkEngine, DeferralInput, StdIn, F, SC,
 };
-use openvm_stark_backend::{p3_field::PrimeField32, proof::Proof, StarkEngine};
+use openvm_stark_backend::{
+    p3_field::{PrimeCharacteristicRing, PrimeField32},
+    proof::Proof,
+    StarkEngine,
+};
 use openvm_verify_stark_host::{
     pvs::{DeferralPvs, DEF_PVS_AIR_ID},
     VmStarkProof,
@@ -133,10 +140,11 @@ pub fn prove(
 ) -> Result<(VmStarkProof, openvm_verify_stark_host::vk::VerificationBaseline)> {
     let t0 = std::time::Instant::now();
     let lap = |what: &str| eprintln!("segpar: {what} at {:.2} s", t0.elapsed().as_secs_f64());
-    let mut prover = e.sdk.prover(exe.clone())?;
-    lap("stark prover");
-    let has_deferrals = prover.deferral_setup.hook_commit().is_some();
-    let memory_dimensions = prover.app_prover.memory_dimensions();
+    // The SDK's aggregation and deferral provers, not a StarkProver: that carries its own app prover, a second device
+    // copy of the app proving key (~1.2 GiB on the GPU, results/gpu_a40_memory) next to `inst`'s.
+    let agg = e.sdk.agg_prover();
+    let has_deferrals = e.sdk.def_hook_commit().is_some();
+    let memory_dimensions = e.sdk.app_pk().app_vm_pk.vm_config.system.config.memory_config.memory_dimensions();
     let cap = own_cap(e);
     let mut inst = instance(e, exe, None)?;
     lap("instance");
@@ -202,37 +210,57 @@ pub fn prove(
         top,
     );
     let continuation_proof = ContinuationVmProof { per_segment, user_public_values };
-    lap("app proof assembled");
+    // What the rest needs from the app VM (StarkProver::generate_baseline's app half; the final memory's tree for the
+    // deferral Merkle proofs), then the VM goes: its device proving key (~1.2 GiB) is not used by the aggregation
+    // layers, which hold the run's GPU memory peak.
+    let program_commit = *inst.program_commitment();
+    let initial_state = compute_initial_memory_commit(&vm_poseidon2_hasher(), inst.exe(), &inst.vm.config().as_ref().memory_config);
+    let initial_pc = F::from_u32(inst.exe().pc_start);
+    let num_user_pvs = inst.vm.config().as_ref().num_public_values;
+    let final_tree = has_deferrals.then(|| MerkleTree::from_memory(final_memory, &memory_dimensions, &vm_poseidon2_hasher()));
+    drop(inst);
+    lap("app proof assembled, app VM released");
 
     // StarkProver::prove from here on, unchanged
-    let (mut stark_proof, mut internal_metadata) = prover.agg_prover.prove_vm(continuation_proof)?;
+    let (mut stark_proof, mut internal_metadata) = agg.prove_vm(continuation_proof)?;
     lap("leaf/internal aggregation");
     if def_inputs.iter().any(|input| !input.is_empty()) {
-        let def_agg_prover = prover
-            .deferral_setup
-            .prover()
+        let def_agg_prover = e
+            .sdk
+            .deferral_agg_prover()
             .ok_or_else(|| eyre!("non-empty deferral inputs require a deferral aggregation prover"))?;
         let def_hook_proofs = def_agg_prover.multi_deferral_circuit_prover.prove(def_inputs)?;
         let (def_proof, def_internal_recursive_layer) = def_agg_prover.agg_prover.prove_def(def_hook_proofs)?;
         stark_proof =
-            prover.agg_prover.prove_mixed(stark_proof, def_proof, &mut internal_metadata, def_internal_recursive_layer)?;
+            agg.prove_mixed(stark_proof, def_proof, &mut internal_metadata, def_internal_recursive_layer)?;
     }
     lap("deferral proofs");
-    stark_proof = prover.agg_prover.wrap_proof(stark_proof, &mut internal_metadata)?;
+    stark_proof = agg.wrap_proof(stark_proof, &mut internal_metadata)?;
     lap("wrap");
     if has_deferrals {
-        let final_tree = MerkleTree::from_memory(final_memory, &memory_dimensions, &vm_poseidon2_hasher());
         let def_pvs: &DeferralPvs<F> = std::borrow::Borrow::borrow(stark_proof.inner.public_values[DEF_PVS_AIR_ID].as_slice());
         let depth = def_pvs.depth.as_canonical_u32() as usize;
         stark_proof.deferral_merkle_proofs = Some(compute_deferral_merkle_proofs(
             memory_dimensions,
             initial_tree.as_ref().unwrap(),
-            &final_tree,
+            final_tree.as_ref().unwrap(),
             depth,
         ));
     }
     lap("deferral merkle proofs");
-    let baseline = prover.generate_baseline();
+    // StarkProver::generate_baseline, from the values kept above
+    let baseline = openvm_verify_stark_host::vk::VerificationBaseline {
+        program_commit,
+        initial_state,
+        initial_pc,
+        memory_dimensions,
+        num_user_pvs,
+        app_vk_commit: agg.leaf_prover.get_vk_commit(false),
+        leaf_vk_commit: agg.internal_for_leaf_prover.get_vk_commit(false),
+        internal_for_leaf_vk_commit: agg.internal_recursive_prover.get_vk_commit(false),
+        internal_recursive_vk_commit: agg.internal_recursive_prover.get_vk_commit(true),
+        expected_def_hook_commit: e.sdk.def_hook_commit(),
+    };
     Ok((stark_proof, baseline))
 }
 
