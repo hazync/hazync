@@ -158,6 +158,20 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   C. Where it has to run
   11. Browser and phone verifier: can a proof be checked in WASM in a browser? How large is the proof and verifier, how long does a check take on a phone,
   and what does the verifier trust?
+
+     **Answer so far (25.11.2026):**
+     - MEASURED: the final proof (VmStarkProof, versioned JSON) is ~642 KB (prof13/agg.proof.proof.json 642,402
+       bytes); `hzengine verify` checks it natively in 0.01-0.05 s (build box, Blackwell pods). The verifier trusts
+       the aggregation verifying key (agg.vk) and the baseline (baseline.json) pinned with the image, plus the image id.
+     - MEASURED (wasm32-unknown-unknown build of a crate using openvm-verify-stark-host v2.1.0): **does not compile
+       as shipped.** After the usual getrandom JS backend, it stops in `abi_stable` (-> `libloading`, native dynamic
+       loading), a HARD dependency of openvm-circuit (crates/vm/src/arch/execution_mode/metered/memory_ctx.rs uses
+       abi_stable's RVec), which the host verifier pulls in. zstd (C) is next in line.
+     - Options: (a) a small patch making abi_stable optional for a verify-only build (feature-gate the metered
+       executor) — upstream PR or a fork, then measure size/time in a browser; (b) OpenVM's STARK -> Halo2/KZG wrapper
+       (root prover, EVM proof): a SNARK proof is small and its verifier runs in WASM, at the cost of a wrapping step
+       per proof and a trusted setup (KZG); (c) a verifier of our own over the proof format (most work, most risk).
+     - UNKNOWN: phone check time and verifier size until (a) or (b) builds.
   12. Windows: does the GPU prover build and prove on Windows with a native CUDA toolchain? What's the minimum driver version?
   13. Cards: which GPUs are supported (oldest architecture, minimum memory)? Do consumer cards like a 3060 or 4090 work, and how fast?
   14. Is there a CPU-only prover, and how fast is it?
