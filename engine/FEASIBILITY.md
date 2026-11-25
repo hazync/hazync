@@ -119,6 +119,21 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   B. Completeness: can every block Core accepts still be proved?
   7. Do the #794 attack blocks prove on the engine: the memory block, the single tapscript input, and the costly SIGHASH_NONE block at a small scale? What
   allocator does the guest use, and does it ever free memory?
+
+     **Answer so far (25.11.2026): allocator MEASURED, attack blocks NOT YET RUN on the engine.**
+     - Allocator: OpenVM's bump allocator (openvm-platform heap; never frees). The guest REFUSES an allocator that
+       reuses memory (main.rs: verify_input.cpp's per-transaction caches and Core's legacy sighash cache are keyed
+       by address; review 14.11). A measurement-only image with size-class reuse made chunks 4% MORE expensive
+       (results/profile_chunk, hz21/hz22), so reuse buys nothing here anyway.
+     - Guest memory 512 MiB (Q10). The #794 MEM input (worst.py: 201 x OP_CHECKSIG over a 9.8 kB scriptCode, which
+       Core copies per call) costs ~2 MB of never-freed heap per input (ESTIMATED from the construction), so ~200
+       such inputs fit in one chunk's memory. The product's answer is host-side (#795, merged): a chunk that runs out
+       of memory is re-split; mem_k1140 (regtest block 126) then proves in 7 chunks on RISC Zero (dev mode,
+       /root/oomfix/runs/mem_k1140.log). The engine needs the same re-split in its own chunking (engine-export /
+       prove-block cut chunks by cost, not memory): TO DO.
+     - Test plan: regtest engine guest (Cargo feature `regtest` exists in engine/guest/Cargo.toml.in), product host
+       built HAZYNC_NETWORK=regtest, block JSON from worst.py's regtest node (mkblock.py), engine-export, then execute
+       every chunk on the engine (CPU) and compare journals; the single-tapscript and SIGHASH_NONE cases likewise.
   8. Does it prove an old block with many inputs (364,292), plus a few of the edge blocks from blocks.sh?
   9. Do all 22,666 Core test vectors and the 97 rig cases pass with verdicts identical to risc0's?
   10. What are the limits on memory, cycles per segment and input size, and where do they come from?
