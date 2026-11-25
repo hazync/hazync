@@ -126,3 +126,32 @@ the engine's sha2 wrapper's `finalize` 9% inclusive. Changes, each measured on i
 Every chunk and trie journal identical to RISC Zero's at each step; every aggregate journal RISC Zero's except the 32
 image-id bytes. Since keys-hz6 on this block: chunks 20.91B -> 16.32B (−21.9%), trie 6.31B -> 6.01B (−4.9%),
 aggregate 5.36B -> 4.34B (−19.0%, metering images).
+
+### Hash pairs in place, x_for, Core's Finalize, the heap (hz14-hz24, 25.11.2026)
+
+Profiles of hz13 (chunk 0, aggregate; prof13) put the aggregate's `coinlog_forest::update` at 25% of its instructions,
+163 RISC-V instructions per SHA-256 compression on top of the SHA chip: a 64-byte copy into a block, a zeroed state,
+an 8-word byte swap, then the output copied again. Each build measured on its own (CPU metered cost, 976,379):
+
+| build | change | chunks (5) | trie | aggregate |
+|---|---|---|---|---|
+| hz13 | (before) | 16.323B | 6.005B | 4.341B |
+| hz14 | the compression's output stored byte by byte (volatile) instead of a word swap | 16.323B | 6.247B (+4.0%) | 4.730B (+9.0%) |
+| hz15 | + the coin log and the trie's chain walk keep each hash pair side by side and compress it in place (`parent_blk`) | — | 5.476B | 4.274B |
+| hz16/b16 | + swiftsync `x_for`: SHA-256(leaf ‖ ctr) as one padded block, the x limbs straight from the state (no swap there and back) | — | — | 4.158B |
+| hz17 | word swap restored, pairs also at the trie's two-child / one-sided / build nodes | — | 5.763B | 4.242B |
+| hz19 | + core-0202: `CSHA256::Finalize` pads in place | 16.095B (−1.4%) | 5.763B | 4.242B |
+| hz23 | byte stores again, everything above (the GPU-confirmed image, results/gpu_a40_hz23) | 16.095B | 5.496B (−8.5%) | 4.158B (−4.2%) |
+
+Byte stores against a word swap flipped with context (worse with a copied block, better with the pairs in place):
+measured, not reasoned. The extra pair sites (hz23 vs hz15: 5.496B vs 5.476B) are neutral to slightly worse.
+
+**Heap reuse (hz21/hz22, not shipped).** A size-class free list under C's malloc/free (Core's interpreter allocates per
+opcode; the bump allocator never frees) trips the guest's own guard: verify_input.cpp's caches and Core's legacy sighash
+cache are keyed by address, sound only while no address is handed out twice (review 14.11). With the guard switched off
+in a measurement-only image the chunks cost MORE (chunk 0 3.140B -> 3.269B, +4%); journals identical. Closed.
+
+**Split trie without a combine (hz24).** The aggregate verifies the 4 parts (`ttree::KIND_TRIE_PARTS`) and runs the
+combine's update on its own lists: its journal is byte-identical to the whole-trie path's (sha 95bed44c...), its cost
+4.157B -> 4.484B (+0.33B). Parts 1.359 / 1.307 / 1.530 / 1.445B against 5.496B for the whole trie; the 1.33B combine
+proof is gone. GPU timing: results/gpu_a40_trie_parts.
