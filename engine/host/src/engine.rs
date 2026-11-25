@@ -297,7 +297,7 @@ impl Engine {
         prove: StdIn,
         def_inputs: &[DeferralInput],
         stdin_file: &Path,
-        workers: &[crate::block::Worker],
+        workers: &[&crate::block::Worker],
     ) -> Result<(VmStarkProof, Vec<u8>)> {
         let t = std::time::Instant::now();
         let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));

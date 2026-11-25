@@ -35,6 +35,8 @@ struct Req {
     lo: usize,
     #[serde(default)]
     hi: usize,
+    #[serde(default)]
+    cap: Option<usize>,
 }
 
 pub fn serve(dir: &Path) -> Result<()> {
@@ -86,7 +88,8 @@ fn handle(e: &Engine, dir: &Path, r: &Req) -> Result<serde_json::Value> {
             // segpar: segments lo..hi of the program on a serialized stdin (input), their proofs to out
             let input = r.input.as_ref().ok_or_else(|| eyre::eyre!("prove_segments: input"))?;
             let out = r.out.as_ref().ok_or_else(|| eyre::eyre!("prove_segments: out"))?;
-            let n = crate::segpar::prove_segments(e, dir, input, r.lo, r.hi, out)?;
+            let cap = r.cap.ok_or_else(|| eyre::eyre!("prove_segments: cap"))?;
+            let n = crate::segpar::prove_segments(e, dir, input, r.lo, r.hi, cap, out)?;
             Ok(serde_json::json!({"ok": true, "segments": n, "secs": t.elapsed().as_secs_f64()}))
         }
         "image" => {

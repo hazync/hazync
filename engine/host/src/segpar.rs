@@ -36,8 +36,23 @@ type Vb = openvm_sdk_config::SdkVmGpuBuilder;
 type Vb = openvm_sdk_config::SdkVmCpuBuilder;
 type Inst = VmInstance<DefaultStarkEngine, Vb>;
 
-fn instance(e: &Engine, exe: Arc<VmExe<F>>) -> Result<Inst> {
-    Ok(new_local_prover::<DefaultStarkEngine, Vb>(Vb::default(), &e.sdk.app_pk().app_vm_pk, exe)?)
+/// A VM instance for `exe`, cutting segments at `cap` bytes when given (else this process's own cap). Segment proofs
+/// from several processes fit together only when every one cuts the same segments.
+fn instance(e: &Engine, exe: Arc<VmExe<F>>, cap: Option<usize>) -> Result<Inst> {
+    let pk = &e.sdk.app_pk().app_vm_pk;
+    match cap {
+        Some(c) if c != pk.vm_config.system.config.segmentation_max_memory => {
+            let mut pk2 = openvm_sdk::prover::vm::types::VmProvingKey { vm_config: pk.vm_config.clone(), vm_pk: pk.vm_pk.clone() };
+            pk2.vm_config.system.config.segmentation_max_memory = c;
+            Ok(new_local_prover::<DefaultStarkEngine, Vb>(Vb::default(), &pk2, exe)?)
+        }
+        _ => Ok(new_local_prover::<DefaultStarkEngine, Vb>(Vb::default(), pk, exe)?),
+    }
+}
+
+/// This process's segment cap, bytes.
+pub fn own_cap(e: &Engine) -> usize {
+    e.sdk.app_pk().app_vm_pk.vm_config.system.config.segmentation_max_memory
 }
 
 /// Metered execution: the segments, exactly as `prove_continuations` cuts them. Leaves the instance at its initial
@@ -74,10 +89,10 @@ fn run(inst: &mut Inst, segs: &[Segment], lo: usize, hi: usize) -> Result<Vec<Pr
 }
 
 /// Worker side (`serve` op "prove_segments"): segments `lo..hi` of the program on `input`, written to `out`.
-pub fn prove_segments(e: &Engine, dir: &Path, input: &Path, lo: usize, hi: usize, out: &Path) -> Result<usize> {
+pub fn prove_segments(e: &Engine, dir: &Path, input: &Path, lo: usize, hi: usize, cap: usize, out: &Path) -> Result<usize> {
     let exe = Engine::exe(dir)?;
     let stdin: StdIn = read_object_from_file(input)?;
-    let mut inst = instance(e, exe)?;
+    let mut inst = instance(e, exe, Some(cap))?;
     let segs = segments(&mut inst, &stdin)?;
     ensure!(lo < hi && hi <= segs.len(), "segments {lo}..{hi} of {}", segs.len());
     let proofs = run(&mut inst, &segs, lo, hi)?;
@@ -114,7 +129,7 @@ pub fn prove(
     prove: StdIn,
     def_inputs: &[DeferralInput],
     stdin_file: &Path,
-    workers: &[crate::block::Worker],
+    workers: &[&crate::block::Worker],
 ) -> Result<(VmStarkProof, openvm_verify_stark_host::vk::VerificationBaseline)> {
     let t0 = std::time::Instant::now();
     let lap = |what: &str| eprintln!("segpar: {what} at {:.2} s", t0.elapsed().as_secs_f64());
@@ -122,7 +137,8 @@ pub fn prove(
     lap("stark prover");
     let has_deferrals = prover.deferral_setup.hook_commit().is_some();
     let memory_dimensions = prover.app_prover.memory_dimensions();
-    let mut inst = instance(e, exe)?;
+    let cap = own_cap(e);
+    let mut inst = instance(e, exe, None)?;
     lap("instance");
     let segs = segments(&mut inst, &prove)?;
     lap("metered execution");
@@ -147,7 +163,7 @@ pub fn prove(
             .map(|(i, (&(lo, hi), w))| {
                 let out = tmp.join(format!("run{i}.bin"));
                 s.spawn(move || -> Result<Vec<Proof<SC>>> {
-                    let n = w.prove_segments(stdin_file, lo, hi, &out)?;
+                    let n = w.prove_segments(stdin_file, lo, hi, cap, &out)?;
                     lap(&format!("worker run {lo}..{hi} done"));
                     ensure!(n == n_segs, "a worker cut {n} segments, this process {n_segs}");
                     let p: Vec<Proof<SC>> = read_object_from_file(&out)?;
