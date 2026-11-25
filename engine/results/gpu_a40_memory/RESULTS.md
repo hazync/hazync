@@ -45,3 +45,19 @@ Same pod type, single prover, 2 GiB segments; CPU journals identical first (m27.
 Reed-Solomon encoding), which the stacked height sets (2^22 halved it in the keys-s22 run). Next: 2^27 AND 2^22 with
 1 GiB segments. The defaults job (3 provers) again ran the aggregate out of memory: the kept leaf workers; fixed in
 52a28fd2 (the workers the aggregate does not use stop before it).
+
+## 2^27 + stacked 2^22 + 1 GiB segments (keys-ms), and the leaf batch (A40 / A6000, 25.11.2026 evening)
+
+- keys-ms (HZ_GUEST_MEM_BITS=27 + HZ_APP_LOG_STACKED_HEIGHT=22), 1 GiB segments, one prover: 130,000 peak 5,136 MiB
+  (tracker: 4.70 GiB in use), 976,379 peak 5,489 MiB in 793 s: WORSE than keys-m27 at 2 GiB. The tracker places the
+  peak in agg_layer "leaf": many small segments make each leaf proof verify more of them (+2.3-2.4 GiB
+  rs_code_matrix). Small segments are not the way down.
+- The same keys at engine defaults (3 provers, A40): 976,379 in **132 s**, verified (the 52a28fd2 fix: the aggregate
+  no longer runs out of memory). Faster than keys-hz24's 149-160 s on A40s.
+- HZ_LEAF_CHILDREN=1 (keys-m27, 2 GiB, one prover, RTX A6000): 130,000 6,061 MiB, 976,379 6,099 MiB in 572 s, both
+  tracker 5.60 GiB. FLAWED TEST: the run builds its own AggProver while the SDK still makes its default one, so two
+  sets of aggregation keys are on the GPU (~+2.3 GB; the SDK only hands out its deferral setup through prover(), and
+  the cached-key constructor that takes a tree config needs OpenVM's crate-private from_supported_deferral_pks).
+  Even so: the full block now peaks no higher than the tiny one, and the +2.2 GiB step moved from the leaf layer to
+  internal_for_leaf (3 children by default). Next: the SDK built with the tree config (one patched OpenVM line, or
+  upstream), num_children_leaf 1 and num_children_internal 2.
