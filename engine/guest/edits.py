@@ -130,3 +130,20 @@ import os
 p = os.path.join(os.path.dirname(sys.argv[1]), "agg_lite.rs"); s = open(p).read()
 rep("journals: &[Vec<u32>],", "journals: &[&[u32]],   // ENGINE: lent journals (edits.py 8)")
 open(p, "w").write(s); print("engine edits applied:", p)
+
+# 10) swiftsync::x_for: SHA-256(leaf ‖ ctr) is one block, padded in place on OpenVM's compression; the x coordinate's
+#     limbs are the native state words in reverse (sha2 shim's short_digest_limbs, host-tested against RustCrypto), where
+#     the product byte-swapped the digest into bytes and be_to_limbs swapped it back. Same x.
+p = os.path.join(os.path.dirname(sys.argv[1]), "swiftsync.rs"); s = open(p).read()
+rep('''    let mut m = [0u8; 36];
+    m[..32].copy_from_slice(leaf);
+    m[32..].copy_from_slice(&ctr.to_le_bytes());
+    let h: [u8; 32] = Sha256::digest(m).into();
+    // x >= p has probability ~2^-224; refusing it keeps the map single-valued.
+    Fq::from_bigint(BigInt(be_to_limbs(&h))).expect("ECMH: hash >= p")''', '''    // ENGINE (edits.py 10): leaf ‖ ctr (little-endian) in a word block, the digest's limbs straight from the state
+    let mut b = [0u32; 16];
+    unsafe { core::ptr::copy_nonoverlapping(leaf.as_ptr(), b.as_mut_ptr() as *mut u8, 32) };
+    b[8] = ctr;   // its little-endian bytes: the target is little-endian (risc0-crypto shim asserts it)
+    // x >= p has probability ~2^-224; refusing it keeps the map single-valued.
+    Fq::from_bigint(BigInt(sha2::short_digest_limbs(&mut b, 36))).expect("ECMH: hash >= p")''')
+open(p, "w").write(s); print("engine edits applied:", p)

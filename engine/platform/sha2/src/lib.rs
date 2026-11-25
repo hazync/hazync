@@ -66,3 +66,19 @@ impl Digest for Sha256 {
         unsafe { core::mem::transmute::<[u32; 8], [u8; 32]>(w) }
     }
 }
+/// SHA-256 of a message of n <= 55 bytes the caller has written at the start of `blk` (memory order), padded in place
+/// (one compression, no buffering): the digest as the 8 little-endian limbs of the big-endian 256-bit integer, limb 0
+/// least significant. Those are the native state words in reverse order: no byte swap either way.
+pub fn short_digest_limbs(blk: &mut [u32; 16], n: usize) -> [u32; 8] {
+    assert!(n <= 55);
+    // SAFETY: [u32; 16] and [u8; 64] have the same size; u8 has no alignment requirement
+    let b = unsafe { &mut *(blk as *mut [u32; 16] as *mut [u8; 64]) };
+    b[n] = 0x80;
+    b[n + 1..56].fill(0);
+    b[56..].copy_from_slice(&(n as u64 * 8).to_be_bytes());
+    let mut st = H0;
+    compress(&mut st, b);
+    let mut l = [0u32; 8];
+    for i in 0..8 { l[i] = st[7 - i]; }
+    l
+}

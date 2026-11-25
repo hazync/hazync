@@ -28,4 +28,18 @@ mod tests {
             }
         }
     }
+    /// short_digest_limbs against RustCrypto's digest read as a big-endian integer (swiftsync's be_to_limbs), every
+    /// length it takes, over a block holding junk past the message (the padding must overwrite it).
+    #[test]
+    fn short_digest_limbs_match() {
+        for n in 0..=55usize {
+            let m: Vec<u8> = (0..n as u32).map(|i| (i * 37 + n as u32) as u8).collect();
+            let d: [u8; 32] = sha2::Sha256::digest(&m).into();
+            let mut want = [0u32; 8];
+            for k in 0..8 { want[k] = u32::from_be_bytes(d[28 - 4 * k..32 - 4 * k].try_into().unwrap()); }
+            let mut blk = [0xdead_beefu32; 16];
+            unsafe { core::ptr::copy_nonoverlapping(m.as_ptr(), blk.as_mut_ptr() as *mut u8, n) };
+            assert_eq!(shim::short_digest_limbs(&mut blk, n), want, "len {n}");
+        }
+    }
 }
