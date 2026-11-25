@@ -46,12 +46,14 @@ for t in $(seq 1 30); do ssh $K -p $P root@$IP true && break; sleep 10; done
 RUN=${RUN:-run.sh}
 scp -q $KS -P $P "$HERE/pod/setup.sh" "$HERE/pod/$RUN" "$B" root@$IP:/workspace/ && say "scripts + bundle sent"
 ssh $K -p $P root@$IP 'cd /workspace && mv -f *.tgz bundle.tgz 2>/dev/null; (setsid nohup bash setup.sh > setup.out 2>&1 < /dev/null &)'
-for i in $(seq 1 180); do
+# setup normally takes 8-15 min; a pod stuck in it (25.11: apt hung on a 4x PRO 6000 host for 35 min, ~$8 for
+# nothing) is given up at SETUP_MAX_MIN, not left to the run's DEADLINE_MIN
+for i in $(seq 1 $(( ${SETUP_MAX_MIN:-20} * 3 ))); do
   [ -f pod_id.txt ] || exit 1
   S=$(ssh $K -p $P root@$IP 'grep -h "SETUP_OK\|SETUP_FAIL\|built in" /workspace/setup.out 2>/dev/null')
   echo "$S" | grep -q 'SETUP_OK\|SETUP_FAIL' && break; sleep 20; done
 say "setup: $(echo $S | tr '\n' ' ')"
-echo "$S" | grep -q SETUP_OK || { rm -f pod_id.txt; harvest; term; exit 1; }
+echo "$S" | grep -q SETUP_OK || { say "SETUP_FAIL or setup over ${SETUP_MAX_MIN:-20} min: giving the pod up"; rm -f pod_id.txt; harvest; term; exit 1; }
 ssh $K -p $P root@$IP "cd /workspace && (R0_BLOCKS='$R0_BLOCKS' JOBS='$JOBS' setsid nohup bash $RUN > run.out 2>&1 < /dev/null &)"
 say "proving the block"
 for i in $(seq 1 $((DEADLINE_MIN*4))); do
