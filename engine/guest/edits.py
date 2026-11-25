@@ -148,3 +148,42 @@ rep('''    let mut m = [0u8; 36];
     // x >= p has probability ~2^-224; refusing it keeps the map single-valued.
     Fq::from_bigint(BigInt(sha2::short_digest_limbs(&mut b, 36))).expect("ECMH: hash >= p")''')
 open(p, "w").write(s); print("engine edits applied:", p)
+
+# 11) The C heap (Core, libsecp) reuses freed blocks by size class. Under the bump allocator `free` released nothing,
+#     so every malloc of Core's script interpreter (a vector per push, per opcode) touched fresh memory, and memory
+#     touched is what a segment pays for (memory Merkle + boundary hashing: ~43% of a chunk's cells). Blocks of 32 B
+#     .. 128 KiB (header included) are rounded up to a power of two and kept on a free list per class when freed (O(1),
+#     no search); larger ones go to the Rust allocator as before. Deterministic; C sees ordinary malloc semantics.
+p = sys.argv[1]; s = open(p).read()
+rep('''    let Ok(layout) = Layout::from_size_align(total, HDR) else { return core::ptr::null_mut() };
+    let p = ralloc(layout);
+    if p.is_null() { return p; }
+    *(p as *mut usize) = total;
+    p.add(HDR)
+}''', '''    // ENGINE (edits.py 11): a small block is a power-of-two class, reused from its free list when one is there
+    let total = if total <= HZ_CLS_MAX { let k = hz_cls(total); let f = HZ_FREE[k]; if !f.is_null() {
+        HZ_FREE[k] = *(f.add(core::mem::size_of::<usize>()) as *mut *mut u8); return f.add(HDR); } 32usize << k } else { total };
+    let Ok(layout) = Layout::from_size_align(total, HDR) else { return core::ptr::null_mut() };
+    let p = ralloc(layout);
+    if p.is_null() { return p; }
+    *(p as *mut usize) = total;
+    p.add(HDR)
+}
+/// ENGINE (edits.py 11): free lists of C blocks by class k (32 << k bytes, header included; the header keeps the size,
+/// the next link sits after it). Single-threaded guest.
+const HZ_CLS_MAX: usize = 32 << 12;
+static mut HZ_FREE: [*mut u8; 13] = [core::ptr::null_mut(); 13];
+#[inline(always)]
+fn hz_cls(total: usize) -> usize { ((usize::BITS - (total - 1).leading_zeros()) as usize).saturating_sub(5) }''')
+rep('''    let base = ptr.sub(HDR);
+    let total = *(base as *mut usize);
+    rdealloc(base, Layout::from_size_align(total, HDR).unwrap());''', '''    let base = ptr.sub(HDR);
+    let total = *(base as *mut usize);
+    if total <= HZ_CLS_MAX {   // ENGINE (edits.py 11): a class block (its size is exactly 32 << k) goes on its list
+        let k = hz_cls(total);
+        *(base.add(core::mem::size_of::<usize>()) as *mut *mut u8) = HZ_FREE[k];
+        HZ_FREE[k] = base;
+        return;
+    }
+    rdealloc(base, Layout::from_size_align(total, HDR).unwrap());''')
+open(p, "w").write(s); print("engine edits applied:", p)
