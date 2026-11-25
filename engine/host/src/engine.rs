@@ -71,6 +71,17 @@ fn new_sdk() -> Result<(Sdk, SdkVmConfig)> {
     // The SDK's default system config, as OpenVM's own examples build it: it reserves the deferral address space's
     // cells, which a TOML without a [system] table leaves at zero (deferral's initial memory then has nowhere to go).
     vm_config.system = Default::default();
+    // The guest's address space (OpenVM's 2^29 by default). HZ_GUEST_MEM_BITS (keygen only; it is in the keys, so it
+    // changes the image id): every segment proof puts the whole space on the GPU as a dense image with its Merkle tree
+    // (+4.5 GiB at 29, "set initial memory", results/gpu_a40_memory), so a smaller space lowers the memory floor. The
+    // guest's openvm-platform MEM_BITS must be the same, so its allocator stops at the same limit.
+    if let Some(bits) = std::env::var("HZ_GUEST_MEM_BITS").ok().and_then(|v| v.parse::<usize>().ok()) {
+        ensure!((24..=29).contains(&bits), "HZ_GUEST_MEM_BITS {bits} outside 24..=29");
+        let mc = &mut vm_config.system.config.memory_config;
+        mc.pointer_max_bits = bits;
+        mc.addr_spaces[openvm_sdk::openvm_circuit::arch::instructions::riscv::RV32_MEMORY_AS as usize].num_cells = 1 << bits;
+        eprintln!("guest address space: 2^{bits} bytes");
+    }
     let memory_dimensions = vm_config.system.config.memory_config.memory_dimensions();
     let num_user_pvs = vm_config.system.config.num_public_values;
     let agg = agg_params();
