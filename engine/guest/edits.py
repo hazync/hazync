@@ -87,10 +87,25 @@ extern "C" {
 #[inline(always)]
 fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {   // ENGINE: OpenVM's SHA-256, native state layout
     let blk: [W; 2] = [*a, *b];   // L || R as raw bytes, 4-byte aligned
-    let mut st = [0u32; 8];
-    unsafe { zkvm_sha256_impl(iv.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8) };
-    for (o, x) in out.iter_mut().zip(st.iter()) {
-        *o = x.swap_bytes();
+    unsafe { compress_blk(iv, &blk, out) }
+}
+
+/// One compression of a contiguous L || R into `out` as the digest's bytes. The native state's words are stored byte
+/// by byte, most significant first: 3 shifts + 4 byte stores a word, where a word swap costs ~10 ALU instructions
+/// (RV32IM has no rev8) plus the store. Volatile so the compiler does not merge them back into a swapped word.
+#[cfg(target_os = "zkvm")]
+#[inline(always)]
+unsafe fn compress_blk(iv: &'static [u32; 8], blk: &[W; 2], out: &mut W) {
+    let mut st = core::mem::MaybeUninit::<[u32; 8]>::uninit();
+    zkvm_sha256_impl(iv.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8);
+    let s = st.assume_init_ref();
+    let o = out.as_mut_ptr() as *mut u8;
+    for i in 0..8 {
+        let (x, p) = (s[i], o.add(4 * i));
+        core::ptr::write_volatile(p, (x >> 24) as u8);
+        core::ptr::write_volatile(p.add(1), (x >> 16) as u8);
+        core::ptr::write_volatile(p.add(2), (x >> 8) as u8);
+        core::ptr::write_volatile(p.add(3), x as u8);
     }
 }''')
 rep('''    #[cfg(target_os = "zkvm")]
