@@ -6,6 +6,40 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   A. Trust and soundness
   1. Exactly which OpenVM version, commit and proving system does the engine use, and which audits cover that exact version? Include the auditor, the date,
      the scope, and any open findings. Which parts are unaudited (GPU prover, recursion, SHA and bigint extensions, the STARK-to-SNARK wrapper)?
+
+     **Answer (25.11.2026; sources: zkSecurity report https://reports.zksecurity.xyz/reports/openvm/, releases
+     https://github.com/openvm-org/openvm/releases, blog https://blog.openvm.dev/2.0-production, issue #3196):**
+     - MEASURED (the build): engine/host/Cargo.toml and engine/guest pin OpenVM **v2.1.0**, tag commit 05f3b73e
+       (released 04.11.2026), stark-backend v2.1.0; proof system SWIRL (BabyBear/Poseidon2 STARK), 100-bit params
+       (app_params_with_100_bits_security / hook_params_with_100_bits_security in engine.rs).
+     - The audit: zkSecurity, "Audit of OpenVM 2.0" for Axiom, report dated 09.06.2026, in four phases. Phase 2
+       (from 18.05.2026, openvm commit f01c912) is continuations and deferral, and names **crates/continuations (incl.
+       the deferral framework), extensions/deferral, crates/verify and guest-libs/verify-stark/{circuit,guest}**: the
+       in-guest verification our aggregate relies on IS in scope. Phase 1: SWIRL/stark-backend/recursion (openvm
+       c89d052d). Phase 3: the Halo2 static verifier. Phase 4: SHA-2/Keccak and memory-adapter changes (f01c912 ->
+       0110850). Deferral findings: 4 High (#00 padded aggregation roots read as hook IO leaves; #01/#02 host verifier
+       deferral Merkle checks; #03 counter overflow), 2 Medium, Low/Info items; by the client's responses all
+       addressed in PRs #2815-#2866 (#00 "partially fixes" #2815, domain separation #2857); #10 (output_len an
+       unauthenticated allocation hint) answered with docs, no circuit binding.
+     - Gaps (UNKNOWN / not covered):
+       - **The audited commits are not the release we run.** v2.0.0 (15a7ab6, 10.07.2026) followed the audit; v2.1.0
+         changed "recursion and continuation circuit interactions and constraints for formal verification" and
+         nothing says v2.1.0 was re-audited. -> the diff f01c912..05f3b73e in the audited directories is unreviewed
+         by a third party as far as public material shows.
+       - **secp256k1 / modular / ECC extensions: not in the v2.0 audit** (only k256/p256 manifests). v2.1.0 shipped
+         security advisories in exactly these (GHSA k256/p256 canonicality, ECC decompression) plus RV32IM abort
+         transpilation and std main. Earlier OpenVM 1.x audits (Cantina, credited for v1.7.0) are where the ECC /
+         algebra / RV32IM circuits were reviewed; whether those circuits changed in 2.x is to be checked.
+       - **GPU/CUDA prover: not mentioned.** Prover-side only (a wrong GPU trace fails verification, it cannot make a
+         false statement verify), so a liveness risk, not soundness.
+       - **SDK (crates/sdk): not in Phase 2 scope**; open issue #3196 (reused deferral-aware StarkProver: later proofs
+         fail verification, DeferralInitialRootMismatch; open, no maintainer reply) is there. Liveness, not
+         soundness. The engine does not hit it: Sdk::prove builds a fresh prover per call, and segpar builds a fresh
+         instance and its initial tree right after reset_state.
+     - Verdict so far: the soundness-critical recursion/deferral path is third-party audited at a pre-release commit;
+       the release we run has post-audit circuit changes and fresh ECC advisories. Not a deal-breaker; it is the
+       first thing to raise with the OpenVM team (is v2.1.0's diff reviewed? are the 1.x ECC/algebra audits still
+       valid for 2.x?).
   2. What security level do the proof parameters give, in bits? Does that rely on any conjectures, and how does it compare with risc0's 3.1.0 settings?
   3. Is OpenVM still actively maintained? Give its release pace, how it discloses security issues, and who maintains it.
   4. The compatibility layer that runs risc0's guest API on OpenVM is our own code on the soundness path. List every place where it could accept something
