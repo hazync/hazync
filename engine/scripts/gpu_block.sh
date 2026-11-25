@@ -28,9 +28,15 @@ term(){ say "terminating $ID"; rp terminate "$ID" || say "TERMINATE FAILED for $
 harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; return 1; }
   [ -f conn.txt ] || return 0; read -r CIP CP < conn.txt; say "harvesting from $CIP:$CP"
   for t in 1 2 3 4 5 6; do
-    timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && tar czf out.tgz --exclude="*.proof.json" out setup.out build.log; tar czf proofs.tgz out/*/block.proof.json out/block 2>/dev/null 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
+    # the essentials only (reports, timings, verify logs, setup, the tail of each big log): the full logs took 8+ min
+    # at ~1 MB/min from a 4x PRO 6000 pod (25.11) while it billed. HARVEST_FULL=1: everything but the proofs, as before.
+    if [ "${HARVEST_FULL:-0}" = 1 ]; then
+      timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && tar czf out.tgz --exclude="*.proof.json" out setup.out build.log; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
+    else
+      timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && rm -rf tails && mkdir -p tails && for f in out/*.log; do [ -f "$f" ] && tail -n 400 "$f" > "tails/$(basename "$f")"; done; tar czf out.tgz --ignore-failed-read out/*/REPORT.txt out/*.tsv out/*.txt out/RUN_DONE out/*_verify.log setup.out tails 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
+    fi
     R=$(timeout 60 ssh $K -p $CP root@$CIP 'cat /workspace/out.tgz.sha256')
-    timeout 900 scp -q $KS -P $CP root@$CIP:/workspace/out.tgz out.tgz && [ -n "$R" ] && [ "$(sha256sum out.tgz | cut -c1-64)" = "$R" ] \
+    timeout 300 scp -q $KS -P $CP root@$CIP:/workspace/out.tgz out.tgz && [ -n "$R" ] && [ "$(sha256sum out.tgz | cut -c1-64)" = "$R" ] \
       && rm -rf out2 && mkdir out2 && tar xzf out.tgz -C out2 && { say "fetched (try $t, sha $R)"; return 0; }
     say "FETCH FAILED (try $t)"; sleep 20; done
   return 1; }
