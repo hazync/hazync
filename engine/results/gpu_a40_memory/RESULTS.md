@@ -36,3 +36,12 @@ which #795's re-split recognises.
 Also found: 976,379 at engine defaults (3 provers + the aggregate) with keys-s22 ran OUT OF GPU MEMORY in the
 aggregate (requested 8.5 GB, 2.7 GB free; peak 42,983 MiB): the leaf workers now stay alive for segpar and keep their
 pools. To fix: release them (or their pools) before the aggregate on a single GPU.
+
+## Guest address space 2^27 (keys-m27: HZ_GUEST_MEM_BITS=27, openvm-platform MEM_BITS = 27)
+
+Same pod type, single prover, 2 GiB segments; CPU journals identical first (m27.out). **"set initial memory" is now
++1.1 GiB (was +4.5).** 130,000: true peak **3,793 MiB** (was 6,643), 20 s, verified. 976,379: **5,028 MiB** (was
+6,699), 444 s (was 505), verified; its largest step is now prover.rs_code_matrix (+2.3 GiB: the stacked trace's
+Reed-Solomon encoding), which the stacked height sets (2^22 halved it in the keys-s22 run). Next: 2^27 AND 2^22 with
+1 GiB segments. The defaults job (3 provers) again ran the aggregate out of memory: the kept leaf workers; fixed in
+52a28fd2 (the workers the aggregate does not use stop before it).
