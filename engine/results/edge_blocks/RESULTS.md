@@ -22,3 +22,10 @@ bench-noverify: env::verify accepts without proofs) against RISC Zero's aggregat
 - 419,328 and 481,824 first failed in RISC Zero's own hints step (`rt=false time=false`): the block JSON made by
   mkblock.py lacks the retarget epoch's context. With the prepared files (prover/testdata/boundaries, as blocks.sh
   uses) both pass. 2,016's prepared file lives in blocks.sh's CI temp dir, not in the repo: not run.
+
+## Re-run on the FINAL image (26.11.2026 afternoon; roadmap 1.5)
+
+keys-ch (node format 2 + C-heap recycling, 2^29, exe 0ddcb255) and its metering build keys-chb (exe 3a0c111a), exports
+redone by the format-2 host (the earlier exports' trie / aggregate journals were format 1). edgef.sh, edgef_final_image.out.
+**The same 9 of 10: every chunk and trie journal identical to RISC Zero's, every aggregate identical except its 32-byte
+image id** (91,842 91,880 185,956 227,931 363,725 364,292 388,381 419,328 481,824). 2,016 still not run (no prepared file).

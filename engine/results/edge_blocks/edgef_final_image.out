@@ -1,0 +1,13 @@
+metering image: build: 100.4 s; image exe 3a0c111aee4bcc5fb82ed9355bfcef00b942be3f5aeb492a4668a25d0aad1a49 vm 00e00077450a5a56
+grep: edgef/x2016.log: No such file or directory
+2016 EXPORT_FAIL: edge/h2016.log:thread 'main' (1) panicked at src/main.rs:2339:5:
+block 91842: chunks 0, chunk+trie journals 1/1 identical; aggregate 3688 vs RISC Zero 3688 bytes, 32 bytes differ :: execute: 16.2 s, cost 60919347, instructions 1130055, journal 3688 byt
+block 91880: chunks 1, chunk+trie journals 2/2 identical; aggregate 3816 vs RISC Zero 3816 bytes, 32 bytes differ :: execute: 15.2 s, cost 62483251, instructions 1159044, journal 3816 byt
+block 185956: chunks 1, chunk+trie journals 2/2 identical; aggregate 3708 vs RISC Zero 3708 bytes, 32 bytes differ :: execute: 15.9 s, cost 1483258980, instructions 24323841, journal 3708 
+block 227931: chunks 1, chunk+trie journals 2/2 identical; aggregate 4352 vs RISC Zero 4352 bytes, 32 bytes differ :: execute: 16.5 s, cost 500988813, instructions 8555680, journal 4352 by
+block 363725: chunks 0, chunk+trie journals 1/1 identical; aggregate 4364 vs RISC Zero 4364 bytes, 32 bytes differ :: execute: 15.9 s, cost 85811003, instructions 1559229, journal 4364 byt
+block 364292: chunks 16, chunk+trie journals 17/17 identical; aggregate 4748 vs RISC Zero 4748 bytes, 32 bytes differ :: execute: 15.0 s, cost 1551674213, instructions 26480396, journal 4748 
+block 388381: chunks 2, chunk+trie journals 3/3 identical; aggregate 4880 vs RISC Zero 4880 bytes, 32 bytes differ :: execute: 15.8 s, cost 1055176413, instructions 16900285, journal 4880 
+block 419328: chunks 4, chunk+trie journals 5/5 identical; aggregate 4112 vs RISC Zero 4112 bytes, 32 bytes differ :: execute: 15.0 s, cost 2640093966, instructions 43229998, journal 4112 
+block 481824: chunks 4, chunk+trie journals 5/5 identical; aggregate 4244 vs RISC Zero 4244 bytes, 32 bytes differ :: execute: 16.9 s, cost 3072035736, instructions 47079625, journal 4244 
+EDGEF_DONE
