@@ -29,6 +29,17 @@ Only 1-3 know which prover made the proof. Steps 3-12 read the `ChainState` and 
   its verifying key (agg.vk + baseline, ~96 KB bitcode; embedded like the RISC Zero ids are today, or shipped as a
   file whose hash is pinned). Handovers stay a list of image ids; an id says which prover it is.
 
+## The verifying key must be PINNED (review finding, 26.11.2026 evening)
+
+OpenVM's host verifier checks the STARK under `vk.mvk` (the internal-recursive layer's key) and then compares the
+proof's public values (program commitment, initial memory, the app / leaf / internal-for-leaf key commitments) with
+the baseline. Nothing ties `mvk` to the baseline or to the image id: those public values are whatever the circuit `mvk`
+describes, so a forged `mvk` (a trivial circuit outputting the expected values) passes every check. The image id
+(SHA-256(exe || vm)) therefore does NOT authenticate a key file. Every engine image record pins **SHA-256 of its key
+file** (agg.vk + baseline, bitcode), checked before the key is decoded (verify-core `verify_full_bytes`, code 7). The
+key may then travel with the proof or be shipped beside the verifier: either way only the pinned bytes pass. (In the
+guest, child proofs go through the VM's own deferral circuit, which the image itself fixes: not affected.)
+
 ## The proof file
 
 The engine proof is a new container: a 4-byte magic (`HZE1`), then the zstd of OpenVM's codec encoding (what

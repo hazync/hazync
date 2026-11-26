@@ -16,6 +16,8 @@ try {
   const hex = (h) => Uint8Array.from(h.match(/../g).map((x) => parseInt(x, 16)));
   const pre = new Uint8Array([...hex(img.exe), ...hex(img.vm)]);
   const id = new Uint8Array(await crypto.subtle.digest("SHA-256", pre));
+  // the key's pin: a real page carries it as a CONSTANT (never computed from the key it fetched); the test stands in
+  const pin = new Uint8Array(await crypto.subtle.digest("SHA-256", vk));
   const idhex = [...id].map((b) => b.toString(16).padStart(2, "0")).join("");
   say(`image id ${idhex} (vk says ${image_id_hex(vk) === idhex ? "the same" : image_id_hex(vk)})`);
   const flip = (b, i) => { const c = b.slice(); c[i] ^= 1; return c; };
@@ -24,9 +26,10 @@ try {
                  ["valid again", proof, journal, id, 1]];
   let ok = true;
   for (const [n, p, j, i, want] of cases) {
-    const t = performance.now(); const r = verify_full(vk, p, j, i);
+    const t = performance.now(); const r = verify_full(vk, pin, p, j, i);
     ok = ok && r === want; say(`${n}: ${r} (want ${want}) in ${(performance.now() - t).toFixed(1)} ms`);
   }
+  { const vk2 = flip(vk, vk.length - 1); const r = verify_full(vk2, pin, proof, journal, id); ok = ok && r === 7; say(`another key file: ${r} (want 7)`); }
   say(navigator.userAgent); say(ok ? "ALL AS EXPECTED" : "MISMATCH");
 } catch (e) { say("ERROR " + e); }
 </script>

@@ -2,11 +2,17 @@
 //! carried (FEASIBILITY Q11, tested natively, in Node and in a browser 26.11.2026), as a library for swiftsync-verify,
 //! corecheck and the wasm build alike.
 //!
-//! `verify_full(vk, proof, journal, image_id)`: on top of OpenVM's STARK check (which also checks the user public
-//! values' Merkle proof against the proven final memory, the program commitment, the initial memory and the exit code
-//! against the vk's baseline):
-//! - the image: SHA-256(exe || vm), computed from the vk's baseline as engine/host/src/engine.rs `image_of` does,
-//!   must equal the published image id, so the vk file itself need not be trusted;
+//! `verify_full(vk, vk_sha256, proof, journal, image_id)`:
+//! - **the key is the pinned one: SHA-256(vk bytes) == `vk_sha256`.** The key is NOT self-certifying: OpenVM verifies
+//!   the STARK under `vk.mvk` (the internal-recursive layer's key) and then compares the proof's public values with
+//!   the baseline, but nothing ties `mvk` itself to the baseline or to the image id, and those public values are
+//!   whatever the circuit `mvk` describes. A forged `mvk` (a circuit that outputs the expected commitments) would pass
+//!   every later check. So the whole key file is pinned per image (review 26.11.2026; the probe's earlier claim that
+//!   "the vk file need not be trusted" was wrong);
+//! - OpenVM's STARK check (with the user public values' Merkle proof against the proven final memory, the program
+//!   commitment, the initial memory and the exit code against the key's baseline);
+//! - the image: SHA-256(exe || vm), computed from the key's baseline as engine/host/src/engine.rs `image_of` does,
+//!   must equal the published image id (a consistency check: the id the guest's env::verify uses);
 //! - the journal: the proof's 32 user public values (one byte per field element) must equal SHA-256(journal).
 use openvm_stark_sdk::{
     config::baby_bear_poseidon2::{poseidon2_perm, CHUNK, F},
@@ -38,6 +44,8 @@ pub enum Refusal {
     Image = 5,
     /// The image id is not 32 bytes.
     IdLength = 6,
+    /// The verifying key's bytes are not the pinned key's (SHA-256 differs), or the pin is not 32 bytes.
+    VkPin = 7,
 }
 
 impl std::fmt::Display for Refusal {
@@ -49,6 +57,7 @@ impl std::fmt::Display for Refusal {
             Refusal::Journal => "the proof's public values are not SHA-256 of this journal",
             Refusal::Image => "the verifying key is not the published image's (SHA-256(exe || vm) differs)",
             Refusal::IdLength => "the image id is not 32 bytes",
+            Refusal::VkPin => "the verifying key is not the image's pinned key (SHA-256 of the key file differs)",
         })
     }
 }
@@ -118,8 +127,9 @@ pub fn image_id_of(vk: &VmStarkVerifyingKey) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// The full check (see the crate doc), on a decoded key.
-pub fn verify_full(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
+/// The checks after the pin, on a decoded key: ONLY for a key the caller already holds as trusted (decoded from bytes
+/// whose SHA-256 it checked against the pin, or built from its own keys). Use `verify_full_bytes` otherwise.
+pub fn verify_full_pinned(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
     if image_id.len() != 32 {
         return Err(Refusal::IdLength);
     }
@@ -136,7 +146,10 @@ pub fn verify_full(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8], image
     Ok(())
 }
 
-/// The full check on the key's bytes.
-pub fn verify_full_bytes(vk: &[u8], proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
-    verify_full(&decode_vk(vk)?, proof, journal, image_id)
+/// The full check on the key's bytes, against the key's pinned SHA-256 (see the crate doc: the key must be pinned).
+pub fn verify_full_bytes(vk: &[u8], vk_sha256: &[u8], proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
+    if vk_sha256.len() != 32 || Sha256::digest(vk)[..] != vk_sha256[..] {
+        return Err(Refusal::VkPin);
+    }
+    verify_full_pinned(&decode_vk(vk)?, proof, journal, image_id)
 }

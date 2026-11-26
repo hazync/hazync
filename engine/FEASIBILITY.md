@@ -13,7 +13,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 | Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
 | Q9 | Core vectors + rig | GOOD | 22,666 vectors identical; rig 96/96 agree with Core 31.1 |
 | Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
-| Q11 | browser verifier | GOOD | full check (STARK + image + journal) in Node and Chromium, 25-39 ms; phone not tried |
+| Q11 | browser verifier | GOOD | full check (STARK + image + journal) in Node and Chromium, 25-39 ms; phone not tried. ⛔ 26.11 evening: the KEY must be pinned (SHA-256 of the key file): `mvk` is not bound by the image id (engine/VERIFIER.md); fixed in verify-core + wasm-verify |
 | Q12 | Windows | builds | CI exe (sm_61..120); proving on a Windows card not tried |
 | Q13 | cards | GOOD | 5 card types; full block in 3.8-3.9 GB at 2^26 (test image only, Q7) |
 | Q14 | CPU prover | yes | slow (hours per modern block) |

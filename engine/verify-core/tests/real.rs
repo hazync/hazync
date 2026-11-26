@@ -16,6 +16,8 @@ fn verify_full_on_a_real_proof() {
     let mut pre = hx("exe");
     pre.extend(hx("vm"));
     let id: [u8; 32] = Sha256::digest(&pre).into();
+    let pin: [u8; 32] = Sha256::digest(&vk).into();
+    use hazync_engine_verify::{code, verify_full_bytes as vf};
 
     // the image id derived from the vk alone equals the one the engine recorded at build
     let v: openvm_verify_stark_host::vk::VmStarkVerifyingKey = bitcode::deserialize(&vk).unwrap();
@@ -23,16 +25,27 @@ fn verify_full_on_a_real_proof() {
     assert_eq!((exe, vm), (hx("exe"), hx("vm")), "image_of(vk) != image.json");
     assert_eq!(hazync_engine_verify::image_id_of(&v), id);
 
-    assert_eq!(hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk, &proof, &journal, &id)), 1, "valid proof + journal + image");
+    assert_eq!(code(vf(&vk, &pin, &proof, &journal, &id)), 1, "valid proof + journal + image");
     let mut j2 = journal.clone();
     j2[100] ^= 1;
-    assert_eq!(hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk, &proof, &j2, &id)), 4, "journal with one bit flipped");
+    assert_eq!(code(vf(&vk, &pin, &proof, &j2, &id)), 4, "journal with one bit flipped");
     let mut id2 = id;
     id2[0] ^= 1;
-    assert_eq!(hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk, &proof, &journal, &id2)), 5, "another image id");
-    assert_eq!(hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk, &proof, &journal, &id[..31])), 6, "short image id");
-    let r = hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk, &bad, &journal, &id));
+    assert_eq!(code(vf(&vk, &pin, &proof, &journal, &id2)), 5, "another image id");
+    assert_eq!(code(vf(&vk, &pin, &proof, &journal, &id[..31])), 6, "short image id");
+    let r = code(vf(&vk, &pin, &bad, &journal, &id));
     assert!(r == 0 || r == 3, "proof with one compressed byte flipped: {r}");
-    assert_eq!(hazync_engine_verify::code(hazync_engine_verify::verify_full_bytes(&vk[1..], &proof, &journal, &id)), 2, "truncated vk");
-    eprintln!("verify_full: valid 1, journal 4, image 5, short id 6, bad proof {r}, bad vk 2");
+    assert_eq!(code(vf(&vk[1..], &pin, &proof, &journal, &id)), 7, "truncated vk: not the pinned key");
+    assert_eq!(hazync_engine_verify::decode_vk(&vk[1..]).err(), Some(hazync_engine_verify::Refusal::Vk), "truncated vk: does not decode");
+    // the key must be the pinned one: another key file (here: the same key with one byte changed and re-pinned
+    // nowhere) is refused before it is decoded, and a wrong pin is refused for the right key
+    let mut vk2 = vk.clone();
+    let n = vk2.len() - 1;
+    vk2[n] ^= 1;
+    assert_eq!(code(vf(&vk2, &pin, &proof, &journal, &id)), 7, "a key that is not the pinned one");
+    let mut pin2 = pin;
+    pin2[0] ^= 1;
+    assert_eq!(code(vf(&vk, &pin2, &proof, &journal, &id)), 7, "another pin");
+    assert_eq!(code(vf(&vk, &pin[..31], &proof, &journal, &id)), 7, "short pin");
+    eprintln!("verify_full: valid 1, journal 4, image 5, short id 6, bad proof {r}, bad vk 2 (decode) / 7 (pin)");
 }
