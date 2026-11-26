@@ -35,3 +35,19 @@ Image on the production VM (2^29; keys-hdr29: exe a080482e..., vm 00e00077...), 
 
 The two cards are the same chip in two editions (Workstation vs Server), not the same SKU; the comparison is close to
 like for like but not exact.
+
+## Same card as RISC Zero's run: RTX PRO 6000 Blackwell Workstation Edition (26.11.2026, re-run)
+
+Pod guq4qpuihtefl7 (nvidia-smi: "NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97887 MiB, 600 W"), the same bundle.
+- 176 segments, **prove 266.2 s** (job 276 s), GPU busy 56%, peak 24,621 MiB; `hzengine verify`: OK; journal sha256
+  20bb754b..., identical to the Server Edition run and the CPU run.
+- **MMR root**, bagged from the journal's 13 peaks (mmr.rs: right to left, bag = SHA-256(0x02 || p || acc)):
+  bb22154abf3cf886ebcb512fc0901401fb9ae8362b9f40e6c7b09711a8ceb29a = RISC Zero's receipt's MMR root (MATCH).
+
+| | RISC Zero (de54b94f) | engine (a080482e) |
+|---|---|---|
+| card | RTX PRO 6000 Blackwell Workstation Edition | RTX PRO 6000 Blackwell Workstation Edition |
+| proof | 5,969.5 s | **266.2 s: 22.4x** |
+| end hash / chainwork / MMR root | node's / node's / bb22154a | the same |
+
+Pod cost: $1.03 (22 min: most of it a slow CUDA download, 4 MB/s, before the proof).
