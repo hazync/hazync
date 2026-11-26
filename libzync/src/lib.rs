@@ -2,7 +2,7 @@
 //! why this crate exists and why the guest includes its modules by path.
 #![no_std]
 extern crate alloc;
-#[cfg(any(feature = "std", feature = "reader"))] // `reader` (zync-serve's tip mode, ZAPP_FOLLOWER Z2): std, none of its deps
+#[cfg(any(feature = "std", feature = "reader", feature = "tls"))] // `reader` (zync-serve's tip mode, ZAPP_FOLLOWER Z2) and `tls` (per-thread node format): std, none of its deps
 extern crate std;
 
 pub mod wire;

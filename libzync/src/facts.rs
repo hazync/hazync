@@ -352,6 +352,10 @@ pub const PROFILE_COINLOG: u32 = 16;
 pub const PROFILE_TRIE: u32 = 32;
 /// live_set / live_hash are the live-coin multiset hash (instant IBD), not SwiftSync's total.
 pub const PROFILE_UTXOHASH: u32 = 64;
+/// The coin log's and the counting trie's nodes are in node format 2 (COINLOG.md §2: result words little-endian; every
+/// guest since 26.11.2026). Without it, format 1. A host or verifier computes paths in the proof's format
+/// (coinlog::use_format_of).
+pub const PROFILE_NODE2: u32 = 128;
 
 /// The network a zyncAPP answers for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

@@ -99,6 +99,8 @@ pub const PROFILE_COINLOG: u32 = 16;
 pub const PROFILE_TRIE: u32 = 32;
 /// The live-coin multiset hash (instant IBD): `live_set` / `live_hash` hash the unspent coins.
 pub const PROFILE_UTXOHASH: u32 = 64;
+/// Node format 2 (libzync::facts::PROFILE_NODE2): the coin log's and trie's nodes as COINLOG.md §2 (26.11.2026).
+pub const PROFILE_NODE2: u32 = 128;
 /// Core's MAX_FUTURE_BLOCK_TIME.
 pub const MAX_FUTURE_BLOCK_TIME: u64 = 2 * 60 * 60;
 
@@ -304,6 +306,7 @@ fn locate(leaves: u64, pos: u64) -> Option<(u32, u64)> {
 /// differ in tag and length, so a wrong choice could never open a leaf anyway; the rule makes the answer definite.)
 pub fn block_in_chain(cs: &ChainState, undo_from: u32, height: u32, hash: &[u8; 32], state: &[u8; 32], undo: Option<&[u8; 32]>,
                       path: &[[u8; 32]]) -> bool {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     if (height >= undo_from) != undo.is_some() {
         return false;
     }
@@ -547,6 +550,8 @@ pub fn verify(inp: &Inputs) -> Report {
             return rep;
         }
     };
+    // Every path checked below in the node format this proof's roots are in (format 1 before 26.11.2026, COINLOG.md §2).
+    libzync::coinlog::use_format_of(cs.profile);
     // A later version only appends fields (HANDOVER.md §2), so this reader checks the prefix it knows.
     rep.check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == words(&m),
               format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
@@ -623,6 +628,7 @@ pub fn describe_profile(p: u32) -> String {
             if p & PROFILE_COINLOG != 0 { ", coin log" } else { "" })
         + if p & PROFILE_TRIE != 0 { ", counting trie" } else { "" }
         + if p & PROFILE_UTXOHASH != 0 { ", live-coin hash" } else { "" }
+        + if p & PROFILE_NODE2 != 0 { ", node format 2" } else { "" }
 }
 
 /// cum_work as 64 hex digits big-endian (chainwork as Core prints it).
@@ -811,6 +817,7 @@ fn hexes(v: &[String]) -> Option<Vec<[u8; 32]>> {
 /// Checks a coin fact against a state that passed [`verify`] (and must be a coin-log chain). Ok: one line saying what
 /// it proves.
 pub fn check_coin_fact(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<String, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     // the coin the leaf is of (round 11): required for UNSPENT, checked whenever given
     let coin = hex32(&f.coin.to_lowercase()).ok_or("coin: not 64 hex digits")?;
     let bound = match &f.preimage {
@@ -833,6 +840,7 @@ pub fn check_coin_fact(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<
 /// The position half of [`check_coin_fact`]: `coin` is the log's leaf at `pos` (unspent) or flipped by `spent_by`, in
 /// the state at `at`. It does NOT say `coin` is a coin's leaf; the caller binds that (preimage or journey).
 fn coin_fact_position(cs: &ChainState, undo_from: u32, f: &CoinFact) -> Result<String, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     if cs.profile & PROFILE_COINLOG == 0 {
         return Err("the proof is not a coin-log chain: coin facts need the coin log".into());
     }
@@ -956,6 +964,7 @@ fn coin_state_line(s: &libzync::trie_fact::CoinState) -> String {
 /// Checks a trie fact against a state that passed [`verify`] (and is a trie chain): its proof holds and, when it claims
 /// an answer (`expect`), the proof gives that answer. Ok: what it proves.
 pub fn check_trie_fact(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<String, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     let (got, line) = trie_verdict(cs, undo_from, f)?;
     match &f.expect {
         Some(want) if *want != got => Err(format!("the fact claims {want:?}, its proof gives {got:?}: {line}")),
@@ -965,6 +974,7 @@ pub fn check_trie_fact(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<
 
 /// The answer a trie fact's proof gives, as its token, and the line saying what it proves. Err: the proof does not hold.
 pub fn trie_verdict(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<(String, String), String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     use libzync::trie_fact as tf;
     if cs.profile & PROFILE_TRIE == 0 {
         return Err("the proof is not a counting-trie chain".into());
@@ -1091,6 +1101,7 @@ pub struct TxFact {
 
 /// Checks that the transaction is at `index` of the block at `height` of the proven chain. Ok: its txid and parse.
 pub fn check_tx_fact(cs: &ChainState, undo_from: u32, f: &TxFact) -> Result<([u8; 32], libzync::facts::TxView), String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     let header: [u8; 80] = unhex(&f.header).and_then(|h| h.try_into().ok()).ok_or("header: not 80 bytes of hex")?;
     let state = hex32(&f.state.to_lowercase()).ok_or("state: not 64 hex digits")?;
     let bp = hexes(&f.block_path).ok_or("block_path: not 64-hex-digit hashes")?;
@@ -1129,6 +1140,7 @@ pub struct CoinJourney {
 }
 
 pub fn check_coin_journey(cs: &ChainState, undo_from: u32, j: &CoinJourney) -> Result<String, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     let (txid, view) = check_tx_fact(cs, undo_from, &j.origin).map_err(|e| format!("origin: {e}"))?;
     let (value, spk) = view.outputs.get(j.vout as usize).ok_or("origin: no such output")?;
     let leaf = libzync::facts::coin_leaf(&txid, j.vout, *value, spk, j.origin.height, j.origin.index == 0, j.tracked, j.creation_mtp);
@@ -1196,6 +1208,7 @@ mod tests {
         st.apply(&[(coin_key(&a, &txid, 0), sp(2))], &[]).unwrap();
         st.height = 2;
         let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
         cs.profile |= PROFILE_COINLOG | PROFILE_TRIE;
         cs.height = 2;
         cs.trie_root = libzync::coinlog::h_of(&st.root());
@@ -1306,6 +1319,7 @@ mod tests {
         ];
         let tip = replay(&recs, 3, 3).unwrap();
         let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
         let broots = block_path(&tip.block_leaves, 0).1;
         cs.profile |= PROFILE_COINLOG;
         cs.height = 3;
@@ -1400,6 +1414,7 @@ mod tests {
         ];
         let r = replay(&recs, 2, 2).unwrap();
         let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
         cs.profile |= PROFILE_COINLOG;
         cs.height = 2;
         cs.utxo_roots = r.log.roots();
@@ -1709,6 +1724,7 @@ mod tests {
 
     fn state_over(hashes: &[BlockEntry]) -> ChainState {
         let mut cs = genesis_anchor(Image::by_network("mainnet").unwrap());
+        cs.profile |= PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
         (cs.block_roots, cs.block_leaves) = block_forest(hashes);
         cs
     }
@@ -1838,6 +1854,7 @@ mod tests {
         ];
         let tip = replay(&recs, 4, 4).unwrap();
         let mut cs = genesis_anchor(&IMAGES[0]);
+        cs.profile |= PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
         cs.profile |= PROFILE_COINLOG;
         cs.height = 4;
         cs.utxo_roots = tip.log.roots();

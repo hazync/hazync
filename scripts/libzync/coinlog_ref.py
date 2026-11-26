@@ -53,7 +53,8 @@ IV_SPENT = iv(b"libzync-coinlog-spent")
 
 
 def comp(ivw, a, b):
-    return struct.pack(">8I", *compress(ivw, a + b))
+    # node format 2 (COINLOG.md §2, 26.11.2026): the result words as little-endian bytes (format 1: big-endian)
+    return struct.pack("<8I", *compress(ivw, a + b))
 
 
 def parent(l, a, b):

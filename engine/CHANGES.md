@@ -11,7 +11,7 @@ edited). Everything that differs is listed here, with the reason. Nothing here c
 | `batch_ecdsa.rs` -> `batch_ecdsa_ovm.rs` | same public items, hint layout, transcript and batch equation; group arithmetic on OpenVM's secp256k1 extension instead of RISC Zero bigint2 circuits |
 | `liftx_hint` inert when `liftx-hint` is off | RISC Zero's hinted key lift (patch 0013) is replaced by libsecp's sqrt hook |
 | `env::finalize()` at the end of `main` | the journal's sha256 becomes the proof's 32 public-value bytes |
-| coin log (`libzync/src/coinlog.rs`) `compress_w` on `zkvm_sha256_impl` | OpenVM's SHA-256 in its native state layout: IVs as they are (no pre-swapped `IV_*_W`), one swap of the output into the digest's bytes; RISC Zero's `sys_sha_compress` is not defined anywhere in the engine |
+| coin log (`libzync/src/coinlog.rs`) `compress_w` on `zkvm_sha256_impl` | OpenVM's SHA-256 in its native state layout: IVs as they are (no pre-swapped `IV_*_W`), and the output state IS the hash in node format 2 (COINLOG.md §2, adopted 26.11.2026 by libzync itself, so the product's RISC Zero path computes the same); RISC Zero's `sys_sha_compress` is not defined anywhere in the engine |
 | `hz_fe_sqrt` defined in Rust | libsecp's sqrt hook: square root mod p on OpenVM's modular extension |
 | `openvm::init!()` | OpenVM's moduli/curve setup |
 | trie modes 17/19/20 and the aggregate read their witness / chunk journals with `env::read_slice_ref` (edits 8, 9; `agg_lite::validate_block_lite` takes `&[&[u32]]`) | the words are lent out of the input buffer instead of copied into a fresh Vec: same bytes, one copy and that much touched memory fewer (976,379: 5.2 MB witness, 2.3 MB of journals) |

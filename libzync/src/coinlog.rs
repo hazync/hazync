@@ -123,9 +123,14 @@ static IV_NODE_W: [[u32; 8]; 64] = swapped(&IV_NODE);
 #[cfg(target_os = "zkvm")]
 static IV_SPENT_W: [u32; 8] = swapped(&[IV_SPENT])[0];
 
-// In the zkVM: one accelerated compression on words, written straight into `out` (risc0's sys_sha_compress, exported by
-// the guest runtime). Outside the zkVM: sha2's compress256 on the same bytes. The host's roots are checked against the
-// guest's after every block, so the two cannot drift apart unnoticed.
+// The node format (docs/libzync/COINLOG.md §2, format 2 since 26.11.2026): the block is L ‖ R as the bytes of their words
+// (little-endian, h_of), the result is the compression's 8 state words AS THEY ARE (W; their little-endian bytes are
+// the hash H). Format 1 byte-swapped every result word into FIPS 180-4's big-endian digest bytes; on OpenVM's SHA-256
+// (native state words) that swap was a quarter of the trie's cost, and the restart from genesis makes every root new.
+//
+// In the zkVM: one accelerated compression (risc0's sys_sha_compress, exported by the guest runtime, whose state words
+// are the big-endian bytes in memory: one swap back to the state words). Outside the zkVM: sha2's compress256 on the
+// same bytes. The host's roots are checked against the guest's after every block, so the two cannot drift apart unnoticed.
 #[cfg(target_os = "zkvm")]
 extern "C" {
     fn sys_sha_compress(out: *mut [u32; 8], in_state: *const [u32; 8], b1: *const [u32; 8], b2: *const [u32; 8]);
@@ -134,7 +139,59 @@ extern "C" {
 #[cfg(target_os = "zkvm")]
 #[inline(always)]
 fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
-    unsafe { sys_sha_compress(out, iv, a, b) };
+    let mut t = [0u32; 8];
+    unsafe { sys_sha_compress(&mut t, iv, a, b) };
+    for (o, x) in out.iter_mut().zip(t.iter()) {
+        *o = x.swap_bytes();
+    }
+}
+
+/// Outside the zkVM, which node format is computed: 2 (the default, what every guest since 26.11.2026 builds) or 1 (the
+/// chains proved before, whose ChainState profile lacks facts::PROFILE_NODE2). A verifier sets it from the profile of
+/// the proof it checks ([`use_format_of`]) before any path, so a fact about an old chain still holds. With std (the
+/// `std`, `reader` or `tls` feature) it is per THREAD, so threads checking proofs of both formats cannot interfere;
+/// without std (a guest, which computes format 2 only, or a single-threaded wasm) it is one per process.
+#[cfg(all(not(target_os = "zkvm"), any(feature = "std", feature = "reader", feature = "tls")))]
+std::thread_local! {
+    static NODE_FORMAT_1: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+}
+#[cfg(all(not(target_os = "zkvm"), any(feature = "std", feature = "reader", feature = "tls")))]
+#[inline(always)]
+fn format_1() -> bool { NODE_FORMAT_1.with(|c| c.get()) }
+#[cfg(all(not(target_os = "zkvm"), any(feature = "std", feature = "reader", feature = "tls")))]
+fn set_format_1(v: bool) { NODE_FORMAT_1.with(|c| c.set(v)) }
+
+#[cfg(all(not(target_os = "zkvm"), not(any(feature = "std", feature = "reader", feature = "tls"))))]
+static NODE_FORMAT_1: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+#[cfg(all(not(target_os = "zkvm"), not(any(feature = "std", feature = "reader", feature = "tls"))))]
+#[inline(always)]
+fn format_1() -> bool { NODE_FORMAT_1.load(core::sync::atomic::Ordering::Relaxed) }
+#[cfg(all(not(target_os = "zkvm"), not(any(feature = "std", feature = "reader", feature = "tls"))))]
+fn set_format_1(v: bool) { NODE_FORMAT_1.store(v, core::sync::atomic::Ordering::Relaxed) }
+
+/// facts::PROFILE_NODE2, here too: this file is #[path]-included by crates without facts.rs (the test `profile_bit` in
+/// facts.rs pins the two together).
+pub const PROFILE_NODE2_BIT: u32 = 128;
+
+/// Set the node format computed (this thread, or this process without std): 1 or 2 (COINLOG.md §2).
+#[cfg(not(target_os = "zkvm"))]
+pub fn set_node_format(format: u32) {
+    assert!(format == 1 || format == 2, "coin log node format {format}: 1 or 2");
+    set_format_1(format == 1);
+}
+
+/// The node format computed here (1 or 2).
+#[cfg(not(target_os = "zkvm"))]
+pub fn node_format() -> u32 {
+    if format_1() { 1 } else { 2 }
+}
+
+/// The node format a ChainState's roots are in, from its profile word, set here; returns it.
+#[cfg(not(target_os = "zkvm"))]
+pub fn use_format_of(profile: u32) -> u32 {
+    let f = if profile & PROFILE_NODE2_BIT != 0 { 2 } else { 1 };
+    set_node_format(f);
+    f
 }
 
 #[cfg(not(target_os = "zkvm"))]
@@ -144,8 +201,12 @@ fn compress_w(iv: &[u32; 8], a: &W, b: &W, out: &mut W) {
     blk[..32].copy_from_slice(&h_of(a));
     blk[32..].copy_from_slice(&h_of(b));
     sha2::compress256(&mut st, &[blk.into()]);
-    for (o, x) in out.iter_mut().zip(st.iter()) {
-        *o = x.swap_bytes();
+    if format_1() {
+        for (o, x) in out.iter_mut().zip(st.iter()) {
+            *o = x.swap_bytes();
+        }
+    } else {
+        *out = st;
     }
 }
 
@@ -209,5 +270,17 @@ mod tests {
         let d = Sha256::digest(b"libzync-coinlog-spent");
         let w: Vec<u32> = d.chunks_exact(4).map(|c| u32::from_be_bytes(c.try_into().unwrap())).collect();
         assert_eq!(&w[..], &IV_SPENT[..]);
+    }
+
+    /// Node format 2 (COINLOG.md §2) against an INDEPENDENT reference: a plain-Python SHA-256 compression (checked
+    /// against hashlib's SHA-256("abc")), result words as little-endian bytes. L = 0..32, R = 32..64, c = 32 x 0xaa,
+    /// s = spender(1, 2, 3). A change to the format, or a byte order slip in either path, fails here.
+    #[test]
+    fn node_format_2_known_answers() {
+        let hex = |s: &str| -> H { core::array::from_fn(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()) };
+        let l: H = core::array::from_fn(|i| i as u8);
+        let r: H = core::array::from_fn(|i| 32 + i as u8);
+        assert_eq!(parent(1, &l, &r), hex("667106c71ecb205077f640df385d4ac38f3fdc55549f2363fc252db962dea1f8"));
+        assert_eq!(spent(&[0xaa; 32], &spender(1, 2, 3)), hex("7b91896bd5a846b7e056f805754981c41b7d8e7d2873fc1f2407449e96a0bc74"));
     }
 }

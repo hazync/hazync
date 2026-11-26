@@ -21,8 +21,17 @@ be spent. There is no hints file and no closing height H. Peter Todd's TXO commi
 ## 2. Hashes
 
 All three are a single SHA-256 **compression** of one 64-byte block, starting from a tag-derived state instead of
-SHA-256's IV. There is no padding and no length block. A state is 8 words, big-endian, as in FIPS 180-4; the output is
-the 8 result words, big-endian.
+SHA-256's IV. There is no padding and no length block. The block is L ‖ R as bytes. A state is 8 words, as in
+FIPS 180-4 (the IVs below are those words); the output, the hash, is the **8 result words, each as 4 little-endian
+bytes** (node format 2, 26.11.2026). Format 1 wrote them big-endian, as FIPS 180-4's digest; format 2 drops that swap,
+which on a zkVM whose SHA-256 works on native state words (OpenVM) was a quarter of the trie's cost. It is a different
+hash of the same tree: every root changed with the restart from genesis.
+
+A chain's format is in its ChainState profile (bit 7, `PROFILE_NODE2`: format 2; without it, format 1). Host code and
+verifiers compute format 2 by default and switch per thread to the format of the proof they check
+(`coinlog::use_format_of(profile)`, done by swiftsync-verify's checks and the zyncAPPs' core-proof readers). A tool that
+works from an old chain's history alone (a path service, a proof producer) must run in format 1: the released binaries
+of that chain do; a build from this source does so only when told (`coinlog::set_node_format(1)`).
 
 ```
 IV_NODE[l] = SHA-256("libzync-coinlog-node" ‖ l as 1 byte)        l = 0..63

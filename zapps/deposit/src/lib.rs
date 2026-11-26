@@ -461,7 +461,10 @@ pub fn make_bundle(network: &str, core: &[u8], header_receipts: &[Vec<u8>], hist
 pub fn core_state(receipt: &[u8]) -> Result<ChainState, String> {
     // the core's strict decoders (#758): no trailing bytes, no word risc0 asserts on, a journal of whole words
     let r = swiftsync_verify::decode_receipt(receipt).map_err(|e| format!("core receipt: {e}"))?;
-    swiftsync_verify::decode_journal(&r.journal).map_err(|e| format!("core journal: {e}"))
+    let cs: ChainState = swiftsync_verify::decode_journal(&r.journal).map_err(|e| format!("core journal: {e}"))?;
+    // the history replay and every path below are in this proof's node format (COINLOG.md §2)
+    libzync::coinlog::use_format_of(cs.profile);
+    Ok(cs)
 }
 
 #[cfg(test)]

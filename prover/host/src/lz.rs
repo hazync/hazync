@@ -30,6 +30,7 @@ pub(crate) fn lz_bundle(height: u32, block_hash: &[u8; 32]) -> Option<libzync::h
 pub(crate) fn expected_profile() -> u32 {
     methods::LIBZYNC as u32 | (methods::LIBZYNC_ASSUMEVALID as u32) << 1 | ((methods::NETWORK == "regtest") as u32) << 3 | ((methods::NETWORK == "signet") as u32) << 2
         | (methods::COINLOG as u32) << 4 | (methods::TRIE as u32) << 5 | (methods::UTXOHASH as u32) << 6
+        | 1 << 7   // node format 2 (COINLOG.md §2)
 }
 
 /// libzync-verify's outcomes are 0, 2 and 1 only: any panic (bad arguments, unreadable or malformed inputs)
@@ -207,7 +208,7 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         cs.profile, expected_profile(), if cs.profile & 1 != 0 { "libzync" } else { "canonical" },
         if cs.profile & 2 != 0 { ", ASSUMEVALID: scripts and signatures NOT checked" } else { ", scripts checked" },
         if cs.profile & 4 != 0 { ", signet" } else { ", mainnet" }, if cs.profile & 16 != 0 { ", coin log" } else { "" }) + if cs.profile & 32 != 0 { ", counting trie" } else { "" }
-        + if cs.profile & 64 != 0 { ", live-coin hash" } else { "" }));
+        + if cs.profile & 64 != 0 { ", live-coin hash" } else { "" } + if cs.profile & 128 != 0 { ", node format 2" } else { "" }));
     // time-too-new (Core ContextualCheckBlockHeader): no block more than 2 h past THIS node's clock. The proof
     // has no clock; it commits the largest timestamp and the rule is applied here, as Core applies it to
     // every block during IBD. HAZYNC_VERIFY_NOW overrides the clock for tests, and is itself a failed check.

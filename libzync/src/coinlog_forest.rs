@@ -500,8 +500,9 @@ mod tests {
         let x: H = Sha256::digest(b"c").into();
         let y: H = Sha256::digest(b"d").into();
         let hx = |h: H| h.iter().map(|b| alloc::format!("{b:02x}")).collect::<alloc::string::String>();
-        assert_eq!(hx(spent(&x, &spender(974000, 5, 1))), "cdcc3dda5f2c80be4780225cde93b2442e7d270052ab938d73be4107b388993e");
-        assert_eq!(hx(parent(3, &x, &y)), "fcd6a12230b8fc914334039dfe3be49a9796fe16193c15e05de61a536c29f14f");
+        // node format 2 (COINLOG.md §2, 26.11.2026); format 1 gave cdcc3dda... / fcd6a122...
+        assert_eq!(hx(spent(&x, &spender(974000, 5, 1))), "da3dcccdbe802c5f5c22804744b293de00277d2e8d93ab520741be733e9988b3");
+        assert_eq!(hx(parent(3, &x, &y)), "22a1d6fc91fcb8309d0334439ae43bfe16fe9697e0153c19531ae65d4ff1296c");
         // words and bytes round-trip
         assert_eq!(h_of(&w_of(&h(5, 6))), h(5, 6));
     }

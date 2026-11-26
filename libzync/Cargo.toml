@@ -24,6 +24,10 @@ std = ["dep:secp256k1", "dep:num-bigint", "dep:memmap2"]
 # zync-serve's tip mode only (swiftsync-verify's `tip` feature), never the core verifier (its .wasm must not change). No
 # dependencies: the std library alone (positioned reads, no memory map).
 reader = []
+# The coin log's node format per THREAD (coinlog::set_node_format) instead of one per process: the std library alone, no
+# dependencies. swiftsync-verify turns it on, so every zyncAPP that verifies through it checks each proof in its own
+# format on its own thread. Without std (guests, which compute format 2 only) it is one per process.
+tls = []
 # The SwiftSync hints zyncAPP's derivation (src/hints.rs): for zapps/hints and its host only, never the core verifier.
 hints = []
 # The coin-liveness zyncAPP's proof format (src/liveness.rs): for zapps/liveness only, never the core verifier.

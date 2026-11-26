@@ -273,6 +273,7 @@ fn recreated() -> (tempdir::Dir, Vec<libzync::history::Rec>, ChainState, lv::Coi
     ];
     let r = libzync::history::replay(&recs, 3, 3).unwrap();
     let mut cs = genesis_anchor(Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap());
+    cs.profile |= swiftsync_verify::PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
     cs.profile |= PROFILE_COINLOG;
     cs.height = 3;
     cs.utxo_roots = r.log.roots();
@@ -358,6 +359,8 @@ fn undo_leaf_openings_on_host_data() {
     let cs: ChainState = serde_json::from_slice(&std::fs::read(zapp_path("undo_dev_1_200_state.json")).unwrap()).unwrap();
     let uf = swiftsync_verify::undo_from_of(&cs.self_id, &[]);
     assert_eq!((cs.height, uf), (200, 1));
+    // an old chain (node format 1): the producer below builds its proofs in that chain's format (COINLOG.md §2)
+    libzync::coinlog::use_format_of(cs.profile);
     let chain = lv::Chain { height: cs.height, utxo_roots: &cs.utxo_roots, utxo_leaves: cs.utxo_leaves, block_roots: &cs.block_roots,
                             block_leaves: cs.block_leaves, undo_from: uf };
     let mut n = 0;

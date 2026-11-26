@@ -1524,6 +1524,7 @@ fn chain_profile() -> u32 {
     // bit 5: trie_root is the counting trie's root; bit 6: live_set / live_hash are the live-coin multiset hash (instant IBD)
     lz | av << 1 | sig << 2 | (cfg!(feature = "regtest") as u32) << 3 | (cfg!(feature = "coinlog") as u32) << 4
         | (cfg!(feature = "trie") as u32) << 5 | (cfg!(feature = "utxohash") as u32) << 6
+        | 1 << 7   // bit 7: the coin log's and trie's nodes are node format 2 (COINLOG.md §2, every guest since 26.11.2026)
 }
 
 // A RANGE proof's committed state: blocks [lo..=hi] are all valid, GIVEN the "in" boundary (the state

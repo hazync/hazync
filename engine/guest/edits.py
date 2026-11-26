@@ -58,7 +58,8 @@ open(p, "w").write(s); print("engine edits applied:", p)
 # 7) libzync's coin log (libzync/src/coinlog.rs) on OpenVM's SHA-256 in its native layout. The product calls RISC Zero's
 #    sys_sha_compress with pre-swapped IVs (IV_NODE_W / IV_SPENT_W) and gets the digest back as its in-memory bytes (W).
 #    Here the IV is the native state (IV_NODE / IV_SPENT as they are), the block is L || R as raw bytes (W is exactly
-#    that), and the native output state is swapped once into W (the digest's big-endian bytes). Same bytes out.
+#    that), and the native output state IS W (node format 2, COINLOG.md §2: the state words as they are). The product's
+#    RISC Zero path swaps its accelerator's output back to the same words, so both give the same hash.
 p = sys.argv[2]; s = open(p).read()
 rep('''/// The IVs as the accelerator's state words (the state's big-endian bytes in memory order).
 #[cfg(target_os = "zkvm")]
@@ -77,7 +78,11 @@ extern "C" {
 #[cfg(target_os = "zkvm")]
 #[inline(always)]
 fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
-    unsafe { sys_sha_compress(out, iv, a, b) };
+    let mut t = [0u32; 8];
+    unsafe { sys_sha_compress(&mut t, iv, a, b) };
+    for (o, x) in out.iter_mut().zip(t.iter()) {
+        *o = x.swap_bytes();
+    }
 }''', '''#[cfg(target_os = "zkvm")]
 extern "C" {
     fn zkvm_sha256_impl(state: *const u8, input: *const u8, output: *mut u8);
@@ -90,24 +95,14 @@ fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {   // ENGINE: O
     unsafe { compress_blk(iv, &blk, out) }
 }
 
-/// One compression of a contiguous L || R into `out` as the digest's bytes. The native state's words are stored byte
-/// by byte, most significant first (volatile, so the compiler keeps them as byte stores). Measured 25.11 on 976,379:
-/// with a copied block (hz14) this cost more than one word swap per word (trie +4%); with the pairs read in place
-/// (hz15 vs hz17) it costs less.
+/// One compression of a contiguous L || R into `out`: node format 2 (COINLOG.md §2) is the native state words as they
+/// are (format 1 stored each word's bytes reversed). Through a local state, so `out` may overlap the block.
 #[cfg(target_os = "zkvm")]
 #[inline(always)]
 unsafe fn compress_blk(iv: &'static [u32; 8], blk: &[W; 2], out: &mut W) {
-    let mut st = core::mem::MaybeUninit::<[u32; 8]>::uninit();
+    let mut st = [0u32; 8];
     zkvm_sha256_impl(iv.as_ptr() as *const u8, blk.as_ptr() as *const u8, st.as_mut_ptr() as *mut u8);
-    let s = st.assume_init_ref();
-    let o = out.as_mut_ptr() as *mut u8;
-    for i in 0..8 {
-        let (x, p) = (s[i], o.add(4 * i));
-        core::ptr::write_volatile(p, (x >> 24) as u8);
-        core::ptr::write_volatile(p.add(1), (x >> 16) as u8);
-        core::ptr::write_volatile(p.add(2), (x >> 8) as u8);
-        core::ptr::write_volatile(p.add(3), x as u8);
-    }
+    *out = st;
 }''')
 rep('''    #[cfg(target_os = "zkvm")]
     compress_w(&IV_NODE_W[l as usize], a, b, out);''', '''    #[cfg(target_os = "zkvm")]

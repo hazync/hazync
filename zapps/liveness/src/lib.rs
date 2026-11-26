@@ -123,6 +123,7 @@ pub fn liveness_bytes(b: &[u8]) -> Result<Vec<u8>, String> {
 /// Checks a liveness proof against a state that passed [`verify`] and against the CALLER's question. Ok: the answer
 /// token and the line saying what is proven. Every field of the question is compared before the answer is given.
 pub fn check_liveness(cs: &ChainState, undo_from: u32, proof: &[u8], ask: &LivenessAsk) -> Result<(String, String), String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     use libzync::liveness as lv;
     if cs.profile & PROFILE_COINLOG == 0 {
         return Err("the proof is not a coin-log chain: liveness needs the coin log".into());
@@ -230,6 +231,7 @@ pub fn facts_from_json(s: &[u8]) -> Result<Vec<LivenessFact>, String> {
 
 /// [`check_liveness`] on a [`LivenessFact`]; `need_claim`: refuse a question that does not claim its answer.
 pub fn check_liveness_fact(cs: &ChainState, undo_from: u32, f: &LivenessFact, need_claim: bool) -> Result<String, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // this proof's node format (COINLOG.md §2)
     let ask = LivenessAsk::parse(&f.ask)?;
     if need_claim && ask.state.is_none() {
         return Err(format!("liveness question {:?} claims no answer (=unspent or =spent...): this interface returns only whether a claim holds", f.ask));
