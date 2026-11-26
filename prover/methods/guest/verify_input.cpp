@@ -167,9 +167,6 @@ static inline void hz_new_script_tx() { ++hz_tx_generation; }
 // Entries are never evicted: the guest validates one block and exits.
 struct HzCachedTx {
     unsigned char head[32], tail[32];   // the hit guard: first / last 32 bytes (see hz_same_bytes)
-#ifdef HAZYNC_RECLAIM
-    std::vector<unsigned char> all;     // the whole buffer: with a reclaiming allocator a hit is a FULL match
-#endif
     std::unique_ptr<const CTransaction> tx;
 };
 // The hit guard. The key is (pointer, length), and risc0's default guest heap is a BUMP allocator:
@@ -187,14 +184,6 @@ static bool hz_same_bytes(const unsigned char* head, const unsigned char* tail, 
     const unsigned k = len < 32 ? len : 32;
     return std::memcmp(head, p, k) == 0 && std::memcmp(tail, p + len - k, k) == 0;
 }
-#ifdef HAZYNC_RECLAIM
-// HAZYNC_RECLAIM (an image whose allocator FREES memory, #794 / FEASIBILITY Q7): an address can then name two buffers
-// over a run, so (pointer, length) no longer identifies one. A hit is confirmed against the WHOLE stored buffer.
-static void hz_remember_all(std::vector<unsigned char>& all, const uint8_t* p, unsigned len) { all.assign(p, p + len); }
-static bool hz_same_all(const std::vector<unsigned char>& all, const uint8_t* p, unsigned len) {
-    return all.size() == len && (len == 0 || std::memcmp(all.data(), p, len) == 0);
-}
-#endif
 // libzync round 11: the caches live at file scope so hz_cache_reset can empty them. Under agg-lite the
 // chunk calls hz_cache_reset before EVERY transaction, so an entry never outlives the transaction it was
 // made for. (pointer, length) identifies a buffer only while no address is reused: the guest checks at
@@ -233,19 +222,12 @@ static std::map<std::pair<const uint8_t*, unsigned>, HzCachedTx>& hz_tx_cache() 
 }
 static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
     HzCachedTx& e = hz_tx_cache()[{tx_bytes, tx_len}];
-#ifdef HAZYNC_RECLAIM
-    if (e.tx && hz_same_all(e.all, tx_bytes, tx_len)) return *e.tx;
-#else
     if (e.tx && hz_same_bytes(e.head, e.tail, tx_bytes, tx_len)) return *e.tx;
-#endif
     MiniReader r{reinterpret_cast<const std::byte*>(tx_bytes),
                  reinterpret_cast<const std::byte*>(tx_bytes) + tx_len};
     CMutableTransaction mtx;
     r >> TX_WITH_WITNESS(mtx);
     hz_remember(e.head, e.tail, tx_bytes, tx_len);
-#ifdef HAZYNC_RECLAIM
-    hz_remember_all(e.all, tx_bytes, tx_len);
-#endif
     e.tx = std::make_unique<const CTransaction>(std::move(mtx));  // move: no deep copy of vin / vout / witness
 #ifdef HAZYNC_RAW_TXID
     // Only when the parse consumed EVERY byte: Core's deserialiser rejects non-canonical compact sizes
@@ -259,31 +241,19 @@ static const CTransaction& cached_tx(const uint8_t* tx_bytes, unsigned tx_len) {
 #ifdef HAZYNC_AGG_LITE
 // The spent-coin vector, parsed ONCE per transaction: verify_inputs_batch_once, check_tx and
 // tx_full_sigops each parsed the same prevouts blob.
-struct HzCachedSpent {
-    unsigned char head[32], tail[32]; bool ok = false; std::vector<CTxOut> v;
-#ifdef HAZYNC_RECLAIM
-    std::vector<unsigned char> all;   // a hit is a FULL match (HAZYNC_RECLAIM, as HzCachedTx)
-#endif
-};
+struct HzCachedSpent { unsigned char head[32], tail[32]; bool ok = false; std::vector<CTxOut> v; };
 static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent>& hz_spent_cache() {
     static std::map<std::pair<const uint8_t*, unsigned>, HzCachedSpent> c;
     return c;
 }
 static const std::vector<CTxOut>& cached_spent(const uint8_t* prevouts, unsigned len) {
     HzCachedSpent& e = hz_spent_cache()[{prevouts, len}];
-#ifdef HAZYNC_RECLAIM
-    if (e.ok && hz_same_all(e.all, prevouts, len)) return e.v;
-#else
     if (e.ok && hz_same_bytes(e.head, e.tail, prevouts, len)) return e.v;
-#endif
     MiniReader pr{reinterpret_cast<const std::byte*>(prevouts),
                   reinterpret_cast<const std::byte*>(prevouts) + len};
     e.v.clear();
     pr >> e.v;
     hz_remember(e.head, e.tail, prevouts, len);
-#ifdef HAZYNC_RECLAIM
-    hz_remember_all(e.all, prevouts, len);
-#endif
     e.ok = true;
     return e.v;
 }
