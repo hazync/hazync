@@ -4,6 +4,8 @@ The path from today's branch (`engine/openvm`) to Hazync running on the engine. 
 starts only when the previous gate's evidence is committed (a results/ entry or a log), never on "should work".
 **[U]** marks a decision or action that is the user's. Status: ✅ done, ◐ in progress, ☐ not started.
 
+Order (user 26.11): **gates first** (Stage 1 before more porting).
+
 Ground rules (the user's): no release without discussing its contents; many review rounds, in different ways, before
 any image freeze; only measured numbers; merged is not deployed (every stage ends deployed AND checked).
 
@@ -19,7 +21,7 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 | 1.4 | Node format 2 (trie / coin log) adopted, both provers agree | ✅ | results/node_format2 |
 | 1.5 | **Final-image re-run**: Core's 22,666 vectors, the rig's 96 cases, blocks.sh edge blocks + 962,000 negatives, on the image with format 2 + C heap (today's evidence spans older images) | ☐ | |
 | 1.6 | Block 2,016 (the edge block not run: its prepared file is not in the repo) | ☐ | |
-| 1.7 | **[U]** OpenVM audit coverage: is v2.1.0's post-audit diff reviewed; do the 1.x ECC/algebra audits hold for 2.x | ☐ | FEASIBILITY Q1 (diff sizes measured) |
+| 1.7 | **[U]** OpenVM audit coverage: is v2.1.0's post-audit diff reviewed; do the 1.x ECC/algebra audits hold for 2.x. **User 26.11: later (park until Stage 4)**; gate 1 passes without it, gate 4 needs it | ☐ | FEASIBILITY Q1 (diff sizes measured) |
 | 1.8 | 512 MiB stated as a design limit: the guest's worst-case memory per input documented, with the C heap | ☐ | |
 
 **Gate 1:** every row ✅, the final image's evidence committed, the audit answer recorded.
@@ -74,7 +76,7 @@ verifier checking), with the old system untouched.
 | 5.1 | Cost estimate refined: ~50 more blocks across eras and transaction types; the automatic chunk sizing checked on each kind (user, 26.11) |
 | 5.2 | **[U]** Budget and schedule (cards, board, sponsors) |
 | 5.3 | The re-prove, with checkpoints and the spine; progress public |
-| 5.4 | **[U]** The RISC Zero chain keeps running until the engine chain reaches the tip (or not) |
+| 5.4 | **User 26.11: STOP the RISC Zero chain now**: it freezes at its current tip; all proving budget goes to the engine. Its proofs stay verifiable; read-only services stay up until cutover |
 
 **Gate 5:** the engine chain at the tip, verified by the released verifiers.
 
