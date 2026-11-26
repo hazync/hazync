@@ -317,6 +317,23 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        engine (like for like), then the engine through the tip scripts on a live window.
   18. What do the three levers still on the table buy, measured: fewer and larger chunks, CPU/GPU overlap, and native SHA? Does any of them change a
   commitment or format?
+
+     **Answer (26.11.2026): all three MEASURED; none changes a commitment or format.** (The trie's new format, a
+     fourth lever, does.)
+     - Fewer, larger chunks (host-side layout; the guest and journals are the same, the aggregate takes any count):
+       976,379 on one A6000, 16 chunks 289 s vs 5 cost-sized chunks 240 s, 221 s with a 24 GiB segment cap
+       (results/gpu_a6000_tuning). Small blocks gain most: 130,000 56 s (16 chunks) vs 19 s (1); 741,000 110 s vs 54 s
+       (results/gpu_a6000_multiblock). Each proof has ~5 s of fixed cost (results/gpu_a40_block976379).
+     - CPU/GPU overlap (prover-side): 2 provers sharing one A6000, 289 s -> 245 s, GPU use 48% -> 59%
+       (gpu_a6000_tuning); the engine's default is 3 provers on 40 GiB+ cards (A40 976,379: 204 s at 74%,
+       gpu_a40_defaults; 132 s on 26.11's keys and code). Segment-parallel proving across GPUs (segpar) is the
+       multi-card form (Q19).
+     - Native SHA (guest code: SHA-256 in OpenVM's own state layout instead of RISC Zero's byte-swapped compress;
+       same digests, journals byte-identical): -22% on the trie (ENGINE.md, "What native means"). Merged; in every
+       engine image since keys-hz4. It changes the image id (guest code), not a commitment format.
+     - Not among the three, and a format change: the trie in its new format (node hashes take child state words
+       directly), a further -22% (27.2 s vs 36.1 s, ENGINE.md item 5). It changes the trie commitment, so it needs a
+       decision; with the restart from genesis (decision 25.11.2026) there is no old chain to stay compatible with.
   19. How does it scale across several GPUs for one block?
 
      **Answer (25.11.2026, MEASURED, 976,379 unless noted; results/gpu_blackwell_*):**
