@@ -42,7 +42,7 @@ container), anchors regenerated in node format 2 (anchors2: blocks 1..125 replay
 | light_only | **PROVED** (603 s) | ok | identical except self_id |
 | tap_small (block 127: one big tapscript input) | **PROVED** (185 s) | ok | identical except self_id |
 | tap_full (block 127) | **PROVED** (1,177 s) | ok | identical except self_id |
-| mem_k1140 | **PROVED** (2x RTX PRO 6000, 1,484 s, **16 chunks: no re-split**; on the bump allocator it took 36 pieces) | (reference running) | (pending the reference) |
+| mem_k1140 | **PROVED** (2x RTX PRO 6000, 1,484 s, **16 chunks: no re-split**; on the bump allocator it took 36 pieces) | ok (1,032 s, dev mode) | identical except self_id |
 
 So with #794's C-heap recycling the engine proves, at OpenVM's 512 MiB ceiling, every attack block it was tested on,
 including the two that failed before (tap_small on the engine; tap_full on BOTH provers). self_id is the image id

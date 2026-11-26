@@ -29,3 +29,7 @@ keys-ch (node format 2 + C-heap recycling, 2^29, exe 0ddcb255) and its metering 
 redone by the format-2 host (the earlier exports' trie / aggregate journals were format 1). edgef.sh, edgef_final_image.out.
 **The same 9 of 10: every chunk and trie journal identical to RISC Zero's, every aggregate identical except its 32-byte
 image id** (91,842 91,880 185,956 227,931 363,725 364,292 388,381 419,328 481,824). 2,016 still not run (no prepared file).
+
+- 2,016 (first retarget) on the final image too, from prover/testdata/libzync/edge/block_2016.json (blocks.sh's $T/edge: the
+  file WAS in the repo, under testdata/libzync, not testdata/boundaries): chunk + trie journals identical, aggregate
+  identical except its image id. **The edge set is 10 of 10.**

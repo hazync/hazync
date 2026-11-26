@@ -1,0 +1,2 @@
+block 2016: chunks 0, chunk+trie journals 1/1 identical; aggregate 2616 vs RISC Zero 2616 bytes, 32 bytes differ :: execute: 9.4 s, cost 80023863, instructions 1420979, journal 2616 byte
+EDGEF2016_DONE
