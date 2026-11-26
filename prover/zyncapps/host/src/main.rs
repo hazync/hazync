@@ -552,15 +552,19 @@ fn hints_prove(a: &[String]) {
     let format: u32 = flag(a, "--format").map(|x| x.parse().unwrap_or_else(|_| die("--format 1|2"))).unwrap_or(libzync::hints::FORMAT_BIP);
     let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
     let signet = a.iter().any(|x| x == "--signet");
-    let execute = a.iter().any(|x| x == "--execute");
+    // --stream <file> (the OpenVM engine, FEASIBILITY Q20): write the guest's input stream, byte for byte what the
+    // ExecutorEnv below would hold (RISC Zero's serde words), and stop. The core proof goes to `hzengine prove --child`.
+    let stream = flag(a, "--stream");
+    let execute = a.iter().any(|x| x == "--execute") || stream.is_some();
     // --elf <zyncapp-hints.bin>: the published ELF (reproduce/LIBZYNC_IDS) instead of the embedded one
     let elf: Vec<u8> = match flag(a, "--elf") {
         Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
         None => ZYNCAPP_HINTS_ELF.to_vec(),
     };
-    if elf.is_empty() { die("no hints guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-hints.bin>"); }
-    let elf_id = hex(risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))).as_bytes());
-    if elf_id != zapp_hints::HINTS_IMAGE_ID {
+    if elf.is_empty() && stream.is_none() { die("no hints guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-hints.bin>"); }
+    let elf_id = if stream.is_some() { String::from("(engine stream)") } else {
+        hex(risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))).as_bytes()) };
+    if stream.is_none() && elf_id != zapp_hints::HINTS_IMAGE_ID {
         println!("HINTS_ID_NOT_PUBLISHED this guest is {elf_id}, the published hints id is {}: its receipts will not verify under the published id", zapp_hints::HINTS_IMAGE_ID);
     }
     let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
@@ -614,6 +618,27 @@ fn hints_prove(a: &[String]) {
         println!("HINTS_NATIVE H={stop} T={} format={format} file={} ({} bytes, sha256 {}) counted={} unspent={} value={} undo_sha256={} block {} ({:.1} s)",
                  cs.height, hp, w.file.len(), hex(&dv.hints_sha256), dv.n_counted, dv.n_unspent, dv.unspent_value,
                  hex(&dv.undo_sha256), disp(&dv.block_hash), t0.elapsed().as_secs_f64());
+    }
+    if let Some(sp) = &stream {
+        // the same values in the same order as the builder below: write(&T) is RISC Zero's serde words, write_slice raw words
+        let mut words: Vec<u32> = Vec::new();
+        let mut put = |v: Vec<u32>| words.extend(v);
+        put(risc0_zkvm::serde::to_vec(&core_id_in).unwrap());
+        put(risc0_zkvm::serde::to_vec(&journal).unwrap());
+        put(risc0_zkvm::serde::to_vec(&signet).unwrap());
+        put(risc0_zkvm::serde::to_vec(&format).unwrap());
+        put(risc0_zkvm::serde::to_vec(&stop).unwrap());
+        put(risc0_zkvm::serde::to_vec(&hints_host::genesis(signet).to_vec()).unwrap());
+        put(risc0_zkvm::serde::to_vec(&prof).unwrap());
+        put(w.frames.clone());
+        put(vec![cs.height - stop]);
+        put(w.tail.clone());
+        let bytes: Vec<u8> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
+        std::fs::write(sp, &bytes).unwrap_or_else(|e| die(&format!("--stream: {e}")));
+        let dv = w.derived.as_ref().unwrap();
+        println!("HINTS_STREAM H={stop} -> {sp} ({} bytes); expect hints_sha256={} block={} core={} core_height={}",
+                 bytes.len(), hex(&dv.hints_sha256), disp(&dv.block_hash), id_hex(&core_id_in), cs.height);
+        return;
     }
     let mut b = ExecutorEnv::builder();
     match &receipt {
