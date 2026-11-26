@@ -106,3 +106,14 @@ One prover, 2 GiB segments, every proof verified (the rebuilt deferral prover's 
 - 1 GiB segments (same keys): chunk_00 has 565 segments and took 189.7 s (vs ~71 s at 2 GiB); tracker max 2.80 GiB,
   smi 3,374 MiB through chunk_00 and part of chunk_01. The run was stopped by gpu_block's balance guard (< $1) before
   the aggregate, which held the peak at 2 GiB, so the full-block peak at 1 GiB is NOT measured.
+
+## Full block at 1 GiB segments (keys-m26, tree 2/2), RTX 4090, 25-26.11.2026
+
+Launcher stopped by hand at setup (slow pod network: rustup 3 min, CUDA 14 min; the 20-min setup guard would have
+killed the pod just before SETUP_OK) and the job run by hand; full output harvested.
+
+- 976,379: **verified** (`verify: OK`), every chunk and trie journal IDENTICAL to RISC Zero's, nvidia-smi peak
+  **3,765 MiB**, OpenVM tracker max **2.80 GiB**, wall **1,619 s** (vs 357 s at 2 GiB: 4.5x).
+- Segment counts multiply ~6.7x, not 2x (chunks 520-580 each, trie 912, aggregate 1,029 vs 154 at 2 GiB), so the
+  slowdown is per-segment overhead. A cap between 1 and 2 GiB is the next point to measure.
+- smi minus tracker ≈ 0.9 GiB (CUDA context + VPMM pool slack).
