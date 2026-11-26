@@ -22,14 +22,19 @@ q7() { nm=$1 lo=$2 hi=$3 blk=$4 anc=$5; s=$(date +%s)
   r=$A/r0/${nm%_m*}/state_$hi.json; m=no-r0
   [ -f $r ] && { cmp -s out/q7_$nm/state_$hi.json $r && m=STATE_IDENTICAL || m=STATE_DIFFERENT; }
   echo -e "q7_$nm\trc=$rc\t$(( $(date +%s)-s ))s\t$m\t$(grep -aci 'out of memory' out/q7_$nm.log) oom lines" >> out/times.tsv; }
-# each block at both address spaces: keys/ (the bundle's, 2^26) and export/keys29 (OpenVM's default 2^29)
+# the key sets to try (attack/keysets, "bits:dir ..."; default: the bundle's keys as 2^26 and export/keys29 as 2^29), the
+# anchors (attack/anchors/{wc,tap}/anchor.json when present: node format 2; else the blocks' own), and attack/skip_mem
+# (mem_k1140's heavy pieces left to a multi-GPU run)
+WCA=$A/blocks/anchor.json; TAPA=$A/tap/anchor.json
+[ -f $A/anchors/wc/anchor.json ] && WCA=$A/anchors/wc/anchor.json
+[ -f $A/anchors/tap/anchor.json ] && TAPA=$A/anchors/tap/anchor.json
 if [ -z "${SKIP_Q7:-}" ] && [ -d $A ]; then
-  for ks in 26:/workspace/keys 29:$X/keys29; do
+  for ks in $(cat $A/keysets 2>/dev/null || echo "26:/workspace/keys 29:$X/keys29"); do
     export HAZYNC_ENGINE_KEYS=${ks#*:}; b=${ks%%:*}
-    q7 mem_k1140_m$b 126 126 $A/blocks/mem_k1140 $A/blocks/anchor.json
-    q7 light_only_m$b 126 126 $A/blocks/light_only $A/blocks/anchor.json
-    q7 tap_small_m$b 126 127 $A/tap/tap_small $A/tap/anchor.json
-    q7 tap_full_m$b 126 127 $A/tap/tap_full $A/tap/anchor.json
+    [ -f $A/skip_mem ] || q7 mem_k1140_m$b 126 126 $A/blocks/mem_k1140 $WCA
+    q7 light_only_m$b 126 126 $A/blocks/light_only $WCA
+    q7 tap_small_m$b 126 127 $A/tap/tap_small $TAPA
+    q7 tap_full_m$b 126 127 $A/tap/tap_full $TAPA
   done
   export HAZYNC_ENGINE_KEYS=/workspace/keys
 fi
