@@ -36,9 +36,12 @@ def export(f, name, lz):
     return x, rc, out
 
 def engine_exec(keys, inp, journal, self_id=False):
-    cmd = [E, "execute", "--dir", keys, "--input", inp, "--journal", journal] + (["--self-id"] if self_id else [])
+    # the guest's own stdout (its refusal line among it) goes to --log, not to hzengine's output: both are returned
+    log = journal + ".guest.log"
+    cmd = [E, "execute", "--dir", keys, "--input", inp, "--journal", journal, "--log", log] + (["--self-id"] if self_id else [])
     r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
-    return r.returncode, re.sub(r"\x1b\[[0-9;]*m", "", r.stdout + r.stderr)
+    g = open(log, errors="replace").read() if os.path.exists(log) else ""
+    return r.returncode, re.sub(r"\x1b\[[0-9;]*m", "", r.stdout + r.stderr + "\n" + g)
 
 AGG_REFUSAL = "aggregate: bv=false ph=true carry=true rt=true time=true smt=true"
 
