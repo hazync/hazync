@@ -1,0 +1,50 @@
+--- a/crates/verify/Cargo.toml
++++ b/crates/verify/Cargo.toml
+@@ -21,7 +21,9 @@
+ p3-field.workspace = true
+ serde.workspace = true
+ thiserror.workspace = true
+-zstd.workspace = true
++zstd = { workspace = true, optional = true }
+ 
+ [features]
+-default = []
++# the zstd-compressed proof encoding (decode_compressed_using_vk, verify_vm_stark_proof); off for a zkVM guest
++default = ["compressed"]
++compressed = ["dep:zstd"]
+--- a/crates/verify/src/codec.rs
++++ b/crates/verify/src/codec.rs
+@@ -1,4 +1,6 @@
+-use std::io::{BufReader, Read};
++#[cfg(feature = "compressed")]
++use std::io::BufReader;
++use std::io::Read;
+ 
+ use openvm_circuit::system::memory::merkle::public_values::UserPublicValuesProof;
+ use openvm_stark_backend::{
+@@ -14,6 +16,7 @@
+ 
+ /// Maximum zstd log window size accepted when decompressing a proof, i.e. 32 MiB. Bounds
+ /// the decoder's window allocation; zstd levels up to 20 use at most this size.
++#[cfg(feature = "compressed")]
+ const MAX_ZSTD_WINDOW_LOG: u32 = 25;
+ 
+ impl Encode for VmStarkProof {
+@@ -65,6 +68,7 @@
+         Ok(proof)
+     }
+ 
++    #[cfg(feature = "compressed")]
+     /// Decode a zstd-compressed encoding using size limits from a trusted vk and baseline,
+     /// rejecting trailing bytes. The compressed stream is decoded directly, so only as much
+     /// as the limits allow is ever decompressed. Callers reading encoded_proof from an
+--- a/crates/verify/src/lib.rs
++++ b/crates/verify/src/lib.rs
+@@ -40,6 +40,7 @@
+ 
+ /// Verifies a non-root VM STARK proof (as a byte stream) given the internal-recursive
+ /// layer verifying key and VM- and exe-specific baseline artifacts.
++#[cfg(feature = "compressed")]
+ pub fn verify_vm_stark_proof(
+     vk: &VmStarkVerifyingKey,
+     encoded_proof: &[u8],
