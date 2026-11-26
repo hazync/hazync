@@ -32,7 +32,7 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 |---|---|---|---|
 | 2.1 | Core guest on the engine: chunks, trie, aggregate, recursion, segpar, memory levers | ✅ | ENGINE.md, results/* |
 | 2.2 | Engine chain from genesis through the product host | ✅ (1..200) | results/zapp_hints |
-| 2.3 | zAPP guests: headers ✅ (whole chain, 22.4x), hints ✅ end to end, utreexo base ✅ executes on the engine (journal = RISC Zero's except self_id); `--stream` in every zAPP host ✅ (RISC Zero inputs unchanged, checked); utreexo-tip and zeroconf end to end on the 1..200 chain ☐ | ◐ | results/zapp_headers, zapp_hints, zapp_utreexo |
+| 2.3 | zAPP guests: headers ✅ (whole chain, 22.4x), hints ✅ end to end, utreexo base ✅ PROVED on the engine, utreexo-tip ✅ executes on it (two child images; journals = RISC Zero's except the ids); `--stream` in every zAPP host ✅ (RISC Zero inputs unchanged, checked); zeroconf end to end ☐ | ◐ | results/zapp_headers, zapp_hints, zapp_utreexo |
 | 2.4 | Verifier: swiftsync-verify / corecheck accept ENGINE proofs (OpenVM's verifier + image + journal checks, as engine/wasm-verify's verify_full), native and WASM | ☐ | wasm probe: engine/wasm-verify |
 | 2.5 | Verifier-side zAPPs on engine proofs: assume, deposit, liveness, statement (they rest on 2.4) | ☐ | |
 | 2.6 | Handover across OpenVM versions: step 1 ✅ (verifier in-guest, 15.6B); step 2 the pin + handover mode in the aggregate; step 3 a rehearsal across two OpenVM tags with negative controls | ◐ | engine/HANDOVER.md, results/handover_step1 |

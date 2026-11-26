@@ -1,0 +1,10 @@
+f749cda3 hzengine: children of several images in o
+engine utreexo image id 340f6675bafcdd893c12e0dfae0391043cc7fd8919b526ff756ec13d5d76cc95 (journal's self_id: 340f6675bafcdd893c12e0dfae0391043cc7fd8919b526ff756ec13d5d76cc95)
+1. base to 200 re-executed: journal IDENTICAL to before the change
+2. base to 100 PROVED rc=0 462 s
+verify: OK (0.05 s), journal 1272 bytes sha256 8ff9726a082a575e65fb34d681fcb875412248bc1d0512df7cd8916771e94ef4
+tip stream rc=0: UTREEXO_TIP_STREAM blocks=101..200 -> /root/engine/zt/tip.bin (39616 bytes, self id at byte 0); expect leaves=209 roots=d71afabf3ec469988d02cbcbca6123dc294af01d
+3. tip execute rc=0 :: execute: 9.3 s, cost 405192880, instructions 9944148, journal 1328 bytes sha256 6af7d482ae7a0038c40f5d81ab23b775157be26abb56fad3f96be0d170898847 EXECUTE_OK 
+   engine tip journal 1328 bytes vs RISC Zero 1328; differing bytes 4..67 (64); ONLY self_id + base_id (bytes 4..68)
+4. swapped images rc=1 (Error: Invalid program commit: expected [1589540925, 1782372489, 369848036, 308897044, 409155863, 1871458518, 325288375,); one image for both rc=1 (Error: Invalid program commit: expected [1589540925, 1782372489, 369848036, 308897044, 409155863, 1871458518, 325288375,)
+ZT2_DONE
