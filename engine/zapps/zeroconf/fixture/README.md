@@ -16,3 +16,19 @@ On the zAPP regtest harness (scripts/zapp-regtest), main branch, tip 110 `2d5cc9
 
 Found by it: the zeroconf guest parsed the chunk record from before the trie's script hashes and the undo digest
 (#729) were added: fixed in prover/zyncapps/methods/zeroconf/src/main.rs.
+
+## Run on the engine (26.11.2026 late)
+
+`zyncapp prove-zeroconf <prep state_110.json> chunk_111.journal 0 paths.json out --regtest --stream zc.bin` (12,700
+bytes) -> `hzengine execute` on the zeroconf guest with the parser fix, METERING build (keys-z-zeroconfb:
+bench-noverify, env::verify accepts the two journals without proofs, so this run tests the zAPP's own checks; the
+production build keys-z-zeroconf2 compiles too): **EXECUTE_OK**, statement 840 bytes: kind 0x5A430002, tip 110
+`2d5cc9c8...`, profile 0xf9, **txid 6c00b169... and wtxid f4a83537... = T's, fee 10,000, weight 1,031, sigops 1**.
+
+Negatives (`../negatives.sh`), each refused by the guest with its own reason: paths swapped between the inputs, a path
+node changed (both "an input's coin is not unspent at the tip"), one path for two inputs, the tip one block lower,
+a chunk for another height (both "not for the block after this tip"), a chunk not all valid, no such record, the
+wrong network ("wrong network"); the control (the fixture) accepted.
+
+Left: the same with REAL children (the regtest chain to 110 and the chunk proved on the engine, production image):
+a GPU run; and a spent input / an unconfirmed parent as fixture cases.
