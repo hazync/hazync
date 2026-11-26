@@ -409,6 +409,53 @@ pub struct Inputs<'a> {
     pub now: u64,
 }
 
+/// An engine image's verifying key, as the caller holds it: the key file's bytes and its PIN (SHA-256 of the file), from
+/// the image's published record or, for an image the reader rebuilt, from the reader's own build. The pin is what
+/// authenticates the key: OpenVM verifies the STARK under the key's `mvk`, which neither the baseline nor the image id
+/// binds (engine/VERIFIER.md), so a key is accepted only as exactly these pinned bytes.
+pub struct EngineKey<'a> {
+    pub bytes: &'a [u8],
+    pub pin: [u8; 32],
+}
+
+/// Does the file start with the engine proof magic (`HZE1`, engine/verify-core)? Checked before any decoder sees it.
+pub fn is_engine_proof(file: &[u8]) -> bool {
+    file.len() >= 4 && &file[..4] == b"HZE1"
+}
+
+/// [`verify`] for an engine (OpenVM) proof file: steps 1 and 8 by OpenVM's verifier under the pinned key (the STARK,
+/// the image id recomputed from the key, the public values = SHA-256(journal)), then the same statement checks.
+#[cfg(feature = "engine")]
+pub fn verify_engine(inp: &Inputs, key: &EngineKey) -> Report {
+    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
+    let m = inp.image.method_id();
+    let journal = match engine_front(inp, &m, key, &mut rep) {
+        Some(j) => j,
+        None => return rep,
+    };
+    statement_checks(inp, &m, &journal, rep)
+}
+
+/// Steps 1 and 8 for an engine proof file. Returns the journal only when the proof verified: unlike a RISC Zero
+/// receipt, whose journal is part of the proof object, the file's journal is just bytes next to the proof until the
+/// public values are checked against it.
+#[cfg(feature = "engine")]
+fn engine_front(inp: &Inputs, m: &Digest, key: &EngineKey, rep: &mut Report) -> Option<risc0_zkvm::Journal> {
+    use hazync_engine_verify as ev;
+    let (proof, journal) = match ev::unpack(inp.receipt) {
+        Ok(x) => x,
+        Err(e) => {
+            rep.check(false, format!("the file is an engine proof ({e})"));
+            return None;
+        }
+    };
+    let r = ev::verify_full_bytes(key.bytes, &key.pin, proof, journal, m.as_bytes());
+    let ok = rep.check(r.is_ok(), format!("engine proof verifies against image {} ({}) under the pinned key {}{}",
+                       inp.image.method_id_hex, inp.image.network, hex(&key.pin),
+                       r.err().map(|e| format!(": {e}")).unwrap_or_default()));
+    ok.then(|| risc0_zkvm::Journal::new(journal.to_vec()))
+}
+
 /// Steps 1 and 8 for a RISC Zero receipt: a single succinct or Groth16 proof, real (not a FakeReceipt), verified
 /// against image `m`. Returns the journal, for the prover-independent checks; None (after recording why) when
 /// there is no journal to read. A failed `verify` is recorded and the journal still returned, so the report also says
@@ -553,8 +600,15 @@ pub fn verify(inp: &Inputs) -> Report {
         None => return rep,
     };
 
+    statement_checks(inp, &m, &journal, rep)
+}
+
+/// Steps 2-12, which do not depend on the prover: the journal (from a verified proof of image `m`) as the image's
+/// ChainState, and everything checked on it (engine/VERIFIER.md). `rep` already holds the proof's own checks.
+fn statement_checks(inp: &Inputs, m: &Digest, journal: &risc0_zkvm::Journal, mut rep: Report) -> Report {
+    let m = *m;
     // Step 2: the journal is this image's ChainState.
-    let cs: ChainState = match decode_journal(&journal) {
+    let cs: ChainState = match decode_journal(journal) {
         Ok(c) => c,
         Err(e) => {
             rep.check(false, format!("journal is a ChainState ({e})"));

@@ -66,8 +66,18 @@ being handed to a decoder.
    registry (the image's vk embedded, or a file whose hash is pinned); the RISC Zero-only parts (receipt kinds, dev
    mode, Groth16, `earlier_image_named_by`) leave with it. The journal stays RISC Zero's serde word format (the
    engine guest writes the same bytes), so only its decoder is kept.
+   **Started 26.11 (late):** `verify_engine(&Inputs, &EngineKey)` behind the `engine` feature (off by default until the
+   wasm build carries OpenVM's patch); steps 2-12 moved into `statement_checks`, shared by both fronts; `EngineKey` =
+   the key file's bytes + its pin. The proof file (HZE1) comes from `hzengine wasm-inputs` (proof.hze, vk.sha256).
+   Registry records for engine images and the CLI / C ABI / WASM entry points: to do (and then the RISC Zero front goes).
 4. Tests: the engine chain 1..200's proof of block 200 accepted, its Report the same as the RISC Zero chain's for
    the same block (apart from the image lines); every negative the RISC Zero suite has, ported (flipped proof byte, wrong image, journal
    edit, another image's vk); the fact checks (swiftsync-verify's block / coin / trie / tx facts) on the engine chain.
+   **First part done 26.11 (late)** (swiftsync-verify/tests/engine.rs, `--features engine`): the engine chain's proof of
+   block 200 (keys-ch) passes EVERY check (proof, ChainState v2 with self_id, profile 0xf1 incl. node format 2, time,
+   block forest, lineage, genesis anchor, coin log; verdict Demo only for low work and the checkpoint); refused: a
+   journal bit, a proof byte, a non-pinned key, another pin, another image's record, a RISC Zero receipt's bytes, a
+   truncated file; the RISC Zero front refuses an engine file. Suites: default 33 passed, `engine` 35, 1 ignored each;
+   the CLI's reports on real RISC Zero receipts identical before and after (same --now). Fact checks: to do.
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
 6. Review rounds (the user's rule) before any release.

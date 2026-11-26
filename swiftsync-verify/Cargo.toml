@@ -34,6 +34,9 @@ path = "src/zync_serve.rs"
 # 503, never an abort): cargo build --profile zync-serve --features tip --bin zync-serve. The core verifier and its
 # .wasm never enable it.
 tip = ["libzync/reader"]
+# engine (OpenVM) proofs: `verify_engine` (engine/VERIFIER.md). Off until the wasm build carries OpenVM's wasm patch;
+# the default once the RISC Zero front is removed.
+engine = ["dep:hazync-engine-verify"]
 
 [dependencies]
 # disable-dev-mode: RISC0_DEV_MODE can never make this verifier accept a fake receipt (review round 3).
@@ -44,6 +47,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 bincode = "1"
 sha2 = "0.10"
+hazync-engine-verify = { path = "../engine/verify-core", optional = true }
 
 [profile.release]
 opt-level = "z"
