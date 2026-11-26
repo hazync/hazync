@@ -197,6 +197,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      the 679 cases RISC Zero's guest aborts on are refused by the engine too (0 accepted), and no engine-only abort
      (results/core_vectors). The 97 rig cases (real Core + regtest guest on crafted blocks) need a regtest engine
      build, like Q7.
+     - **Rig, first run on the engine (26.11.2026, results/rig_engine): 55 of 96 cases ran, all 55 AGREE with Core
+       31.1** (real proofs; 232-block base chain proved on the engine), read with rig.py's own reason table plus the
+       guest's logs. Two host issues found and fixed (the guest's text missing from a failed execute; an explicit
+       HAZYNC_CHUNKS overridden on the engine), which stopped the run at split_tx; the remaining 41 (signatures,
+       taproot, multisig, CLTV/CSV, P2SH, BIP30 repeats) are the next run.
   10. What are the limits on memory, cycles per segment and input size, and where do they come from?
 
      **Answer (25.11.2026, from OpenVM v2.1.0's source and the engine; MEASURED where marked):**
