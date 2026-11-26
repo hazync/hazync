@@ -153,3 +153,20 @@ fn engine_key_in_the_record() {
     assert_eq!(r.verdict, Verdict::Fail);
     eprintln!("  record with another key: {}", failed(&r)[0]);
 }
+
+/// proof_journal's framing is verify-core's: the same journal as unpack, and the verified state's own journal.
+#[test]
+fn proof_journal_reads_the_engine_file() {
+    let file = rd("proof.hze");
+    let j = proof_journal(&file).unwrap();
+    assert_eq!(&j.bytes[..], hazync_engine_verify_unpack_journal(&file));
+    let cs: ChainState = decode_journal(&j).unwrap();
+    assert_eq!(cs.height, 200);
+    assert!(proof_journal(&file[..6]).is_err());
+}
+
+fn hazync_engine_verify_unpack_journal(file: &[u8]) -> &[u8] {
+    // the layout as verify-core writes it (HZE1, u32 LE proof length, proof, journal)
+    let n = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
+    &file[8 + n..]
+}

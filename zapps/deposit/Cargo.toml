@@ -15,6 +15,10 @@ publish = false
 name = "zapp_deposit"
 path = "src/lib.rs"
 
+[features]
+# engine (OpenVM) core proofs (engine/VERIFIER.md)
+engine = ["zapp-corecheck/engine"]
+
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 # the core receipt check and image resolution every zAPP shares (zapps/corecheck: no CLI code)

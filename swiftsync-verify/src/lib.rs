@@ -452,6 +452,21 @@ pub fn is_engine_proof(file: &[u8]) -> bool {
     file.len() >= 4 && &file[..4] == b"HZE1"
 }
 
+/// The journal a proof file carries, NOT verified: for a tool that builds on a proof it has already verified (a zAPP
+/// bundle builder). A RISC Zero receipt through the strict decoder; an engine proof file (engine/verify-core's layout:
+/// `HZE1`, the proof's length u32 LE, the proof, then the journal) by its framing alone, so no build needs OpenVM for it.
+pub fn proof_journal(file: &[u8]) -> Result<risc0_zkvm::Journal, String> {
+    if is_engine_proof(file) {
+        let n = file.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize).ok_or("engine proof: truncated")?;
+        let rest = &file[8..];
+        if n == 0 || n > rest.len() {
+            return Err("engine proof: the proof length runs past the file".into());
+        }
+        return Ok(risc0_zkvm::Journal::new(rest[n..].to_vec()));
+    }
+    Ok(decode_receipt(file)?.journal)
+}
+
 /// [`verify`] for an engine (OpenVM) proof file: steps 1 and 8 by OpenVM's verifier under the pinned key (the STARK,
 /// the image id recomputed from the key, the public values = SHA-256(journal)), then the same statement checks.
 #[cfg(feature = "engine")]
