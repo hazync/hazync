@@ -173,3 +173,12 @@ swiftsync-verify named engine/verify-core (optional): build.sh now stages it alw
 bytes (1,240,367 before the verifier port's code; no OpenVM crate in its graph). Transitional cost: the default build
 also clones OpenVM's and stark-backend's git repositories (cargo resolves the optional git dependency's manifest);
 gone when the engine path becomes the only one (then the pinned tree is staged for every build).
+
+## When the RISC Zero front goes: at the cutover, not before
+
+Nothing blocks the removal any more (the engine wasm build is reproducible). But until the cutover (roadmap 6.3) the
+published verifiers must keep checking the chain that is LIVE, the RISC Zero one; the engine path stays opt-in
+(`--features engine`, `build.sh --engine`) on this branch. At the cutover, in one change: `engine` becomes the only
+front (the default), the RISC Zero front, its receipt kinds, dev-mode check, Groth16 and earlier-image logic go, the
+engine image records go in with their embedded keys, the zAPP fixtures move to engine proofs, the published module
+shas are renewed (README, the site, deploy.sh), and the old chain stays checkable with the last RISC Zero release.
