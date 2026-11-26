@@ -36,6 +36,16 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
          fail verification, DeferralInitialRootMismatch; open, no maintainer reply) is there. Liveness, not
          soundness. The engine does not hit it: Sdk::prove builds a fresh prover per call, and segpar builds a fresh
          instance and its initial tree right after reset_state.
+     - MEASURED (26.11.2026, `git diff` in a full clone of openvm-org/openvm; line counts are a proxy for review
+       effort, not a finding): the post-audit change in the Phase 2 directories, audited f01c912 (18.05.2026) -> our
+       05f3b73e, non-test code: crates/continuations 54 files +1,596/-480 (AIR files +694/-206), crates/recursion 110
+       files +1,398/-708 (AIR +310/-134), extensions/deferral +314/-181 (AIR +46/-30), crates/verify +340/-129,
+       guest-libs/verify-stark +304/-111 (AIR +65/-27). Phase 4 (0110850 -> 05f3b73e): extensions/sha2 +30/-12,
+       keccak256 +18/-1, crates/vm/src/system/memory +626/-18. From the 1.x audits (v1.7.0) to v2.1.0: rv32im circuit
+       87 files +1,262/-1,111, mostly execution/AOT code, with constraint changes in adapters/loadstore.rs (+15/-23)
+       and hintstore/mod.rs (+57/-11); algebra circuit +1,021/-1,580; ecc circuit +585/-537; crates/circuits/
+       primitives 68 files +3,144/-974; mod-builder -2,740 net. So "are the 1.x ECC/algebra audits valid for 2.x" is a
+       real question: the code moved.
      - Verdict so far: the soundness-critical recursion/deferral path is third-party audited at a pre-release commit;
        the release we run has post-audit circuit changes and fresh ECC advisories. Not a deal-breaker; it is the
        first thing to raise with the OpenVM team (is v2.1.0's diff reviewed? are the 1.x ECC/algebra audits still
