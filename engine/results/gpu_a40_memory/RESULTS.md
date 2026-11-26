@@ -117,3 +117,17 @@ killed the pod just before SETUP_OK) and the job run by hand; full output harves
 - Segment counts multiply ~6.7x, not 2x (chunks 520-580 each, trie 912, aggregate 1,029 vs 154 at 2 GiB), so the
   slowdown is per-segment overhead. A cap between 1 and 2 GiB is the next point to measure.
 - smi minus tracker ≈ 0.9 GiB (CUDA context + VPMM pool slack).
+
+## Full block at 1.5 GiB segments (HZ_SEG_MEM_MB=1536, 183637cd, keys-m26, tree 2/2), RTX 4090, 26.11.2026
+
+- 976,379: verified, every journal IDENTICAL, **584 s**, nvidia-smi peak **3,943 MiB**, tracker max 3.00 GiB,
+  pool max 2.90 GiB. Segments: chunks 147-166, trie 254, aggregate 306 (chunks ~70 s each, as at 2 GiB).
+
+| segment cap | wall | tracker | smi peak |
+|---|---|---|---|
+| 2 GiB | 357 s | 3.6 GiB | 4,168 MiB |
+| 1.5 GiB | 584 s | 3.0 GiB | 3,943 MiB |
+| 1 GiB | 1,619 s | 2.8 GiB | 3,765 MiB |
+
+- smi minus pool ≈ 1.0 GiB: 396 MiB CUDA context on the 4090 before any allocation (measured, first smi samples),
+  ~0.5 GiB outside the tracker. Context size depends on the card (SM count); a 1050 Ti's is not measured.
