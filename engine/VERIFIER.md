@@ -118,3 +118,20 @@ being handed to a decoder.
    (SHA-256 per file) in the repo, verify it in the container, stage it at a fixed path, pass the [patch] tables with
    `cargo --config`, and a separate locked lockfile for the engine graph.
 6. Review rounds (the user's rule) before any release.
+
+## The verifier-side zAPPs on engine proofs (roadmap 2.5; 26.11.2026 late)
+
+Each with `--features engine`, a test (tests/engine.rs) on the engine chain's proof of mainnet 1..200, its image record
+carrying the key; inputs made from the ENGINE chain where they depend on the node format:
+
+| zAPP | test | result |
+|---|---|---|
+| corecheck | verify_core + expect 200:<tip> | all checks ok, tip matched; wrong tip and keyless record FAIL |
+| liveness | 5 claims (block 9 coin spent at 170; Hal's coin unspent with its value; change spent at 181; change unspent after 170, opened through the forest; created/coinbase pinned), proofs from the engine history (`zapp-liveness prove`) | all hold; 7 wrong questions and a format-1 proof refused |
+| assume | Core v31.1's real UTXO snapshot at 200; assumevalid | 204 coins, Core's hash_serialized_3; the 199 snapshot and a changed byte refused; block 200 named |
+| deposit | block 170's Satoshi-to-Hal tx, core proof alone (bundle from the engine proof + engine history) | every check ok (in the fully validated chain, output 0 = 10 BTC, 31 confirmations); another amount, a deeper ask, and a bundle from the RISC Zero run's history refused |
+| statement | two fresh keys' zero balances (absence proofs) on the engine chain's trie at 200 (native prep; its state = the engine-proven one but self_id), BIP-322 signed | holds; a claimed 1 sat refused; the format-1 trie file refused by the store (OldRoot) |
+
+Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6 passed). Left: deposit bundles bound to a
+header-chain proof (the header zAPP's engine proofs in the verifier), the zAPP CLIs / C ABIs / WASM taking a key for a
+reader's own rebuild (published records will carry it), trie / tx / journey facts in the core verifier.
