@@ -1,0 +1,15 @@
+e550dbe9 pod/run_one.sh: one proof of a stream (a zyncAPP's)
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.89s
+e550dbe9 pod/run_one.sh: one proof of a stream (a zyncAPP's)
+host 507 s
+METHOD_ID b10e17283213c43c64a202f31a0eb95c6076d2b0237c3e9c3161c6467c5cafd5
+engine guest: build: 81.7 s; image exe b73f1d1391a28b187eeb00000f59f713bba2206b18fa05197d7d994db5b6e369 vm 00e00077450a5a5657b99e459ec
+chunk_00.in IDENTICAL :: execute: 9.1 s, cost 3140445468, instructions 72294966, journal 426760 bytes sha256 975daa
+chunk_01.in IDENTICAL :: execute: 9.6 s, cost 3243010583, instructions 73186801, journal 399980 bytes sha256 423545
+chunk_02.in IDENTICAL :: execute: 9.6 s, cost 2689856391, instructions 61199826, journal 310180 bytes sha256 c677c7
+chunk_03.in IDENTICAL :: execute: 9.3 s, cost 3278611745, instructions 74800505, journal 511580 bytes sha256 bf8660
+chunk_04.in IDENTICAL :: execute: 9.4 s, cost 3742960462, instructions 86433690, journal 630472 bytes sha256 775dee
+trie.in IDENTICAL :: execute: 9.6 s, cost 4843925509, instructions 52915045, journal 100 bytes sha256 19b8d55c4
+aggregate: 32 bytes differ of 5284 :: execute: 9.4 s, cost 3926815221, instructions 60993385, journal 5284 bytes sha256 47cb3604
+profile word candidates with bit 7: ['0xdc', '0xdf', '0x90', '0xa1', '0x83', '0xa8', '0xc4', '0xe3', '0xa1', '0xdf', '0xd6', '0xeb', '0xc6', '0xec', '0xd1']
+FMT2_DONE
