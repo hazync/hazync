@@ -1284,10 +1284,13 @@ fn main() {
     // chunks sized by predicted cost, about 0.9B each (~5B engine cycles), at most 16. Block 976,379 on one A6000:
     // 5 such chunks 183 s vs 16 equal ones 245 s; 741,000 as 1 chunk 39 s vs 110 s (engine/results/gpu_a6000_tuning).
     // Set before anything reads them, so the hints run and the prover agree; either can still be set by hand.
-    if engine_backend::active() || args.iter().any(|a| a == "engine-export") {
-        for (k, v) in [("HAZYNC_CHUNK_TARGET", "900000000"), ("HAZYNC_CHUNKS", "16")] {
-            if std::env::var_os(k).is_none() { std::env::set_var(k, v); }
-        }
+    // An explicit HAZYNC_CHUNKS alone is a fixed count (the core-rules rig's split_tx asks for 2 to put one transaction
+    // across a chunk boundary): the cost target is set only when neither is, or it would size the block to 1 chunk.
+    if (engine_backend::active() || args.iter().any(|a| a == "engine-export"))
+        && std::env::var_os("HAZYNC_CHUNKS").is_none() && std::env::var_os("HAZYNC_CHUNK_TARGET").is_none()
+    {
+        std::env::set_var("HAZYNC_CHUNK_TARGET", "900000000");
+        std::env::set_var("HAZYNC_CHUNKS", "16");
     }
     if let Some(i) = args.iter().position(|a| a == "engine-export") {
         let dir = args.get(i + 1).expect("engine-export <dir>").clone();
