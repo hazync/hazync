@@ -46,4 +46,20 @@ results with OpenVM's generate_deferral_results, which is what get_deferral_stat
 4. Negative controls: the two images swapped, and one image for both: **refused** (`Invalid program commit`) before
    the guest runs.
 
-To do: the tip step PROVED (and a step on a step), zeroconf (a speculative chunk proof as its second child), GPU timings.
+## Steps proved, and a step on a step (zt3.sh / zt3.out)
+
+The same chain on both provers, base 100 -> step 150 -> step 200 (RISC Zero: execute, same ELFs, base id cd8ea369...):
+
+| run | engine | journal vs RISC Zero |
+|---|---|---|
+| step 100 -> 150 (children: the base proof + the core) | **PROVED** (CPU, 266 s), `hzengine verify` OK | only self_id + base_id differ |
+| step 150 -> 200 on that step (children: a proof of the tip image ITSELF + the core) | executed (cost 235,217,355) | only self_id + base_id differ |
+
+So the tip chain's both links work on the engine: a step on the base image and a step on a step. Left for the utreexo
+zAPP: GPU timings, and the follower (coordinator/deploy/utreexo) on engine proofs (Stage 3.4).
+
+zeroconf: NOT a migration gap. It was never finished on RISC Zero either (libzync ROADMAP D5 "building"; no end-to-end
+test or fixture exists). The engine has its image (keys-z-zeroconf) and `prove-zeroconf --stream` (journals in, the
+tip and speculative chunk proofs as children, tip first). Finishing it needs a fixture: a transaction valid on top of
+a proven tip, its speculative chunk proved (HAZYNC_SPECULATIVE), and its inputs' coin-log paths; most practical on a
+regtest chain the rig builds (its own spendable coins).

@@ -1,0 +1,8 @@
+RISC Zero step 100->150 rc=0
+RISC Zero step 150->200 (on a step) rc=0 UTREEXO_TIP_JOURNAL height=200 block=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 leaves=209 steps=2
+engine step 100->150 PROVED rc=0 266 s
+verify: OK (0.05 s), journal 1328 bytes sha256 0b0d267787ba9cd11e49c4d93cafc05b43fc2fd8678b5c73fb55e973ea8ea12
+   step 150: engine 1328 bytes vs RISC Zero 1328; differing bytes 4..67 (64): ONLY self_id + base_id (4..68)
+engine step 150->200 on a step rc=0 :: execute: 9.4 s, cost 235217355, instructions 5773144, journal 1328 bytes sha256 fd855f9b95df318163285c6e1fef6291dfb7bd00
+   step 200 on a step: engine 1328 bytes vs RISC Zero 1328; differing bytes 4..67 (64): ONLY self_id + base_id (4..68)
+ZT3_DONE
