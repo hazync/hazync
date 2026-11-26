@@ -1,0 +1,10 @@
+fdd51e3a results: node format 2 - 240 tests pass (
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.26s
+keys-rec: build: 71.5 s; image exe c92e061c878b3f11c12567694218605f3be8365a475e300aa618cd0464b58852 vm 00e00077450a5a565
+chunk_00.in IDENTICAL :: bump 3140445468, reclaim 6785235484 (+116.1%) :: execute: 9.8 s, cost 6785235484, instructions 175333157, jou
+chunk_01.in IDENTICAL :: bump 3243010583, reclaim 4932069724 (+52.1%) :: execute: 9.4 s, cost 4932069724, instructions 120874097, jou
+chunk_02.in IDENTICAL :: bump 2689856391, reclaim 8166691882 (+203.6%) :: execute: 9.8 s, cost 8166691882, instructions 216103888, jou
+chunk_03.in IDENTICAL :: bump 3278611745, reclaim 6236058396 (+90.2%) :: execute: 10.2 s, cost 6236058396, instructions 158396148, jo
+chunk_04.in IDENTICAL :: bump 3742960462, reclaim 5432666138 (+45.1%) :: execute: 10.5 s, cost 5432666138, instructions 134125832, jo
+trie.in IDENTICAL :: bump 4843925509, reclaim 4870431520 (+0.5%) :: execute: 8.9 s, cost 4870431520, instructions 53595112, jour
+keys-rtrec: build: 67.5 s; image exe ecfbb8035f660370755f6e0cc65825366304651df31bec73f99237378477e007 vm 00e00077450a5a565

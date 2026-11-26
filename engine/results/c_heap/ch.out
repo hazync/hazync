@@ -1,0 +1,16 @@
+4cb9e0c1 engine guest: #794's C-heap recycling (ch
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.32s
+engine base 3 s
+keys-ch: build: 77.4 s; image exe 0ddcb255de793558186eee62e8e05d34e1438b04ddf57717ca5c363f0e0bd76a vm 00e00077450a5a565
+chunk_00.in IDENTICAL :: bump 3140445468, c-heap 3171955720 (+1.0%)
+chunk_01.in IDENTICAL :: bump 3243010583, c-heap 3273689920 (+0.9%)
+chunk_02.in IDENTICAL :: bump 2689856391, c-heap 2718131659 (+1.1%)
+chunk_03.in IDENTICAL :: bump 3278611745, c-heap 3313044744 (+1.1%)
+chunk_04.in IDENTICAL :: bump 3742960462, c-heap 3785552882 (+1.1%)
+trie.in IDENTICAL :: bump 4843925509, c-heap 4844400555 (+0.0%)
+keys-rtch: build: 80.2 s; image exe 09dd87585d59f265e1a30570681fd91bacb70c6f71be0c494971190ca9b2a50e vm 00e00077450a5a565
+product base 2 s
+regtest host 523 s
+tap_small (c-heap, 2^29) rc=101 0 s :: 0 re-splits :: thread 'main' (2464688) panicked at host/src/trie.rs:214:59: 
+light_only (c-heap, 2^29) rc=101 0 s :: 0 re-splits :: thread 'main' (2464698) panicked at host/src/trie.rs:214:59: 
+CH_DONE
