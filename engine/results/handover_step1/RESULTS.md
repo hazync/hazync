@@ -18,3 +18,8 @@ So the mechanism HANDOVER.md rests on holds: a guest can check a proof of anothe
 version; an upgrade puts the previous version's verifier there instead), derive what it proves and refuse a tampered
 one. The cost is paid once per upgrade: 15.6B is about 60% of block 976,379's whole proving work (25.8B).
 Next: the pin + the handover mode in the aggregate, then a rehearsal across two OpenVM tags (HANDOVER.md Plan 2-3).
+
+⛔ 26.11.2026 evening (review): this probe reads the verifying key from INPUT and commits image_id_of(key). The image id
+does not bind the aggregation key `mvk` (engine/VERIFIER.md), so the probe's "verified 1" says the proof verifies under
+the key it was GIVEN, not under the old image's real key. The cost figure (15.6B) stands; step 2 must embed and pin the
+predecessor's whole key file (HANDOVER.md).

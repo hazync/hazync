@@ -56,7 +56,10 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    - `verifier` = SHA-256 of the previous OpenVM version's verifying key (the bitcode `VmStarkVerifyingKey`: agg vk +
      the predecessor image's baseline, what verify-core takes). The key's bytes are embedded in the image
      (include_bytes, a file per pinned predecessor under the lineage dir) and hashed at run time against the pin, so the
-     image id commits to exactly that key; the predecessor's image id (`image`) must equal image_id_of(that key)
+     image id commits to exactly that key;
+     ⛔ the pin is REQUIRED, not a convenience (engine/VERIFIER.md, review 26.11 evening): the image id does not bind
+     the aggregation key `mvk`, so a key taken from input would let a forged `mvk` pass. Step 1's probe guest reads
+     the key from input and commits only image_id_of(key): fine for measuring the cost, NOT a check to build on; the predecessor's image id (`image`) must equal image_id_of(that key)
      (checked at build time and in the guest).
    - The engine's `xver::verify` is the software OpenVM verifier of step 1 (verify_vm_stark_proof_decoded, the
      nozstd + nologging patches), compiled ONLY into an image whose lineage has such an entry (a cargo feature, as
