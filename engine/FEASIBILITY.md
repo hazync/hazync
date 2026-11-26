@@ -309,6 +309,12 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        48-50 s CPU for 364,292 on the build box; the export's RISC Zero executions are a test harness and would not run
        in production), and moving proofs. The product's 191 s includes all of these, so the fair comparison needs the
        engine wired into the tip pipeline (HAZYNC_ENGINE backend exists: engine_backend.rs) and timed end to end.
+     - ESTIMATE (26.11.2026, from measured parts; not an end-to-end run): RISC Zero's 191 s is block 969,122 on 4x RTX
+       PRO 6000, detect to verified receipt, of which the host's hints were 26.5 s on the pod (libzync 9c2123e
+       rehearsal). Hints are the same code on either prover (976,379: 56 s on the 16-core build box). The engine
+       proves 976,379 in 42.6-48 s on 4x PRO 6000. So the engine's detect-to-verified would be about 26.5 + 43-48 s
+       plus detection and staging, roughly 70-110 s against 191 s. Next: export 969,122 itself and prove it on the
+       engine (like for like), then the engine through the tip scripts on a live window.
   18. What do the three levers still on the table buy, measured: fewer and larger chunks, CPU/GPU overlap, and native SHA? Does any of them change a
   commitment or format?
   19. How does it scale across several GPUs for one block?
