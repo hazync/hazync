@@ -212,8 +212,14 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        engine/wasm-verify/openvm-abi-stable.patch), OpenVM's own verifier builds for wasm32 and, in Node on a laptop,
        ACCEPTS a real engine proof (block 130,000's aggregate) in 24-45 ms and REJECTS it with one encoded byte flipped.
        Sizes: wasm 709 KB, verifying key 96 KB, proof 229 KB (zstd). engine/wasm-verify/README.md.
-     - Still to do: the image and journal checks on top (cheap), a browser and a phone run, and the patch upstream
-       (or carried as our one fork line). UNKNOWN: phone time (expect a small multiple of the laptop's).
+     - **MEASURED (26.11.2026): the full check, in Node and in a browser.** `verify_full(vk, proof, journal, image_id)`
+       adds the image check (image id derived from the vk's baseline alone, equal to the engine's image.json) and the
+       journal check (public values == SHA-256(journal)) to the STARK check. On the real proof: valid accepted in
+       25-39 ms (Node 24, laptop); one journal bit flipped, another image id, a flipped proof byte, a short id and a
+       truncated vk each rejected with their own code; the same codes in Chromium 156 (headless shell; its timings are
+       virtual, so not quoted). wasm 736,681 bytes. engine/wasm-verify/README.md.
+     - Still to do: a phone run, and the abi_stable patch upstream (or carried as our one fork line). UNKNOWN: phone
+       time (expect a small multiple of the laptop's).
   12. Windows: does the GPU prover build and prove on Windows with a native CUDA toolchain? What's the minimum driver version?
 
      **Answer (26.11.2026): BUILDS (CI), proving on a real Windows card NOT YET.**

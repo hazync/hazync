@@ -18,5 +18,21 @@ Build: apply the patch to a copy of OpenVM v2.1.0 at ../../../openvm-wasm, then
 Node 24): wasm 708,710 bytes; vk 96,425 bytes; proof 229,466 bytes zstd (273,107 encoded); **valid proof accepted in
 24-45 ms, the flipped-byte copy rejected (0)**; native verifier on the same bytes 0.060 s (build box).
 
-This checks the STARK against the key and baseline. A page also needs the image check (SHA-256(exe ‖ vm) == id) and
-the journal check (public values == SHA-256(journal)), both cheap, from the proof's public values.
+`verify_proof` checks the STARK against the key and baseline (OpenVM's verify_vm_stark_proof_pvs also checks the user
+public values' Merkle proof against the proven final memory, the program commitment, initial memory and exit code).
+
+**`verify_full(vk, proof, journal, image_id)`** (26.11.2026) adds what a page needs to trust a result:
+- the image: SHA-256(exe ‖ vm) computed from the vk's baseline (engine.rs `image_of`: exe = the baseline's
+  app_exe_commit, vm = OpenVM's poseidon2_hash_slice over the app/leaf/internal-for-leaf vk commitments, re-implemented
+  over stark-sdk's poseidon2_perm) must equal the published image id, so the vk file need not be trusted;
+- the journal: the proof's 32 user public values (one byte each) must equal SHA-256(journal).
+Codes: 1 valid, 0 STARK invalid, 2 bad vk, 3 proof does not decode, 4 journal mismatch, 5 image mismatch, 6 id not 32 B.
+
+**Measured** on the same real proof (block 130,000's aggregate, keys-hz24, its block.journal and image.json):
+- native test (`WASMV_INPUTS=<dir> cargo test --release`): image_of(vk) == image.json, and valid 1, one journal bit
+  flipped 4, another image id 5, short id 6, flipped proof byte 0, truncated vk 2;
+- wasm (736,681 bytes) in Node 24 (`node run_full.cjs <inputs> $PWD/pkg`): the same codes; valid in 25-39 ms;
+- wasm in a browser, Chromium headless shell 156 (`browser.html` served with `in/` and `pkg-web/`, read with
+  `--virtual-time-budget --dump-dom`): the same codes, image id from the vk equal to image.json's. Timings there are
+  not real (virtual time freezes the page clock); Node runs the same V8, so its times stand for a desktop browser.
+- Not yet: a phone.

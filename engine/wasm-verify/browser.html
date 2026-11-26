@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- FEASIBILITY Q11: the full check (STARK + image id + journal) in a browser. Serve this directory with the inputs
+     (vk.bin, proof.zst, proof_bad.zst, block.journal, image.json) under ./in/ and pkg-web/ next to it; the result
+     lands in <pre id=out> (read with chrome --headless --dump-dom, or open it). -->
+<meta charset="utf-8"><title>wasm verify</title>
+<pre id="out">running</pre>
+<script type="module">
+import init, { verify_full, image_id_hex } from "./pkg-web/wasmv.js";
+const out = document.getElementById("out"), log = [];
+const say = (s) => { log.push(s); out.textContent = log.join("\n"); };
+const get = async (f) => new Uint8Array(await (await fetch("./in/" + f)).arrayBuffer());
+try {
+  const t0 = performance.now(); await init(); say(`module load ${(performance.now() - t0).toFixed(1)} ms`);
+  const [vk, proof, bad, journal] = await Promise.all(["vk.bin", "proof.zst", "proof_bad.zst", "block.journal"].map(get));
+  const img = JSON.parse(new TextDecoder().decode(await get("image.json")));
+  const hex = (h) => Uint8Array.from(h.match(/../g).map((x) => parseInt(x, 16)));
+  const pre = new Uint8Array([...hex(img.exe), ...hex(img.vm)]);
+  const id = new Uint8Array(await crypto.subtle.digest("SHA-256", pre));
+  const idhex = [...id].map((b) => b.toString(16).padStart(2, "0")).join("");
+  say(`image id ${idhex} (vk says ${image_id_hex(vk) === idhex ? "the same" : image_id_hex(vk)})`);
+  const flip = (b, i) => { const c = b.slice(); c[i] ^= 1; return c; };
+  const cases = [["valid", proof, journal, id, 1], ["journal bit flipped", proof, flip(journal, 100), id, 4],
+                 ["other image id", proof, journal, flip(id, 0), 5], ["proof byte flipped", bad, journal, id, 0],
+                 ["valid again", proof, journal, id, 1]];
+  let ok = true;
+  for (const [n, p, j, i, want] of cases) {
+    const t = performance.now(); const r = verify_full(vk, p, j, i);
+    ok = ok && r === want; say(`${n}: ${r} (want ${want}) in ${(performance.now() - t).toFixed(1)} ms`);
+  }
+  say(navigator.userAgent); say(ok ? "ALL AS EXPECTED" : "MISMATCH");
+} catch (e) { say("ERROR " + e); }
+</script>
