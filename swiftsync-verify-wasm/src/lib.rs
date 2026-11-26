@@ -11,6 +11,10 @@
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image]`
 //! `[u64 now, unix seconds][u32 n][receipt or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis]`
 //! `[u32 n][image id hex, n = 0 for the built-in id]`. The page supplies `now` because WebAssembly has no clock.
+//! Network bit 0x40 (a build with the `engine` feature): the proof is an engine (OpenVM) proof file, and two chunks
+//! follow the image id: `[u32 n][verifying key file][u32 32][the key's pin: SHA-256 of that file]`. The pin is a
+//! constant the page is published with, never computed from the key it fetched (engine/VERIFIER.md: OpenVM's verifier
+//! trusts the key it is given).
 //!
 //! The JSON always has `verdict` ("ok", "demo" or "fail", the CLI's 0 / 2 / 1) and `checks`. There is no step 7
 //! here (a browser has no node); the page shows the tip and work for the reader to compare.
@@ -69,13 +73,25 @@ fn run(input: &[u8]) -> Result<(Report, &'static Image), String> {
     run_base(base, lineage)
 }
 
-/// The frame's fixed head: network code, now, receipt, anchor JSON, image id.
-struct Base<'a> { code: u8, now: u64, receipt: &'a [u8], anchor_json: &'a [u8], image_hex: &'a [u8] }
+/// The frame's fixed head: network code, now, receipt, anchor JSON, image id; with code bit 0x40 the engine key and
+/// its pin.
+struct Base<'a> { code: u8, now: u64, receipt: &'a [u8], anchor_json: &'a [u8], image_hex: &'a [u8], key: Option<(&'a [u8], [u8; 32])> }
+
+/// Network code bit: an engine (OpenVM) proof file, with its key and pin in the frame.
+const ENGINE: u8 = 0x40;
 
 fn read_base<'a>(f: &mut Frame<'a>) -> Result<Base<'a>, String> {
     let code = f.take(1)?[0];
     let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
-    Ok(Base { code, now, receipt: f.chunk()?, anchor_json: f.chunk()?, image_hex: f.chunk()? })
+    let (receipt, anchor_json, image_hex) = (f.chunk()?, f.chunk()?, f.chunk()?);
+    let key = if code & ENGINE != 0 {
+        let vk = f.chunk()?;
+        let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is not 32 bytes")?;
+        Some((vk, pin))
+    } else {
+        None
+    };
+    Ok(Base { code, now, receipt, anchor_json, image_hex, key })
 }
 
 /// Optional, LAST in either frame: the image's lineage (docs/HANDOVER.md). In verify_facts' frame it follows the facts
@@ -86,12 +102,12 @@ fn lineage_chunk<'a>(f: &mut Frame<'a>) -> Result<&'a [u8], String> {
 }
 
 fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), String> {
-    let Base { code, now, receipt, anchor_json, image_hex } = b;
+    let Base { code, now, receipt, anchor_json, image_hex, key } = b;
     // Network code: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (COINLOG.md), whose proofs carry coin facts.
     // bit 0x20 = the product image (coin log, counting trie, live-coin hash), whose proofs carry trie facts.
     let coinlog = code & 0x10 != 0;
     let product = code & 0x20 != 0;
-    let network = match code & !0x30 {
+    let network = match code & !(0x30 | ENGINE) {
         0 => "mainnet",
         1 => "signet",
         n => return Err(format!("unknown network code {n}")),
@@ -138,7 +154,13 @@ fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), Str
     } else {
         Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
     };
-    let rep = if receipt.starts_with(BUNDLE_MAGIC) {
+    let rep = if let Some((vk, pin)) = key {
+        // an engine image is node format 2 (profile bit 7), what every engine guest computes
+        image = image.with_node2();
+        engine_verify(&Inputs { receipt, image, anchor, now }, vk, pin)?
+    } else if swiftsync_verify::is_engine_proof(receipt) {
+        return Err("an engine (OpenVM) proof: give its verifying key and pin (network bit 0x40)".into());
+    } else if receipt.starts_with(BUNDLE_MAGIC) {
         check_bundle(&Bundle::decode(receipt)?, image, anchor, now)
     } else {
         verify(&Inputs { receipt, image, anchor, now })
@@ -290,5 +312,29 @@ mod frame_tests {
         let mut f = Frame { b: &b, i: 0 };
         assert_eq!(f.take(8).unwrap().len(), 8);
         assert!(f.take(1).is_err());
+    }
+}
+
+#[cfg(feature = "engine")]
+fn engine_verify(inp: &Inputs, vk: &[u8], pin: [u8; 32]) -> Result<Report, String> {
+    Ok(swiftsync_verify::verify_engine(inp, &swiftsync_verify::EngineKey { bytes: vk, pin }))
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_verify(_: &Inputs, _: &[u8], _: [u8; 32]) -> Result<Report, String> {
+    Err("an engine (OpenVM) proof: this module was built without engine support".into())
+}
+
+/// No random source in this module (OpenVM's VM crate links rand; verification never draws from it: its challenges
+/// are Fiat-Shamir hashes). Any call is refused, so randomness can never be silently predictable here.
+#[cfg(feature = "engine")]
+mod no_rng {
+    fn refuse(_: &mut [u8]) -> Result<(), getrandom02::Error> {
+        Err(getrandom02::Error::UNSUPPORTED)
+    }
+    getrandom02::register_custom_getrandom!(refuse);
+    #[no_mangle]
+    unsafe extern "Rust" fn __getrandom_v03_custom(_dest: *mut u8, _len: usize) -> Result<(), getrandom03::Error> {
+        Err(getrandom03::Error::UNSUPPORTED)
     }
 }

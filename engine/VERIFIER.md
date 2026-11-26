@@ -95,4 +95,15 @@ being handed to a decoder.
    bytes, imports: none**. Not yet run on a proof (needs the frame's key + pin: network code bit 0x40, next).
    For the reproducible build: build.sh must make the patched sources (engine/scripts/openvm_src.sh) and stage them at
    a fixed path, and add the cfg to its RUSTFLAGS.
+   **The real crate, 26.11 late:** swiftsync-verify-wasm `--features engine`; frame network bit 0x40 = an engine proof
+   file, followed by the key and its 32-byte pin (a constant of the page). Built (scratch copy with the [patch]es and
+   the cfg, OpenVM from openvm_src.sh): 1,503,705 bytes, `test-engine-frame.mjs` in Node: block 200 verdict demo, no
+   failed check, 71 ms; refused: a journal bit, a non-pinned key, another pin, an engine file without bit 0x40.
+   The DEFAULT module (no engine) is unchanged in behaviour: test-vectors.mjs output identical to test-vectors.out (15
+   verdicts), test-facts-frame.mjs FACTS_FRAME_OK; its bytes do change (shared code moved), so the next release pins a
+   new sha. Cargo.lock gains the engine graph as optional edges only (every old package, version and checksum kept).
+   Left for the reproducible build (release tooling, the user's call before it ships): the build container has no git
+   and its image is published by digest, so make the patched tree on the HOST with openvm_src.sh, pin a manifest
+   (SHA-256 per file) in the repo, verify it in the container, stage it at a fixed path, pass the [patch] tables with
+   `cargo --config`, and a separate locked lockfile for the engine graph.
 6. Review rounds (the user's rule) before any release.
