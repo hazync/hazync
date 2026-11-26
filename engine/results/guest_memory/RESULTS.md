@@ -45,3 +45,12 @@ So the model does not see a script's execution cost (tapscript loops, memory-hea
 (every chunk proves the same rules; memory is shown above), but the split is badly unbalanced on adversarial blocks: one
 chunk then dominates the proving time. To look at with the ~50 extra blocks of 5.1: a cost term from the script's
 opcode count / executed size, or a measured re-split.
+
+**Why (prover/host/src/chunks.rs `input_costs`).** The hand-set model is base + signature operations
+(`predicted_sig_ops`) + bytes x COST_PER_INPUT_BYTE + legacy-sighash bytes. Nothing prices EXECUTING the script: a
+3.95 MB tapscript leaf of OP_3DUP / OP_2DROP (each copying 520-byte stack items) costs only its bytes. Script has no
+loops, so the executed opcode count is at most the script's length; the per-opcode cost depends on the items it moves.
+Proposal (for 5.1, host-side scheduling only, no soundness effect): charge the bytes of NON-standard executed scripts
+(tapscript leaves, P2WSH / P2SH redeem scripts) at a measured rate, about 26.1 G / 3.95 MB ~ 6,600 per byte from
+tap_small (to fit on more blocks: tap_full gives 208 G for its leaf); standard spends carry scripts of a few dozen bytes,
+so their predictions barely move. To check with the fitted model (`HAZYNC_COST_MODEL=fit`, chunks.rs) on the 5.1 blocks.
