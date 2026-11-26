@@ -9,7 +9,7 @@ regtest in the glibc-2.35 container (rtc). pod/run_rig.sh, pod 728rss4avwkcsa. R
 | block | RISC Zero (23.11) | engine 2^26 (64 MiB) | engine 2^29 (512 MiB) |
 |---|---|---|---|
 | mem_k1140 (201 x CHECKSIG over a 9.8 kB scriptCode per input) | proved, 7 chunks | 1,008+ re-splits (pieces of ~27 inputs) before stopped | 36 pieces; 2 proved, 768 / 778 s each; largest 41.2B cost (976,379 whole: 25.8B); stopped (~2.6 h of A40 leaves) |
-| light_only | proved | chunks fine, **aggregate out of memory** ("Maximum memory exceeded"; unsplittable) | **proved** (564 s), 20/23 end-state fields equal to RISC Zero's (see below) |
+| light_only | proved | chunks fine, **aggregate out of memory** ("Maximum memory exceeded"; unsplittable) | **proved** (564 s), end state equal to RISC Zero's except the image id (see below) |
 | tap_small (block 127: one big tapscript input) | proved | **single input out of memory** (#794) | **single input out of memory** (#794) |
 | tap_full (block 127) | single input out of memory | single input out of memory | single input out of memory |
 
@@ -24,7 +24,9 @@ regtest in the glibc-2.35 container (rtc). pod/run_rig.sh, pod 728rss4avwkcsa. R
   either a larger OpenVM address space (pointer_max_bits > 29: whether that is sound in OpenVM's 31-bit-field range
   checks is UNKNOWN, a question for the OpenVM team; it would also double the per-segment GPU memory image per bit)
   or a reclaiming allocator (an image change, #794's own conclusion, which RISC Zero needs for tap_full too).
-- light_only's end state vs RISC Zero's 23.11 file: equal except self_id (the image), anchor_id and smt_root. The
-  smt_root of the DEMONSTRATION anchor (seeded by the host from the block files, anchor_effective.json) already
-  differs before any proof: 80,125,... (engine-branch host) vs 34,121,... (the 23.11 host). So the reference is not
-  like for like; a RISC Zero dev-mode run of the same host build is the reference (r0ref.sh).
+- light_only's end state: **identical to RISC Zero's in 22 of 23 fields; only self_id (the image id) differs**, when
+  both start from the same anchor. Found on the way: blocks 1..125 of each attack directory are symbolic links into
+  blocks/main, which the pod bundle left out, so on the pod the host could not replay the BIP30 tree from genesis and
+  SEEDED a demonstration anchor (smt_root 80,125,... instead of the replayed 34,121,...). The like-for-like reference
+  is RISC Zero (dev mode, the same host build) from that same seeded anchor (block 126 alone): its state_126.json
+  equals the engine's except self_id. The out-of-memory results do not depend on the anchor (they are per input).

@@ -149,7 +149,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      **Answer (26.11.2026): RUN on the engine (results/q7_attack_blocks). Not at parity: OpenVM's 512 MiB guest
      memory is a sixth of RISC Zero's 3 GiB.** One A40, regtest images at 2^26 and 2^29:
      - The #794 re-split works on the engine (OpenVM's "Maximum memory exceeded" is recognised).
-     - At 2^29: light_only PROVED; tap_small's single big input runs out of memory (RISC Zero proves it); tap_full
+     - At 2^29: light_only PROVED, end state identical to RISC Zero's except the image id; tap_small's single big input runs out of memory (RISC Zero proves it); tap_full
        fails on both, as before; mem_k1140 splits into 36 pieces of up to 41.2B cost each (more than a whole modern
        block), 768-778 s per piece on an A40, provable in principle but stopped (~2.6 h).
      - At 2^26 (the 4 GB-card image): light_only's aggregate runs out of memory and tap_small fails too: too small
