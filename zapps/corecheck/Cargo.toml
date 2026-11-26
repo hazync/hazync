@@ -26,6 +26,8 @@ bincode = "1"
 # build) does not compile, and scripts/wasm-build.sh refuses a WASM graph that enables it. The core verifier
 # (swiftsync-verify, its IMAGES, CLI and .wasm) does not change: the image lives here.
 regtest-test = []
+# engine (OpenVM) core proofs: an image record carrying its key (swiftsync-verify `engine`, engine/VERIFIER.md)
+engine = ["swiftsync-verify/engine"]
 
 [profile.release]
 opt-level = "z"

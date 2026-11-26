@@ -35,6 +35,7 @@ pub const IMAGES: &[Image] = &[
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
         checkpoint_height: 970_000,
         lineage: &[],
+        engine_key: None,
     },
     // v0.26.0 (pinned from ca482bf5): the per-block undo-data commitment (docs/libzync/UNDO.md), a new chain from genesis.
     // The CURRENT mainnet image; the entry above stays so its proofs verify by id.
@@ -52,6 +53,7 @@ pub const IMAGES: &[Image] = &[
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
         checkpoint_height: 970_000,
         lineage: &[],
+        engine_key: None,
     },
     // v0.23.0-v0.25.0 signet. Kept so its proofs verify by id. No undo hash in its leaves (pin::PRE_UNDO_IMAGES).
     Image {
@@ -68,6 +70,7 @@ pub const IMAGES: &[Image] = &[
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
         checkpoint_height: 325_000,
         lineage: &[],
+        engine_key: None,
     },
     // v0.26.0 signet (pinned from 63ab228a): the undo-data commitment, from genesis. The CURRENT signet image.
     Image {
@@ -84,6 +87,7 @@ pub const IMAGES: &[Image] = &[
         // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
         checkpoint_height: 325_000,
         lineage: &[],
+        engine_key: None,
     },
 ];
 
@@ -129,6 +133,19 @@ pub struct Image {
     /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
     /// zero lineage (one image since genesis) or the digest of exactly this list.
     pub lineage: &'static [Handover],
+    /// An engine (OpenVM) image's verifying key and its pin; None for a RISC Zero image. With it, [`verify`] checks an
+    /// engine proof file itself (engine/VERIFIER.md), so every caller (corecheck and the zAPPs) gets engine proofs from
+    /// the record alone. A published engine image embeds its key here; a reader's own rebuild sets it with
+    /// [`Image::with_engine_key`].
+    pub engine_key: Option<EngineVk>,
+}
+
+/// An engine image's verifying key file and its pin (SHA-256 of the file, 64 hex). The pin, not the image id,
+/// authenticates the key: OpenVM's verifier trusts the key it is given (engine/VERIFIER.md).
+#[derive(Clone, Copy, Debug)]
+pub struct EngineVk {
+    pub bytes: &'static [u8],
+    pub pin_hex: &'static str,
 }
 
 impl Image {
@@ -159,6 +176,14 @@ impl Image {
     /// The product image (E2): coin log, counting trie and live-coin hash (profile bits 4, 5, 6). No hints file.
     pub fn with_product(&'static self) -> &'static Image {
         Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH, ..*self }))
+    }
+    /// The same image as an engine build with this verifying key: node format 2 (profile bit 7, what every engine guest
+    /// computes) and the key, pinned as given. For a reader who rebuilt the image: the key file comes from that build.
+    pub fn with_engine_key(&'static self, bytes: Vec<u8>) -> &'static Image {
+        use sha2::Digest as _;
+        let pin = hex(&sha2::Sha256::digest(&bytes));
+        let k = EngineVk { bytes: Box::leak(bytes.into_boxed_slice()), pin_hex: Box::leak(pin.into_boxed_str()) };
+        Box::leak(Box::new(Image { profile: self.profile | PROFILE_NODE2, engine_key: Some(k), ..*self }))
     }
     /// The same image as an engine (OpenVM) build: node format 2 (profile bit 7), what every engine guest computes.
     pub fn with_node2(&'static self) -> &'static Image {
@@ -440,6 +465,30 @@ pub fn verify_engine(inp: &Inputs, key: &EngineKey) -> Report {
     statement_checks(inp, &m, &journal, rep)
 }
 
+/// An engine proof file, under the key the image record holds.
+fn verify_engine_by_record(inp: &Inputs) -> Report {
+    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
+    let Some(k) = inp.image.engine_key else {
+        rep.check(false, format!("an engine (OpenVM) proof, but image {} ({}) has no engine verifying key: not an engine \
+                                  image (or give your own build's key)", inp.image.method_id_hex, inp.image.network));
+        return rep;
+    };
+    let Some(pin) = hex32(k.pin_hex) else {
+        rep.check(false, "the image's engine key pin is not 64 hex digits");
+        return rep;
+    };
+    #[cfg(feature = "engine")]
+    {
+        verify_engine(inp, &EngineKey { bytes: k.bytes, pin })
+    }
+    #[cfg(not(feature = "engine"))]
+    {
+        let _ = pin;
+        rep.check(false, "an engine (OpenVM) proof: this verifier was built without engine support (feature `engine`)");
+        rep
+    }
+}
+
 /// Steps 1 and 8 for an engine proof file. Returns the journal only when the proof verified: unlike a RISC Zero
 /// receipt, whose journal is part of the proof object, the file's journal is just bytes next to the proof until the
 /// public values are checked against it.
@@ -588,6 +637,9 @@ pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Ima
 }
 
 pub fn verify(inp: &Inputs) -> Report {
+    if is_engine_proof(inp.receipt) {
+        return verify_engine_by_record(inp);
+    }
     if let Ok(r) = decode_receipt(inp.receipt) {
         if let Some(e) = earlier_image_named_by(&r, inp.image) {
             let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });

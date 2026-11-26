@@ -33,6 +33,7 @@ pub static REGTEST_IMAGE: Image = Image {
     // the regtest guest pins no checkpoint (checkpoint.rs CHECKPOINT = None) and no handover (lineage/regtest_coinlog.rs)
     checkpoint_height: 0,
     lineage: &[],
+    engine_key: None,
 };
 
 /// The first check of every report on the regtest image, so its verdict cannot be read as a mainnet one.

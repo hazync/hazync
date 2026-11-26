@@ -85,6 +85,12 @@ being handed to a decoder.
    9's coinbase SPENT at 170 by tx 1 input 0; refused: a path node, a wrong preimage, no preimage, spent claimed
    unspent. Trie, tx and journey facts: to do (they need the engine chain's trie dump / tx facts from the host).
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
+   **The key in the image RECORD, 26.11 late:** `Image.engine_key: Option<EngineVk>` (bytes + pin); plain `verify`
+   checks an engine file under the record's key (refused, with the reason, when the record has none), so corecheck and
+   every zAPP surface take engine proofs from the record alone: a published engine image embeds its key; a reader's
+   rebuild uses `Image::with_engine_key(file)`. corecheck (`--features engine`, tests/engine.rs): block 200's engine
+   core proof with `expect 200:<tip>` all checks ok, tip_checked; another expected block FAIL; the RISC Zero record
+   FAIL ("no engine verifying key"). All dependents compile (deposit, liveness, statement, assume, common, ffi, wasm).
    **C ABI, 26.11 late:** `swiftsync_verify_engine_facts(proof, ..., vk, vk_len, vk_pin, facts, expect, ...)`
    (swiftsync-verify-ffi `--features engine`; header documents that the pin must be the PUBLISHED one). test_engine.c
    on the engine chain's block 200: DEMO with profile 0xf1 and 209 coins; with block 9's coinbase spent-fact DEMO; FAIL

@@ -27,6 +27,7 @@ fn image() -> &'static Image {
         genesis_anchor_hex: m.genesis_anchor_hex,
         checkpoint_height: m.checkpoint_height,
         lineage: &[],
+        engine_key: None,
     }))
 }
 
@@ -127,4 +128,28 @@ fn engine_coin_facts() {
     let mut f = fact("coin_spent_8.json");
     f.spent_by = None;
     assert!(check_coin_fact(cs, r.undo_from, &f).is_err(), "a spent coin claimed unspent");
+}
+
+/// The key in the image RECORD (what a published engine image will carry): plain `verify` checks an engine file, so
+/// every caller of `verify` (corecheck, the zAPPs) gets engine proofs with no new parameter.
+#[test]
+fn engine_key_in_the_record() {
+    let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
+    let img = image().with_engine_key(vk.clone());
+    assert_eq!(img.engine_key.unwrap().pin_hex, hex(&pin()), "the record's pin is the key file's SHA-256");
+    let r = verify(&Inputs { receipt: &file, image: img, anchor: None, now: 1_800_000_000 });
+    assert!(failed(&r).is_empty(), "failed: {:?}", failed(&r));
+    assert_eq!(r.verdict, Verdict::Demo);
+    // a record without a key: refused with the reason
+    let r = verify(&Inputs { receipt: &file, image: image(), anchor: None, now: 1_800_000_000 });
+    assert_eq!(r.verdict, Verdict::Fail);
+    assert!(failed(&r)[0].contains("has no engine verifying key"), "{:?}", failed(&r));
+    // a record whose key is another file: the pin is that file's, so the engine check refuses the key at the image
+    // id (the pin is "right" for the wrong key: what a record built from a wrong key would do)
+    let mut k2 = vk.clone();
+    let n = k2.len() - 1;
+    k2[n] ^= 1;
+    let r = verify(&Inputs { receipt: &file, image: image().with_engine_key(k2), anchor: None, now: 1_800_000_000 });
+    assert_eq!(r.verdict, Verdict::Fail);
+    eprintln!("  record with another key: {}", failed(&r)[0]);
 }
