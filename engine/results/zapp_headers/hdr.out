@@ -1,0 +1,13 @@
+3aa4fbb9 engine/zapps/headers: the header zyncAPP'
+assembled /root/engine/hdr/guest from /root/engine-kit/prover/zyncapps/methods/headers
+build 53 s: build: 32.3 s; image exe 9ff4a3069d0cf64cd7dee253f38a5e67ff2e776bc8d4535591abe95748fe7d1c vm 53ca596598268e2827414428d1b6340ddc32ca57c723606
+fetched 40320 headers to /root/engine/hdr/h0_40319.txt
+stream 40320 headers, 3225892 bytes
+fetched 4032 headers to /root/engine/hdr/h0_4031.txt
+stream 4032 headers, 322852 bytes
+execute 0..40319 rc=0 30 s: execute: 10.3 s, cost 6290676349, instructions 112921533, journal 1228 bytes sha256 00ac70256a6ca29436c855fa707d27830b665412e91f4e8bc956f897
+end height 40319 hash 000000008135b689ad1557d4e148a8b9e58e2c4a67240fc87962abb69710231a chainwork 0000000000000000000000000000000000000000000000000000aa80bfeea100
+node: hash MATCH, chainwork MATCH, bits/time MATCH; MMR peaks (6) MATCH
+prove 0..4031 rc=0 311 s: execute: 0.1 s, journal 1228 bytes prove: 289.5 s journal sha256 d1db000b36a8a5cab7f84978f13ca3809cbf0243d6a0929f5577d13b4dac9a94 
+verify rc=0 verify: OK (0.05 s), journal 1228 bytes sha256 d1db000b36a8a5cab7f84978f13ca3809cbf0243d6a0929f5577d13b4dac9a94
+HDR_DONE

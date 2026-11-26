@@ -384,7 +384,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        (The trust then includes RISC Zero's Groth16 setup and prover for 1..H.)
   23. Does the engine support composition, so a zAPP can verify a core proof inside its own proof as it does today?
 
-     **Answer (25.11.2026): YES for the mechanism, MEASURED on CPU; zAPP guests themselves not yet ported.**
+     **Answer (25.11.2026): YES for the mechanism, MEASURED on CPU. 26.11.2026: the first zAPP guest PORTED (headers).**
+     - The header zyncAPP (engine/zapps/headers: its own source + two anchored edits) executes 0..40,319 from genesis
+       with the end hash, chainwork and MMR peaks equal to Bitcoin Core's node, and proves + verifies 0..4,031 on CPU
+       (results/zapp_headers). The other zAPPs (hints, utreexo, deposit, assume, liveness, statement) follow the same
+       recipe; each is its own image.
      - `env::verify(image, journal)` works on the engine as on RISC Zero (Q4/Q5): the aggregate verifies every chunk
        and trie proof in-guest on every block; block 2 verified block 1's proof in-guest from genesis, and a
        `libzync-join` of blocks 2 + 3 verified both and checked adjacency; `libzync-verify` accepted all
