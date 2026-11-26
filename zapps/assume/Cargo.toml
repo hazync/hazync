@@ -33,6 +33,8 @@ num-bigint = "0.4"
 # TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): Core's regtest message start for a regtest proof's
 # snapshot. Never in a release or WASM build (compile_error! below, scripts/wasm-build.sh).
 regtest-test = []
+# engine (OpenVM) core proofs (engine/VERIFIER.md)
+engine = ["swiftsync-verify/engine"]
 
 [profile.release]
 opt-level = "z"
