@@ -1,0 +1,48 @@
+keys-rtchb: build: 83.5 s; image exe 3739b66a571869737f08913d5fda95704aa9a3296dc6e9707b6e2f505f08a36f vm 00e00077450a5a565
+== light_only (block 126): 16 chunks exported;   predicted cost 71790765242 (24374 inputs, 16 chunks)
+  chunk_00.in: heap 20.0 MiB, input 1.21 MiB, cost 5318713141
+  chunk_01.in: heap 18.1 MiB, input 1.21 MiB, cost 1560130764
+  chunk_02.in: heap 18.1 MiB, input 1.21 MiB, cost 1559964648
+  chunk_03.in: heap 18.1 MiB, input 1.21 MiB, cost 1559798532
+  chunk_04.in: heap 18.1 MiB, input 1.21 MiB, cost 1559632416
+  chunk_05.in: heap 18.1 MiB, input 1.21 MiB, cost 1559466300
+  chunk_06.in: heap 18.1 MiB, input 1.21 MiB, cost 1559300184
+  chunk_07.in: heap 18.1 MiB, input 1.21 MiB, cost 1559134068
+  chunk_08.in: heap 18.1 MiB, input 1.21 MiB, cost 1558967952
+  chunk_09.in: heap 18.1 MiB, input 1.21 MiB, cost 1558801836
+  chunk_10.in: heap 18.1 MiB, input 1.21 MiB, cost 1558635720
+  chunk_11.in: heap 18.1 MiB, input 1.21 MiB, cost 1558469604
+  chunk_12.in: heap 18.1 MiB, input 1.21 MiB, cost 1558303488
+  chunk_13.in: heap 18.1 MiB, input 1.21 MiB, cost 1558137372
+  chunk_14.in: heap 18.1 MiB, input 1.21 MiB, cost 1557971256
+  chunk_15.in: heap 18.1 MiB, input 1.21 MiB, cost 1554586264
+== mem_k1140 (block 126): 16 chunks exported;   predicted cost 712717246922 (24374 inputs, 16 chunks)
+  chunk_00.in: heap 62.9 MiB, input 11.87 MiB, cost 283625378114
+  chunk_01.in: heap 61.0 MiB, input 11.87 MiB, cost 280731608772
+  chunk_02.in: heap 61.2 MiB, input 11.87 MiB, cost 222026703188
+  chunk_03.in: heap 61.8 MiB, input 11.89 MiB, cost 4753892469
+  chunk_04.in: heap 61.8 MiB, input 11.89 MiB, cost 4753701638
+  chunk_05.in: heap 61.8 MiB, input 11.89 MiB, cost 4753509007
+  chunk_06.in: heap 61.8 MiB, input 11.89 MiB, cost 4753318176
+  chunk_07.in: heap 61.8 MiB, input 11.89 MiB, cost 4753125545
+  chunk_08.in: heap 61.8 MiB, input 11.89 MiB, cost 4752934714
+  chunk_09.in: heap 61.8 MiB, input 11.89 MiB, cost 4752742083
+  chunk_10.in: heap 61.8 MiB, input 11.89 MiB, cost 4752551252
+  chunk_11.in: heap 61.8 MiB, input 11.89 MiB, cost 4752358621
+  chunk_12.in: heap 61.8 MiB, input 11.89 MiB, cost 4752167790
+  chunk_13.in: heap 61.8 MiB, input 11.89 MiB, cost 4751975159
+  chunk_14.in: heap 61.8 MiB, input 11.89 MiB, cost 4751784328
+  chunk_15.in: heap 61.8 MiB, input 11.89 MiB, cost 4749339113
+== tap_small (block 127): 1 chunks exported;   predicted cost 1507256 (1 inputs, 1 chunks)
+  chunk_00.in: heap 4.6 MiB, input 0.48 MiB, cost 26084647308
+== tap_full (block 127): 1 chunks exported;   predicted cost 8477256 (1 inputs, 1 chunks)
+  chunk_00.in: heap 36.5 MiB, input 3.80 MiB, cost 207857104851
+== mainnet 185956 largest chunk chunk_00.in of 1: heap 2.2 MiB, input 0.20 MiB, cost 1282516625
+== mainnet 227931 largest chunk chunk_00.in of 1: heap 2.3 MiB, input 0.26 MiB, cost 1524860675
+== mainnet 364292 largest chunk chunk_00.in of 16: heap 11.8 MiB, input 1.16 MiB, cost 12496651803
+== mainnet 388381 largest chunk chunk_00.in of 2: heap 4.0 MiB, input 0.39 MiB, cost 2343207140
+== mainnet 419328 largest chunk chunk_03.in of 4: heap 6.1 MiB, input 0.66 MiB, cost 3477354362
+== mainnet 481824 largest chunk chunk_03.in of 4: heap 4.9 MiB, input 0.53 MiB, cost 3063283160
+== mainnet 91880 largest chunk chunk_00.in of 1: heap 0.0 MiB, input 0.00 MiB, cost 6778236
+== mainnet x_base largest chunk chunk_00.in of 1: heap 25.7 MiB, input 2.48 MiB, cost 16114031780
+HEAP_DONE
