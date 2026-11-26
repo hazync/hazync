@@ -134,5 +134,15 @@ carrying the key; inputs made from the ENGINE chain where they depend on the nod
 | deposit, header-bound | the core tip 200 placed in the engine header chain 0..4,031 (MMR path, 11 hashes) | every check ok: 3,862 confirmations (31 fully validated, 3,831 proof of work only); one more refused; the header run without its key refused |
 | statement | two fresh keys' zero balances (absence proofs) on the engine chain's trie at 200 (native prep; its state = the engine-proven one but self_id), BIP-322 signed | holds; a claimed 1 sat refused; the format-1 trie file refused by the store (OldRoot) |
 
-Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6 passed). Left: the zAPP CLIs / C ABIs / WASM taking a key for a
+| core facts | trie facts on the engine chain's trie at 200 (Hal's coin unspent with its origin, its script's balance and complete history, an absent outpoint) and Hal's coin journey (zync-path journey) | all hold; a wrong claim on each trie fact refused |
+
+Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6, headers 17 passed; swiftsync-verify 33 default,
+39 with `engine`).
+
+**Engine image RECORDS wait for the Stage 4 freeze, on purpose:** `Image::by_network` takes the LAST record of a network
+as its current image, so a record for a development image would change what every default caller checks against. At
+the freeze: the record (id, profile with PROFILE_NODE2, the new chain's anchor, checkpoint) with its key embedded
+(include_bytes of the key file, its pin beside it, a unit test that the two agree and that image_id_of(key) = the id).
+
+Left: the zAPP CLIs / C ABIs / WASM taking a key for a
 reader's own rebuild (published records will carry it), trie / tx / journey facts in the core verifier.
