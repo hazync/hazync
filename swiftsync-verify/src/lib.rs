@@ -509,19 +509,27 @@ fn verify_engine_by_record(inp: &Inputs) -> Report {
 /// public values are checked against it.
 #[cfg(feature = "engine")]
 fn engine_front(inp: &Inputs, m: &Digest, key: &EngineKey, rep: &mut Report) -> Option<risc0_zkvm::Journal> {
-    use hazync_engine_verify as ev;
-    let (proof, journal) = match ev::unpack(inp.receipt) {
-        Ok(x) => x,
-        Err(e) => {
-            rep.check(false, format!("the file is an engine proof ({e})"));
-            return None;
-        }
-    };
-    let r = ev::verify_full_bytes(key.bytes, &key.pin, proof, journal, m.as_bytes());
+    if let Err(e) = hazync_engine_verify::unpack(inp.receipt) {
+        rep.check(false, format!("the file is an engine proof ({e})"));
+        return None;
+    }
+    let r = engine_proof_journal(inp.receipt, key, m.as_bytes());
     let ok = rep.check(r.is_ok(), format!("engine proof verifies against image {} ({}) under the pinned key {}{}",
                        inp.image.method_id_hex, inp.image.network, hex(&key.pin),
-                       r.err().map(|e| format!(": {e}")).unwrap_or_default()));
-    ok.then(|| risc0_zkvm::Journal::new(journal.to_vec()))
+                       r.as_ref().err().map(|e| format!(": {e}")).unwrap_or_default()));
+    if ok { r.ok() } else { None }
+}
+
+/// Any engine proof file (a core proof or a zAPP's) checked against image `image_id` under the pinned `key`: the
+/// journal when it verifies (OpenVM's STARK under the pinned key, the image id from the key, the public values =
+/// SHA-256(journal)), else why not. What engine/VERIFIER.md calls the engine front, for callers with their own
+/// statement type (the header-chain zAPP).
+#[cfg(feature = "engine")]
+pub fn engine_proof_journal(file: &[u8], key: &EngineKey, image_id: &[u8]) -> Result<risc0_zkvm::Journal, String> {
+    use hazync_engine_verify as ev;
+    let (proof, journal) = ev::unpack(file).map_err(|e| e.to_string())?;
+    ev::verify_full_bytes(key.bytes, &key.pin, proof, journal, image_id).map_err(|e| e.to_string())?;
+    Ok(risc0_zkvm::Journal::new(journal.to_vec()))
 }
 
 /// Steps 1 and 8 for a RISC Zero receipt: a single succinct or Groth16 proof, real (not a FakeReceipt), verified

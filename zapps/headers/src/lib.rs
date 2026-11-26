@@ -130,6 +130,15 @@ pub const MAX_RUNS: usize = 4096;
 
 pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Option<(i64, &str)>,
                       include: Option<&Inclusion>) -> HeadersReport {
+    verify_headers_with(receipts, image_hex, None, now, expect, include)
+}
+
+/// [`verify_headers`] with the headers image's engine key: every run is then an ENGINE (OpenVM) proof file of that image,
+/// checked under the pinned key (engine/VERIFIER.md: the key, not the image id, authenticates it); without one, every
+/// run is a RISC Zero receipt. Everything after the proof check (the runs' linking, time, identity, inclusion, work) is
+/// the same code for both.
+pub fn verify_headers_with(receipts: &[&[u8]], image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>, now: u64,
+                           expect: Option<(i64, &str)>, include: Option<&Inclusion>) -> HeadersReport {
     let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None, tip_checked: false };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the headers image id is 32 bytes of hex ({image_hex})"));
@@ -145,25 +154,37 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Opt
     let mut last: Option<HeaderState> = None;
     for (i, bytes) in receipts.iter().enumerate() {
         let n = i + 1;
-        if let Err(e) = receipt_kind(bytes) {
-            rep.check(false, format!("receipt {n} is a single succinct or Groth16 proof ({e})"));
-            return rep;
-        }
-        let r: risc0_zkvm::Receipt = match decode_receipt(bytes) {
-            Ok(r) => r,
-            Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
+        // an engine run: verified under the key, its journal read only once it has
+        let journal = if let Some(k) = engine_key {
+            match engine_run(bytes, k, &id) {
+                Ok(j) => {
+                    rep.check(true, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex} under the pinned key {}", swiftsync_verify::hex(&k.pin)));
+                    j
+                }
+                Err(e) => { rep.check(false, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex}: {e}")); return rep; }
+            }
+        } else {
+            if let Err(e) = receipt_kind(bytes) {
+                rep.check(false, format!("receipt {n} is a single succinct or Groth16 proof ({e})"));
+                return rep;
+            }
+            let r: risc0_zkvm::Receipt = match decode_receipt(bytes) {
+                Ok(r) => r,
+                Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
+            };
+            if !rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), format!("receipt {n} is a real proof")) {
+                return rep;
+            }
+            // An unverified journal is not read at all: nothing in it is known, and its numbers (a height of i64::MAX)
+            // must not reach the arithmetic below.
+            let v = r.verify(image);
+            if !rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
+                                             v.err().map(|e| format!(": {e}")).unwrap_or_default())) {
+                return rep;
+            }
+            r.journal
         };
-        if !rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), format!("receipt {n} is a real proof")) {
-            return rep;
-        }
-        // An unverified journal is not read at all: nothing in it is known, and its numbers (a height of i64::MAX)
-        // must not reach the arithmetic below.
-        let v = r.verify(image);
-        if !rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
-                                         v.err().map(|e| format!(": {e}")).unwrap_or_default())) {
-            return rep;
-        }
-        let (din, out): ([u8; 32], HeaderState) = match decode_journal(&r.journal) {
+        let (din, out): ([u8; 32], HeaderState) = match decode_journal(&journal) {
             Ok(j) => j,
             Err(e) => { rep.check(false, format!("receipt {n}'s journal is (input digest, header state) ({e})")); return rep; }
         };
@@ -960,4 +981,17 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&bad_tx).unwrap();
         assert!(TxInclusion::from_json(&t[1..65], &v).unwrap_err().contains("unknown field `posn`"));
     }
+}
+
+#[cfg(feature = "engine")]
+fn engine_run(file: &[u8], key: &swiftsync_verify::EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    if !swiftsync_verify::is_engine_proof(file) {
+        return Err("not an engine proof file".into());
+    }
+    swiftsync_verify::engine_proof_journal(file, key, id)
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_run(_: &[u8], _: &swiftsync_verify::EngineKey, _: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    Err("this build has no engine support (feature `engine`)".into())
 }
