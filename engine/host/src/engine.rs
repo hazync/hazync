@@ -209,9 +209,15 @@ impl Engine {
         // The prover's per-segment trace memory cap (OpenVM default 15 GiB, sized for 24 GB cards). Fewer, larger
         // segments hash each touched memory page fewer times (Poseidon2 was 39% of a chunk's trace cells,
         // results/profile_chunk). Prover-side only: not serialized, not in any key or commitment. See seg_cap_gib.
-        if let Some(gb) = seg_cap_gib(gpu_share()) {
-            std::sync::Arc::get_mut(&mut cached.app_pk.app_vm_pk).expect("sdk.pk: unshared key").vm_config.system.config.segmentation_max_memory = gb << 30;
-            eprintln!("segmentation max memory: {gb} GiB");
+        // HZ_SEG_MEM_MB (MiB, finer than the GiB setting; for small cards, results/gpu_a40_memory) wins when set.
+        let mb = std::env::var("HZ_SEG_MEM_MB").ok().and_then(|v| v.parse::<usize>().ok());
+        let cap = match mb {
+            Some(m) => { ensure!(m >= 256, "HZ_SEG_MEM_MB {m} below 256"); Some((m << 20, format!("{m} MiB"))) }
+            None => seg_cap_gib(gpu_share()).map(|gb| (gb << 30, format!("{gb} GiB"))),
+        };
+        if let Some((bytes, shown)) = cap {
+            std::sync::Arc::get_mut(&mut cached.app_pk.app_vm_pk).expect("sdk.pk: unshared key").vm_config.system.config.segmentation_max_memory = bytes;
+            eprintln!("segmentation max memory: {shown}");
         }
         let sdk = match tree_config_from_env()? {
             None => Sdk::from_deferral_cached_proving_key(cached)?,
