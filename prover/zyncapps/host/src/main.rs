@@ -2,7 +2,7 @@
 //!
 //!   zyncapp prove-coin <core receipt> <fact.json from zync-path coin, at = tip> <out receipt> [--signet] [--preimage <coin.json>] [--execute]
 //!   zyncapp verify-coin <zyncapp receipt>
-//!   zyncapp prove-zeroconf <core tip receipt> <speculative chunk receipt> <record index> <paths.json> <out> [--signet]
+//!   zyncapp prove-zeroconf <core tip receipt> <speculative chunk receipt> <record index> <paths.json> <out> [--signet | --regtest]
 //!       paths.json: [[position, [sibling hex, ...]], ...], one per input of the transaction, from zync-path coin
 //!   zyncapp verify-zeroconf <zyncapp receipt>
 //!   verify-* take [--core-image <hex>] [--expect <h>:<hash>] [--mempool]: the core statement is judged like the core
@@ -411,10 +411,11 @@ fn main() {
             let raw: Vec<(u64, Vec<String>)> = serde_json::from_slice(&std::fs::read(&a[4]).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("paths.json: {e}")));
             let paths: Vec<(u64, Vec<[u8; 32]>)> = raw.into_iter().map(|(p, v)| (p, v.iter().map(|x| h32(x)).collect())).collect();
-            let signet = a.iter().any(|x| x == "--signet");
+            // the network code the guest reads (0 mainnet, 1 signet, 2 regtest): one word, as `signet: bool` was
+            let net: u32 = if a.iter().any(|x| x == "--regtest") { 2 } else if a.iter().any(|x| x == "--signet") { 1 } else { 0 };
             // one word vector for the ExecutorEnv and --stream alike (write(&T) is write_slice(serde::to_vec(T)))
             let mut ws: Vec<u32> = Vec::new();
-            ws.extend(sw(&cs.self_id)); ws.extend(sw(&tip_j)); ws.extend(sw(&chunk_j)); ws.extend(sw(&signet));
+            ws.extend(sw(&cs.self_id)); ws.extend(sw(&tip_j)); ws.extend(sw(&chunk_j)); ws.extend(sw(&net));
             ws.extend(sw(&idx)); ws.extend(sw(&paths));
             if let Some(sp) = &stream {
                 let bytes: Vec<u8> = ws.iter().flat_map(|x| x.to_le_bytes()).collect();

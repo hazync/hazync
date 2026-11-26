@@ -2,7 +2,7 @@
 //! tip, and every coin it spends is unspent at that tip. A merchant learns it before T confirms.
 //!
 //! Input:  core_id, the core tip journal (a ChainState), the chunk journal (a speculative chunk proved by the same core
-//!         image for height tip+1 and the tip's MTP, txproofs §7 Phase A), signet flag, the record index of T in the
+//!         image for height tip+1 and the tip's MTP, txproofs §7 Phase A), network code (0 mainnet, 1 signet, 2 regtest), the record index of T in the
 //!         chunk, and one coin-log path per input of T.
 //! Checks: env::verify both journals under core_id (assumptions); check_core_statement; the chunk is speculative (zero
 //!         hash and time), for height tip+1 and MTP(tip), all_valid; T's record is whole (its first and only run,
@@ -75,14 +75,22 @@ fn main() {
     let core_id: [u32; 8] = env::read();
     let tip_journal: Vec<u8> = env::read();
     let chunk_journal: Vec<u8> = env::read();
-    let signet: bool = env::read();
+    // the network: 0 mainnet, 1 signet, 2 regtest (one word; a mainnet or signet stream is the same bytes as when this
+    // was `signet: bool`)
+    let net: u32 = env::read();
+    let network = match net {
+        0 => facts::Network::Mainnet,
+        1 => facts::Network::Signet,
+        2 => facts::Network::Regtest,
+        _ => panic!("unknown network {net}"),
+    };
     let rec_index: u32 = env::read();
     let paths: Vec<(u64, Vec<[u8; 32]>)> = env::read();
     env::verify(core_id, &tip_journal).expect("the tip receipt does not verify under core_id");
     env::verify(core_id, &chunk_journal).expect("the chunk receipt does not verify under core_id");
     let j: ChainState = risc0_zkvm::serde::from_slice(&words(&tip_journal)).expect("tip journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
-    facts::check_core_statement(&st, &core_id, 2, if signet { facts::Network::Signet } else { facts::Network::Mainnet }, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    facts::check_core_statement(&st, &core_id, 2, network, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
     let mut t = j.recent_times.clone();
     t.sort_unstable();
     let mtp = t[t.len() / 2];
