@@ -14,6 +14,9 @@ os.makedirs(O, exist_ok=True)
 base = json.load(open(B))
 env = {k: v for k, v in os.environ.items() if not k.startswith("HAZYNC_")}
 env.update(HAZYNC_PROFILE_LAYOUT="cost", HAZYNC_CHUNKS="1", HAZYNC_HINT_THREADS=os.environ.get("HAZYNC_HINT_THREADS", "8"))
+# the coin log's chain transaction counts, as blocks.sh exports them for negatives.py
+REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "../.."))
+env["HAZYNC_COINLOG_TXCOUNTS"] = os.environ.get("HAZYNC_COINLOG_TXCOUNTS", os.path.join(REPO, "experimental/libzync-bench/cost/txcounts.txt"))
 env.pop("RISC0_DEV_MODE", None)
 bad = 0
 
