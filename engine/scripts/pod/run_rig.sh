@@ -15,13 +15,19 @@ export BITCOIND=$X/bin/bitcoind HZ_CORE_SRC=$X/core
 A=$X/attack
 q7() { nm=$1 lo=$2 hi=$3 blk=$4 anc=$5; s=$(date +%s)
   $X/host_regtest libzync-prove-range $lo $hi $blk $anc out/q7_$nm > out/q7_$nm.log 2>&1; rc=$?
-  m=no-r0; [ -f $A/r0/$nm/state_$hi.json ] && { cmp -s out/q7_$nm/state_$hi.json $A/r0/$nm/state_$hi.json && m=STATE_IDENTICAL || m=STATE_DIFFERENT; }
+  r=$A/r0/${nm%_m*}/state_$hi.json; m=no-r0
+  [ -f $r ] && { cmp -s out/q7_$nm/state_$hi.json $r && m=STATE_IDENTICAL || m=STATE_DIFFERENT; }
   echo -e "q7_$nm\trc=$rc\t$(( $(date +%s)-s ))s\t$m\t$(grep -aci 'out of memory' out/q7_$nm.log) oom lines" >> out/times.tsv; }
+# each block at both address spaces: keys/ (the bundle's, 2^26) and export/keys29 (OpenVM's default 2^29)
 if [ -z "${SKIP_Q7:-}" ] && [ -d $A ]; then
-  q7 mem_k1140 126 126 $A/blocks/mem_k1140 $A/blocks/anchor.json
-  q7 light_only 126 126 $A/blocks/light_only $A/blocks/anchor.json
-  q7 tap_small 126 127 $A/tap/tap_small $A/tap/anchor.json
-  q7 tap_full 126 127 $A/tap/tap_full $A/tap/anchor.json
+  for ks in 26:/workspace/keys 29:$X/keys29; do
+    export HAZYNC_ENGINE_KEYS=${ks#*:}; b=${ks%%:*}
+    q7 mem_k1140_m$b 126 126 $A/blocks/mem_k1140 $A/blocks/anchor.json
+    q7 light_only_m$b 126 126 $A/blocks/light_only $A/blocks/anchor.json
+    q7 tap_small_m$b 126 127 $A/tap/tap_small $A/tap/anchor.json
+    q7 tap_full_m$b 126 127 $A/tap/tap_full $A/tap/anchor.json
+  done
+  export HAZYNC_ENGINE_KEYS=/workspace/keys
 fi
 s=$(date +%s)
 python3 $X/rig.py $X/host_regtest /workspace/rigroot ${RIG_CASES:-} > out/rig.log 2>&1; rc=$?
