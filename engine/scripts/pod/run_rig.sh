@@ -13,6 +13,10 @@ export HAZYNC_ENGINE=/workspace/host/target/release/hzengine HAZYNC_ENGINE_KEYS=
 export BITCOIND=$X/bin/bitcoind HZ_CORE_SRC=$X/core
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 5 > out/smi_rig.log ) & SMI=$!
 A=$X/attack
+# bundle switches (gpu_block.sh passes only JOBS/R0_BLOCKS): export/rig_only.txt = rig.py's RIG_ONLY (comma-separated
+# case names; the base chain is still built), export/skip_q7 = no attack blocks
+[ -f $X/rig_only.txt ] && export RIG_ONLY=$(tr -d " \n" < $X/rig_only.txt)
+[ -f $X/skip_q7 ] && export SKIP_Q7=1
 q7() { nm=$1 lo=$2 hi=$3 blk=$4 anc=$5; s=$(date +%s)
   $X/host_regtest libzync-prove-range $lo $hi $blk $anc out/q7_$nm > out/q7_$nm.log 2>&1; rc=$?
   r=$A/r0/${nm%_m*}/state_$hi.json; m=no-r0
