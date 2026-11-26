@@ -85,4 +85,14 @@ being handed to a decoder.
    9's coinbase SPENT at 170 by tx 1 input 0; refused: a path node, a wrong preimage, no preimage, spent claimed
    unspent. Trie, tx and journey facts: to do (they need the engine chain's trie dump / tx facts from the host).
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
+   **WASM probe 26.11 late** (a scratch copy of swiftsync-verify-wasm, `--features engine` on swiftsync-verify):
+   compiles for wasm32-unknown-unknown as a RAW module (no JS glue) given three things: (a) OpenVM's abi-stable patch;
+   (b) stark-backend's nologging patch and EVERY stark-backend crate [patch]ed to that one copy: without it stark-sdk's
+   metrics stack pulls quanta -> web-sys -> wasm-bindgen and the module imports `__wbindgen_*` placeholders; (c) a
+   random source that REFUSES, for both getrandom versions OpenVM's VM crate links through rand (0.2 `custom`
+   feature + register_custom_getrandom!, 0.3 `--cfg getrandom_backend="custom"` + `__getrandom_v03_custom`):
+   verification never draws randomness (Fiat-Shamir), so any call failing is the safe answer. Result: **1,264,189
+   bytes, imports: none**. Not yet run on a proof (needs the frame's key + pin: network code bit 0x40, next).
+   For the reproducible build: build.sh must make the patched sources (engine/scripts/openvm_src.sh) and stage them at
+   a fixed path, and add the cfg to its RUSTFLAGS.
 6. Review rounds (the user's rule) before any release.
