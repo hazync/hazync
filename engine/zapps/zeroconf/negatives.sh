@@ -1,5 +1,5 @@
 #!/bin/bash
-# zeroconf negatives on the metering image (the guest's own checks; env::verify accepts without proofs here)
+# zeroconf negatives on the metering image (the guest's own checks; env::verify accepts without proofs here) -- the first case is the control (ACCEPTED), every other must be refused
 cd /root/engine/zc1 || exit 1
 Z=./zyncapp_skip; E=/root/engine-kit/engine/host/target/release/hzengine; ST=/root/engine/rtprep
 run() { # <name> <tip> <chunk> <index> <paths> <net flag>
