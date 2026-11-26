@@ -1,0 +1,10 @@
+10d6112a zAPP hosts: --stream for utreexo, utreexo-tip and z
+zyncapp built in 555 s
+hints stream: IDENTICAL (69232 bytes)
+utreexo base to 100 (RISC Zero execute): rc old 1 new 0; journal DIFFERENT; statement + cycle lines DIFFER
+utreexo base to 200 (RISC Zero execute): rc old 1 new 0; journal DIFFERENT; statement + cycle lines DIFFER
+utreexo tip 100 -> 200 (RISC Zero execute): rc old 1 new 0; journal DIFFERENT; lines DIFFER
+stream rc=0: UTREEXO_STREAM H=200 -> /root/engine/zt/u200.bin (69268 bytes, self id at byte 0); expect leaves=209 roots=d71afabf3ec469988d02cbcbca6123dc294af01da8e5e60ebe1bb6139b513a05,3d668c7d104d06fc87513b520fa5
+engine execute rc=0 39 s :: execute: 9.8 s, cost 951143709, instructions 23086820, journal 1400 bytes sha256 f7fbcd438b91cd53861a90840730ac300060ae9df02e94da2742671c2e89dfaf EXECUTE_OK 
+engine journal 1400 bytes vs RISC Zero 1400; differing bytes at 4..35 (32); ONLY the statement's self_id (bytes 4..36)
+ZT_DONE
