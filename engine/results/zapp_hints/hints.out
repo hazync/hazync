@@ -1,0 +1,6 @@
+stream rc=0: HINTS_NATIVE H=200 T=200 format=1 file=/root/engine/hz/mainnet-200.hints (607 bytes, sha256 a1d359dd806c56e399ecfaaafe103da6f30deaea6dc913817d257600b29acef3) counted=209 unspent=204 value=1000000000000 undo_sha256=d4b276
+HINTS_STREAM H=200 -> /root/engine/hz/s200.bin (69232 bytes); expect hints_sha256=a1d359dd806c56e399ecfaaafe103da6f30deaea6dc913817d257600b29acef3 block=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 co
+execute rc=0 47 s :: children: proofs of the image in /root/engine/keys-ch execute: 15.1 s, cost 109496921, instructions 2190927, journal 988 bytes sha256 a32f5be1c77e6eeff7d9050bee71246a8c49bce610e172c04bab67053e90c374 
+prove rc=0 257 s :: prove: 237.1 s journal sha256 a32f5be1c77e6eeff7d9050bee71246a8c49bce610e172c04bab67053e90c374 
+verify rc=0 verify: OK (0.05 s), journal 988 bytes sha256 a32f5be1c77e6eeff7d9050bee71246a8c49bce610e172c04bab67053e90c374
+HINTS_DONE

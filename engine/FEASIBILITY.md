@@ -21,7 +21,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 | Q16 | whole-chain cost | ESTIMATE | ~$16-37k depending on card and fixed cost |
 | Q17 | tip time | GOOD | 969,122: 33.9 s proving on 4x PRO 6000 (RISC Zero 191 s end to end) |
 | Q18-Q19 | levers, scaling | measured | segpar -25% on the aggregate |
-| Q20 | migration | in progress | header zAPP: whole chain in 4.4 min vs RISC Zero's 99.5 on the same card (22.4x), MMR root equal; hints, utreexo, utreexo-tip, zeroconf guests compile (end-to-end needs an engine core chain: next) |
+| Q20 | migration | in progress | header zAPP: whole chain in 4.4 min vs RISC Zero's 99.5 on the same card (22.4x), MMR root equal; engine core chain 1..200 from genesis proved (A6000, 14 s/block); **hints zAPP end to end: verifies the core proof in-guest, proved + verified, statement = native derivation** (results/zapp_hints); utreexo, utreexo-tip, zeroconf compile |
 | Q21-Q24 | formats, genesis plan, composition, upkeep | answered | see each; trie/coin log node format 2 ADOPTED (results/node_format2: -12% trie, engine == RISC Zero) |
 | Q24+ | upgrades | design + step 1 | engine/HANDOVER.md: the previous OpenVM's verifier in the new guest; step 1 measured (15.6B, accepts a real proof, refuses a flipped byte) |
 
