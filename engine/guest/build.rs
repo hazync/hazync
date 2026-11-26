@@ -62,6 +62,19 @@ fn main() {
               "HAZYNC_RAW_TXID", "HAZYNC_PUBKEY_MEMO", "HAZYNC_LEAF_ONEBUF", "HAZYNC_TXDATA_LAZY", "HAZYNC_AGG_LITE", "HAZYNC_TX_ONCE"] { b.define(d, "1"); }
     if std::env::var("CARGO_FEATURE_NOSCRIPTS").is_ok() { b.define("HAZYNC_NO_SCRIPTS", "1"); }
     println!("cargo:rerun-if-env-changed=CARGO_FEATURE_NOSCRIPTS");
+    // The network, as prover/methods/guest/build.rs sets it: the C half (Core's chainparams, signet.cpp) follows the
+    // cargo features the Rust half is built with, and HAZYNC_NETWORK must say the same (26.11.2026: a regtest build
+    // without these defines ran Core's mainnet params under regtest Rust, and the guest's own check refused it,
+    // "left: 144, right: 2016").
+    println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
+    let regtest = std::env::var("CARGO_FEATURE_REGTEST").is_ok();
+    let signet = std::env::var("CARGO_FEATURE_SIGNET").is_ok();
+    let net = std::env::var("HAZYNC_NETWORK").unwrap_or_default();
+    assert!(!(regtest && signet), "the guest's `regtest` and `signet` features are exclusive");
+    assert_eq!(regtest, net == "regtest", "the guest's `regtest` feature and HAZYNC_NETWORK ({net:?}) disagree");
+    assert_eq!(signet, net == "signet", "the guest's `signet` feature and HAZYNC_NETWORK ({net:?}) disagree");
+    if regtest { b.define("HAZYNC_REGTEST", "1"); }
+    if signet { b.define("HAZYNC_SIGNET", "1"); b.file(format!("{core}/signet.cpp")); }
     for t in tus { b.file(format!("{core}/{t}")); }
     b.file(format!("{hzc}/verify_input.cpp")).file(format!("{hzc}/core_tx_rules.cpp"));
     // core_block_rules.cpp #includes Core's functions lifted VERBATIM out of validation.cpp / pow.cpp, exactly as
