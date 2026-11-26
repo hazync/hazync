@@ -59,7 +59,9 @@ arc, ao = engine_exec(KB, f"{x}/agg.in", f"{x}/agg.j", True)
 verdict(arc == 0 and "INVALID" not in ao, "base block valid (engine aggregate)", f"rc {arc}")
 # control for the aggregate cases: the honest block's collect stream is NOT refused by the engine
 crc, co = engine_exec(KB, f"{x}/agg_collect.in", f"{x}/agg_collect.j", True)
-verdict(os.path.exists(f"{x}/agg_collect.in") and refusal(co) is None and "panicked" not in co, "base collect run not refused (engine)", f"rc {crc}: {(co.strip().splitlines() or [''])[-1][:120]}")
+# a finished collect run ends with exit code COLLECT_EXIT (libzync::wire, 2); the platform reports it as "guest exit(2)"
+ok = os.path.exists(f"{x}/agg_collect.in") and refusal(co) is None and "guest exit(2)" in co
+verdict(ok, "base collect run finishes, not refused (engine)", f"rc {crc}: {'guest exit(2) = COLLECT_EXIT' if 'guest exit(2)' in co else (co.strip().splitlines() or [''])[-1][:120]}")
 
 def chunk(name, ti, inp, edit, want):
     b = json.loads(json.dumps(base)); edit(b["txs"][ti]["prevouts"][inp])
