@@ -35,7 +35,9 @@ for state, name, core, guest, why in rows:
     # judged like any other case (not deferred to H)
     if state == "CHECK" and name in ("missing_coin",):
         state = "HOST-FAIL" if guest == "reject" else state
-    if state == "HOST-FAIL":
+    # REASON: the rig judged the reason on the host's text alone (since engine_backend's fix that is the last 8 lines of
+    # the guest's log); judged again on the whole guest log, with the same reason table
+    if state in ("HOST-FAIL", "REASON"):
         glog = "\n".join(open(f, errors="replace").read() for f in sorted(glob.glob(f"{out}/{name}/engine/s*/*.log")))
         text = why + "\n" + glog
         # rig.py's test, plus the one mapping the engine needs: RISC Zero's host reports a guest panic as "Guest

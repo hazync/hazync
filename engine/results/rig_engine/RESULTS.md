@@ -38,3 +38,14 @@ cross-chunk split_tx / split_tx_bad (now 2 chunks).
 
 Union of both runs (rig_reclassify.py over each, checked against rig.py's 96 `c_*` cases): 96 of 96, all AGREE.
 (rig_reclassify.py's first version parsed only reasons without spaces; fixed, which is how run 1 reads 56, not 55.)
+
+## FINAL image (node format 2 + C-heap recycling, 2^29), one run of every case (26.11.2026 afternoon; roadmap 1.5)
+
+Pod bt9qe3dkzq545o (A40), keys-rtch, the regtest host at the same commit (glibc-2.35 container), both host fixes in.
+The rig ran to the end in one go (rig rc 0, 4,890 s, 232-block base chain + every case): rig.py's own summary
+"RIG 96 cases, 85 agree, 11 to look at"; rig_reclassify.py (now also re-judging REASON on the whole guest log, since
+the host passes on only the log's last 8 lines) over the harvested guest logs: **96 of 96 AGREE** (reclassified_final.txt).
+
+Gap: the rig in the repo has 97 cases since the #794 commits (tap_heap_794); this run's bundle carried the earlier
+96-case rig.py. tap_heap_794 is to run with the current rig.py (its substance, tap_small / tap_full proving with the C
+heap, is in results/q7_attack_blocks).
