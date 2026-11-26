@@ -21,7 +21,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 | Q16 | whole-chain cost | ESTIMATE | ~$16-37k depending on card and fixed cost |
 | Q17 | tip time | GOOD | 969,122: 33.9 s proving on 4x PRO 6000 (RISC Zero 191 s end to end) |
 | Q18-Q19 | levers, scaling | measured | segpar -25% on the aggregate |
-| Q20 | migration | started | header zAPP ported and proved |
+| Q20 | migration | started | header zAPP ported: whole chain in 4.8 min vs RISC Zero's 99.5 (20.8x) |
 | Q21-Q24 | formats, genesis plan, composition, upkeep | answered | see each |
 
   A. Trust and soundness
@@ -448,8 +448,9 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      **Answer (25.11.2026): YES for the mechanism, MEASURED on CPU. 26.11.2026: the first zAPP guest PORTED (headers).**
      - The header zyncAPP (engine/zapps/headers: its own source + two anchored edits) executes 0..40,319 from genesis
        with the end hash, chainwork and MMR peaks equal to Bitcoin Core's node, and proves + verifies 0..4,031 on CPU
-       (results/zapp_headers). The other zAPPs (hints, utreexo, deposit, assume, liveness, statement) follow the same
-       recipe; each is its own image.
+       (results/zapp_headers). **The whole chain 0..975,278 proves in 287.3 s on one RTX PRO 6000 (RISC Zero: 99.5 min
+       on the same chip, Workstation edition): 20.8x**, verified, end state equal to the node's. The other zAPPs
+       (hints, utreexo, deposit, assume, liveness, statement) follow the same recipe; each is its own image.
      - `env::verify(image, journal)` works on the engine as on RISC Zero (Q4/Q5): the aggregate verifies every chunk
        and trie proof in-guest on every block; block 2 verified block 1's proof in-guest from genesis, and a
        `libzync-join` of blocks 2 + 3 verified both and checked adjacency; `libzync-verify` accepted all

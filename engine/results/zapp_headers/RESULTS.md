@@ -14,3 +14,24 @@ keys-m26 (its own image: exe 9ff4a306..., vm 53ca5965..., the same VM as the cor
   Core's node, which is what the zAPP's own headers-exec checks against.
 - Address space: the whole chain (975k headers, ~78 MB of input) does not fit the 2^26 keys in one run; runs chain
   (the zAPP's `--after`), or the zAPP uses keys with a larger address space (it is its own module and image).
+
+## The WHOLE chain, 0..975,278, in one proof on one RTX PRO 6000 (26.11.2026)
+
+Image on the production VM (2^29; keys-hdr29: exe a080482e..., vm 00e00077...), the headers file RISC Zero's MMR run used
+(/root/mmr-v027/headers_0_975278.txt.gz, 975,279 lines).
+
+- CPU execute (build box, hdrall.sh): 25.5 s, cost 152.1B, 2.73B instructions, journal 2,124 bytes sha256 20bb754b...;
+  end state against the node's getblockheader 975278: **hash MATCH, chainwork MATCH, bits/time MATCH**, the 13 MMR peaks
+  equal to an independent MMR of the file's hashes.
+- **GPU proof** (pod l2buds6zmw5uvo, 1x RTX PRO 6000 Blackwell **Server** Edition, pod/run_one.sh): 176 segments,
+  **prove 287.3 s** (job 297 s), GPU busy 58%, peak 24,065 MiB; **`hzengine verify`: OK**, journal sha256 20bb754b...,
+  the same as the CPU run's.
+
+| | RISC Zero (de54b94f, RESULT_gpu_whole_chain_mmr.txt) | engine |
+|---|---|---|
+| card | 1x RTX PRO 6000 Blackwell Workstation Edition | 1x RTX PRO 6000 Blackwell Server Edition |
+| work | 4.66B cycles, 4,739 segments | 152.1B cost, 176 segments |
+| proof | **5,969.5 s (99.5 min)** | **287.3 s (4.8 min)**: **20.8x** |
+
+The two cards are the same chip in two editions (Workstation vs Server), not the same SKU; the comparison is close to
+like for like but not exact.

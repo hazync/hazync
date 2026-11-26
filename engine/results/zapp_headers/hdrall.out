@@ -1,0 +1,9 @@
+3c28d24b results: core-rules rig on the engine - a
+assembled /root/engine/hdr/guest29 from /root/engine-kit/prover/zyncapps/methods/headers
+build 56 s: build: 36.8 s; image exe a080482e44cd2e149083265a93f093050af5d428f04c4b60896ab40e1dd31b25 vm 00e00077450a5a5657b99e459ec4ec4fa56ca81d6becbb26bec94a0b9
+975279
+stream 975279 headers, 78022612 bytes
+execute 0..975278 rc=0 45 s: execute: 25.5 s, cost 152086619507, instructions 2727999349, journal 2124 bytes sha256 20bb754bde3542a970abd49053ba5aeec82fb91123c58910325e4a8c780058d5
+end height 975278 hash 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 chainwork 00000000000000000000000000000000000000015731592c05251d96d07f062f
+node: hash MATCH, chainwork MATCH, bits/time MATCH; MMR peaks (13) MATCH
+HDRALL_DONE
