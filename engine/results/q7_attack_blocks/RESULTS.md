@@ -21,9 +21,9 @@ regtest in the glibc-2.35 container (rtc). pod/run_rig.sh, pod 728rss4avwkcsa. R
 - **At 2^29 the engine still loses tap_small**, which RISC Zero proves. The guest memory limits, from source: the
   product guest's risc0-zkvm-platform 2.2.3 has GUEST_MAX_MEM = 0xC000_0000 (**3 GiB**); OpenVM v2.1.0's default
   MemoryConfig is 1 << 29 cells (**512 MiB**, openvm-platform MEM_BITS = 29). Parity on the worst single input needs
-  either a larger OpenVM address space (pointer_max_bits > 29: whether that is sound in OpenVM's 31-bit-field range
-  checks is UNKNOWN, a question for the OpenVM team; it would also double the per-segment GPU memory image per bit)
-  or a reclaiming allocator (an image change, #794's own conclusion, which RISC Zero needs for tap_full too).
+  the guest to use less memory: OpenVM's spec bounds pointer_max_bits by F::bits() - 2 = 29 for BabyBear
+  (specs/openvm/isa.mdx), so 512 MiB is its ceiling. A reclaiming allocator (an image change, #794's own conclusion,
+  which RISC Zero needs for tap_full too) or less copying per input.
 - light_only's end state: **identical to RISC Zero's in 22 of 23 fields; only self_id (the image id) differs**, when
   both start from the same anchor. Found on the way: blocks 1..125 of each attack directory are symbolic links into
   blocks/main, which the pod bundle left out, so on the pod the host could not replay the BIP30 tree from genesis and

@@ -9,7 +9,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 |---|---|---|---|
 | Q1 | audits | OPEN | recursion/deferral audited at a pre-release commit; post-audit diffs measured (thousands of lines); ECC/algebra not in the 2.0 audit: ask OpenVM |
 | Q2-Q6 | params, maintenance, compat layer, image id, guest edits | answered | see each |
-| **Q7** | **#794 attack blocks** | **BAD as is** | **512 MiB guest memory vs RISC Zero's 3 GiB: tap_small not provable; needs a larger address space or a reclaiming allocator** |
+| **Q7** | **#794 attack blocks** | **BAD as is** | **512 MiB guest memory (OpenVM's hard ceiling) vs RISC Zero's 3 GiB: tap_small not provable; needs the guest to use less memory (reclaiming allocator)** |
 | Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
 | Q9 | Core vectors + rig | GOOD so far | 22,666 vectors identical; rig 55/55 agree, 41 to run |
 | Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
@@ -175,8 +175,12 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        block), 768-778 s per piece on an A40, provable in principle but stopped (~2.6 h).
      - At 2^26 (the 4 GB-card image): light_only's aggregate runs out of memory and tap_small fails too: too small
        for adversarial blocks.
-     - So completeness on the worst single input needs a larger OpenVM address space (soundness above 29 bits
-       UNKNOWN: ask OpenVM) or a reclaiming allocator (an image change). This is the main open gate found tonight.
+     - A larger address space is RULED OUT by OpenVM's own spec: "pointer_max_bits <= F::bits() - 2"
+       (docs/.../specs/openvm/isa.mdx), BabyBear has 31 bits, so 29 (512 MiB) is the ceiling
+       (crates/vm/src/system/memory/mod.rs POINTER_MAX_BITS = 29). So completeness on the worst single input needs the
+       GUEST to use less memory: a reclaiming allocator (which first needs the address-keyed caches of
+       verify_input.cpp / Core's legacy sighash cache reworked, Q7 note above) or less copying per input. This is the
+       main open gate found tonight.
      Earlier notes (25.11.2026):
      - Allocator: OpenVM's bump allocator (openvm-platform heap; never frees). The guest REFUSES an allocator that
        reuses memory (main.rs: verify_input.cpp's per-transaction caches and Core's legacy sighash cache are keyed
@@ -474,8 +478,9 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 Core vectors ALL IDENTICAL (rig cases to do); Q7 untested.
        **26.11.2026:** Q9: the rig's first 55 cases all agree with Core 31.1 (41 to run). Q7 CAME BACK BADLY as the
        engine stands: tap_small (a Core-valid regtest block RISC Zero proves) cannot be proved at OpenVM's 512 MiB
-       (one input runs out of memory; RISC Zero's guest has 3 GiB). It is a deal-breaker unless one of two fixes
-       works: a larger OpenVM address space (soundness above 2^29 to be confirmed by OpenVM) or a reclaiming
-       allocator in the guest (an image change; also what tap_full needs on RISC Zero). Q1 diff sizes measured.
+       (one input runs out of memory; RISC Zero's guest has 3 GiB). OpenVM cannot go above 512 MiB (its spec bounds
+       pointers at F::bits() - 2 = 29 bits), so it is a deal-breaker unless the guest's memory use on such inputs
+       comes down: a reclaiming allocator (an image change; also what tap_full needs on RISC Zero) or less copying
+       per input. Q1 diff sizes measured.
      - Just work: Q11 (WASM: the probe works), Q15 (ids: fixed on one machine, container next), Q12/Q13 (Windows,
        consumer cards), Q16-Q19 (cost/speed: measured strong), Q20-Q24 (migration).
