@@ -1,11 +1,12 @@
-# The core-rules rig on the engine, first run (26.11.2026, one A40)
+# The core-rules rig on the engine (26.11.2026, one A40, two runs)
 
 experimental/libzync-bench/core_rules/rig.py: Bitcoin Core 31.1 on regtest and the regtest engine image (keys-rt,
 2^26) given the same crafted blocks on a 232-block base chain; Core's submitblock answer is the reference. Real proofs
 on the GPU (the base chain: 232 blocks proved through libzync-prove-range on the engine, ~16-22 s per block).
 pod/run_rig.sh, pod 728rss4avwkcsa, 3h20 in all with Q7 ($2.46).
 
-**55 of 96 cases ran; all 55 AGREE** once read as rig.py reads them (rig_reclassify.py, reclassified.txt):
+**All 96 cases AGREE with Bitcoin Core 31.1** (run 1: 56 cases, run 2: the other 41 incl. script_fails again; table below). Run 1:
+**56 of 96 cases ran; all 56 AGREE** once read as rig.py reads them (rig_reclassify.py, reclassified.txt):
 the valid blocks accepted, every invalid one refused by the guest with the reason the rig's own table (OURS /
 reason_ok, taken verbatim from rig.py) requires for Core's answer: coinbase rules, merkle and witness commitments,
 duplicate / empty / negative / oversized outputs, premature coinbase spends, double spends, locktime / BIP68 (height
@@ -24,3 +25,16 @@ How rig.py's raw labels became these, and why (no verdict changed, only where th
   default cost target overrode the rig's HAZYNC_CHUNKS=2 (1 chunk). Fixed (f4a7e229: an explicit HAZYNC_CHUNKS alone
   is a fixed count). The 41 cases from split_tx on (signatures, taproot, multisig, CLTV/CSV, P2SH, BIP30 repeats,
   ...) did not run: next run, with both host fixes built.
+
+## Run 2 (06:19-07:24, pod mkj0etmewymj8h, $0.89; host with both fixes, RIG_ONLY = the 41 not run)
+
+rig.py's own summary: **RIG 41 cases, 38 agree**, 3 to look at; the 3 (unknown_prev, version_1, version_2) are guest
+refusals by panic before an INVALID line, read AGREE by rig_reclassify.py with rig.py's reason table (reclassified2.txt;
+e.g. "core-reject: bad-version(0x00000001)" in the guest's text). Covered: signatures (P2WPKH, P2PKH, high-S, non-DER,
+zero-r, wrong key), multisig (order, dummy), NULLFAIL, taproot key and script paths (bad signature, tweak parity),
+weight and witness/P2SH sigops around the limits, the 64-byte transaction, duplicate transactions, null prevout,
+unknown parent, block versions 1 and 2, CLTV and CSV (op form), P2SH redeem scripts, the BIP30 repeats, and the
+cross-chunk split_tx / split_tx_bad (now 2 chunks).
+
+Union of both runs (rig_reclassify.py over each, checked against rig.py's 96 `c_*` cases): 96 of 96, all AGREE.
+(rig_reclassify.py's first version parsed only reasons without spaces; fixed, which is how run 1 reads 56, not 55.)

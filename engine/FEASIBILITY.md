@@ -11,7 +11,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 | Q2-Q6 | params, maintenance, compat layer, image id, guest edits | answered | see each |
 | **Q7** | **#794 attack blocks** | **BAD as is** | **512 MiB guest memory (OpenVM's hard ceiling) vs RISC Zero's 3 GiB: tap_small not provable; needs the guest to use less memory (reclaiming allocator)** |
 | Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
-| Q9 | Core vectors + rig | GOOD so far | 22,666 vectors identical; rig 55/55 agree, 41 to run |
+| Q9 | Core vectors + rig | GOOD | 22,666 vectors identical; rig 96/96 agree with Core 31.1 |
 | Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
 | Q11 | browser verifier | GOOD | full check (STARK + image + journal) in Node and Chromium, 25-39 ms; phone not tried |
 | Q12 | Windows | builds | CI exe (sm_61..120); proving on a Windows card not tried |
@@ -222,11 +222,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      the 679 cases RISC Zero's guest aborts on are refused by the engine too (0 accepted), and no engine-only abort
      (results/core_vectors). The 97 rig cases (real Core + regtest guest on crafted blocks) need a regtest engine
      build, like Q7.
-     - **Rig, first run on the engine (26.11.2026, results/rig_engine): 55 of 96 cases ran, all 55 AGREE with Core
-       31.1** (real proofs; 232-block base chain proved on the engine), read with rig.py's own reason table plus the
-       guest's logs. Two host issues found and fixed (the guest's text missing from a failed execute; an explicit
-       HAZYNC_CHUNKS overridden on the engine), which stopped the run at split_tx; the remaining 41 (signatures,
-       taproot, multisig, CLTV/CSV, P2SH, BIP30 repeats) are the next run.
+     - **Rig on the engine (26.11.2026, results/rig_engine): ALL 96 CASES AGREE with Bitcoin Core 31.1**, over two
+       runs with real proofs (each run proves a 232-block regtest base chain on the engine first), read with rig.py's
+       own reason table plus the guest's logs (rig_reclassify.py; 3 + 36 raw HOST-FAIL labels were guest refusals whose
+       text sat in the engine's work dir). Two host issues found and fixed on the way (a failed execute now carries
+       the guest's log; an explicit HAZYNC_CHUNKS is no longer overridden on the engine).
   10. What are the limits on memory, cycles per segment and input size, and where do they come from?
 
      **Answer (25.11.2026, from OpenVM v2.1.0's source and the engine; MEASURED where marked):**
@@ -476,7 +476,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        unreviewed AND the OpenVM team will not cover them), Q9 (any verdict differing from RISC Zero / Core on the
        test vectors), Q7 (a Core-valid block the engine cannot prove at all).
        So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 Core vectors ALL IDENTICAL (rig cases to do); Q7 untested.
-       **26.11.2026:** Q9: the rig's first 55 cases all agree with Core 31.1 (41 to run). Q7 CAME BACK BADLY as the
+       **26.11.2026:** Q9: all 96 rig cases agree with Core 31.1. Q7 CAME BACK BADLY as the
        engine stands: tap_small (a Core-valid regtest block RISC Zero proves) cannot be proved at OpenVM's 512 MiB
        (one input runs out of memory; RISC Zero's guest has 3 GiB). OpenVM cannot go above 512 MiB (its spec bounds
        pointers at F::bits() - 2 = 29 bits), so it is a deal-breaker unless the guest's memory use on such inputs

@@ -1,0 +1,44 @@
+AGREE        (was AGREE     ) script_fails             core=block-script-verify-flag-failed (OP_RETURN was encountered)
+AGREE        (was AGREE     ) split_tx                 core=accept
+AGREE        (was AGREE     ) split_tx_bad             core=bad-txns-nonfinal
+AGREE        (was AGREE     ) sig_p2wpkh               core=accept
+AGREE        (was AGREE     ) sig_p2wpkh_bad           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) sig_high_s               core=accept
+AGREE        (was AGREE     ) sig_not_der              core=block-script-verify-flag-failed (Non-canonical DER signature)
+AGREE        (was AGREE     ) sig_zero_r               core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) sig_p2pkh                core=accept
+AGREE        (was AGREE     ) sig_p2pkh_other_key      core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) multisig_ok              core=accept
+AGREE        (was AGREE     ) multisig_order           core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) multisig_dummy           core=block-script-verify-flag-failed (Dummy CHECKMULTISIG argument must be zero)
+AGREE        (was AGREE     ) sig_must_fail            core=accept
+AGREE        (was AGREE     ) sig_must_fail_but_good   core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) taproot_key              core=accept
+AGREE        (was AGREE     ) taproot_key_bad          core=block-script-verify-flag-failed (Invalid Schnorr signature)
+AGREE        (was AGREE     ) weight_under             core=accept
+AGREE        (was AGREE     ) weight_over              core=bad-blk-weight
+AGREE        (was AGREE     ) taproot_script           core=accept
+AGREE        (was AGREE     ) taproot_tweak_parity     core=block-script-verify-flag-failed (Witness program hash mismatch)
+AGREE        (was AGREE     ) taproot_script_bad_sig   core=block-script-verify-flag-failed (Invalid Schnorr signature)
+AGREE        (was AGREE     ) sigops_witness_under     core=accept
+AGREE        (was AGREE     ) sigops_witness_over      core=bad-blk-sigops
+AGREE        (was AGREE     ) sigops_p2sh_under        core=accept
+AGREE        (was AGREE     ) sigops_p2sh_over         core=bad-blk-sigops
+AGREE        (was AGREE     ) tx_64_bytes              core=accept
+AGREE        (was AGREE     ) txns_duplicate           core=bad-txns-duplicate
+AGREE        (was AGREE     ) prevout_null             core=bad-txns-prevout-null
+AGREE        (was HOST-FAIL ) unknown_prev             core=prev-blk-not-found
+AGREE        (was HOST-FAIL ) version_1                core=bad-version(0x00000001)
+AGREE        (was HOST-FAIL ) version_2                core=bad-version(0x00000002)
+AGREE        (was AGREE     ) cltv_future              core=block-script-verify-flag-failed (Locktime requirement not satisfied)
+AGREE        (was AGREE     ) cltv_met                 core=accept
+AGREE        (was AGREE     ) csv_op_unmet             core=bad-txns-nonfinal
+AGREE        (was AGREE     ) csv_op_met               core=accept
+AGREE        (was AGREE     ) p2sh_redeem_fails        core=block-script-verify-flag-failed (Script evaluated without error but finished with a false/empty top stack element)
+AGREE        (was AGREE     ) p2sh_ok                  core=accept
+AGREE        (was AGREE     ) bip30_repeat_unspent     core=bad-txns-BIP30
+AGREE        (was AGREE     ) bip30_repeat_spent       core=accept
+AGREE        (was AGREE     ) bip30_child_of_repeat    core=accept
+
+41 of 96 cases ran: AGREE 41
+not run (55): valid_empty valid_spend valid_zero_fee cb_missing cb_multiple cb_overpay cb_exact cb_fee_too_much cb_script_short cb_script_long cb_wrong_height bad_merkle merkle_mutated tx_dup_inputs tx_no_inputs tx_no_outputs tx_negative_out tx_huge_out tx_total_huge tx_null_prevout premature exactly_mature one_short_of_mature in_below_out missing_coin spend_spent_coinbase double_spend_in_block chain_in_block spend_later_in_block locktime_height_future locktime_height_ok locktime_final_seq locktime_time_mtp locktime_time_past bip68_height_unmet bip68_height_met bip68_disabled bip68_v1_ignored bip68_uint_version bip68_time_met bip68_time_unmet time_equal_mtp time_above_mtp bad_version version_4 high_hash bad_bits nonce_too_big_witness witness_mismatch no_commit_no_witness valid_p2wsh witness_no_commit sigops_limit sigops_at_limit oversize_weight

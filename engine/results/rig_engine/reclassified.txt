@@ -50,9 +50,10 @@ AGREE        (was HOST-FAIL ) witness_mismatch         core=bad-witness-merkle-m
 AGREE        (was AGREE     ) no_commit_no_witness     core=accept
 AGREE        (was AGREE     ) valid_p2wsh              core=accept
 AGREE        (was HOST-FAIL ) witness_no_commit        core=unexpected-witness
+AGREE        (was HOST-FAIL ) script_fails             core=block-script-verify-flag-failed (OP_RETURN was encountered)
 AGREE        (was HOST-FAIL ) sigops_limit             core=bad-blk-sigops
 AGREE        (was AGREE     ) sigops_at_limit          core=accept
 AGREE        (was HOST-FAIL ) oversize_weight          core=bad-blk-length
 
-55 of 96 cases ran: AGREE 55
-not run (41): script_fails split_tx split_tx_bad sig_p2wpkh sig_p2wpkh_bad sig_high_s sig_not_der sig_zero_r sig_p2pkh sig_p2pkh_other_key multisig_ok multisig_order multisig_dummy sig_must_fail sig_must_fail_but_good taproot_key taproot_key_bad weight_under weight_over taproot_script taproot_tweak_parity taproot_script_bad_sig sigops_witness_under sigops_witness_over sigops_p2sh_under sigops_p2sh_over tx_64_bytes txns_duplicate prevout_null unknown_prev version_1 version_2 cltv_future cltv_met csv_op_unmet csv_op_met p2sh_redeem_fails p2sh_ok bip30_repeat_unspent bip30_repeat_spent bip30_child_of_repeat
+56 of 96 cases ran: AGREE 56
+not run (40): split_tx split_tx_bad sig_p2wpkh sig_p2wpkh_bad sig_high_s sig_not_der sig_zero_r sig_p2pkh sig_p2pkh_other_key multisig_ok multisig_order multisig_dummy sig_must_fail sig_must_fail_but_good taproot_key taproot_key_bad weight_under weight_over taproot_script taproot_tweak_parity taproot_script_bad_sig sigops_witness_under sigops_witness_over sigops_p2sh_under sigops_p2sh_over tx_64_bytes txns_duplicate prevout_null unknown_prev version_1 version_2 cltv_future cltv_met csv_op_unmet csv_op_met p2sh_redeem_fails p2sh_ok bip30_repeat_unspent bip30_repeat_spent bip30_child_of_repeat

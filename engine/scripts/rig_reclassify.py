@@ -25,7 +25,7 @@ rig.CASES = [(n, None) for n in re.findall(r"^def c_(\w+)\(", src, re.M)]
 log, out = args
 rows = []
 for l in open(log, errors="replace"):
-    m = re.match(r"^(AGREE|DISAGREE|HOST-FAIL|REASON|CHECK|DEFERRED-OK)\s+(\S+)\s+core=(\S+)\s+guest=(\S+)\s*(.*)$", l.rstrip("\n"))
+    m = re.match(r"^(AGREE|DISAGREE|HOST-FAIL|REASON|CHECK|DEFERRED-OK)\s+(\S+)\s+core=(.*?)\s+guest=(accept|reject)\s*(.*)$", l.rstrip("\n"))
     if m:
         rows.append(m.groups())
 res = {}
