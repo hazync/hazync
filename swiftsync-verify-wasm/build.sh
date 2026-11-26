@@ -13,7 +13,28 @@ cd "$(dirname "$SELF_ABS")"
 # not left to whatever the machine's default is; a new pin means a new published sha (README, the site, deploy.sh).
 REPO=$(cd .. && pwd)
 CRATE=swiftsync-verify-wasm
-STAGED="swiftsync-verify-wasm swiftsync-verify libzync prover/methods/guest/src/handover_pin.rs"
+# engine/verify-core always: swiftsync-verify names it as an OPTIONAL path dependency, and cargo loads every path
+# dependency of the graph, enabled or not (a default build without it fails: "no matching package")
+STAGED="swiftsync-verify-wasm swiftsync-verify libzync engine/verify-core prover/methods/guest/src/handover_pin.rs"
+# --engine: the module with engine (OpenVM) proofs (engine/VERIFIER.md), swiftsync_verify_wasm_engine.wasm. OpenVM and
+# stark-backend v2.1.0 patched (abi-stable, nozstd, nologging): made on the HOST by engine/scripts/openvm_src.sh from the
+# pinned commits (the container has no git), under this crate's target/ (never staged as source, ignored by git), and
+# accepted only with the tree digest below, which the CONTAINER recomputes before staging it: a tree it did not fetch
+# is used only if it is exactly this one (engine/scripts/tree_digest.sh).
+ENGINE=0
+for a in "${ARGS[@]}"; do [ "$a" = --engine ] && ENGINE=1; done
+OVM_PATCHES="engine/wasm-verify/openvm-abi-stable.patch engine/handover/openvm-verify-nozstd.patch engine/handover/stark-sdk-nologging.patch"
+OVM_DIGEST=38eccd0935910175840b4644340fb1b788b5c13a0818c57f46b2503b0547fa6e
+OVM_TREE=$CRATE/target/openvm-src
+if [ "$ENGINE" = 1 ]; then
+    STAGED="$STAGED engine/scripts/openvm_src.sh engine/scripts/tree_digest.sh $OVM_PATCHES"
+    if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
+        # shellcheck disable=SC2086 # the patch list
+        (cd "$REPO" && OVM_CACHE="$REPO/$CRATE/target/openvm-cache" engine/scripts/openvm_src.sh "$OVM_TREE" $OVM_PATCHES >&2)
+        got=$("$REPO/engine/scripts/tree_digest.sh" "$REPO/$OVM_TREE")
+        [ "$got" = "$OVM_DIGEST" ] || { echo "$0: the patched OpenVM tree's digest is $got, not the pinned $OVM_DIGEST" >&2; exit 1; }
+    fi
+fi
 # The stage path is FIXED: it reaches the bytes (reproduce/wasm.Dockerfile). SWIFTSYNC_WASM_STAGE is gone (a build at
 # another stage gave 05754e5f…, 235 bytes larger): refuse it rather than ignore it.
 STAGE=/tmp/swiftsync-wasm-build
@@ -121,6 +142,8 @@ for c in swiftsync-verify-wasm swiftsync-verify libzync; do
     # every target/ dir at any depth (build output, never source; no tracked path has a component named target)
     (cd "$REPO/$c" && tar --exclude=target --exclude=./vectors -cf - .) | (cd "$STAGE/$c" && tar -xf -)
 done
+mkdir -p "$STAGE/engine/verify-core"
+(cd "$REPO/engine/verify-core" && tar --exclude=target -cf - .) | (cd "$STAGE/engine/verify-core" && tar -xf -)
 # swiftsync-verify include!s the guest's handover pin (one source for the pinned receipt ids)
 mkdir -p "$STAGE/prover/methods/guest/src"
 cp "$REPO/prover/methods/guest/src/handover_pin.rs" "$STAGE/prover/methods/guest/src/"
@@ -128,8 +151,29 @@ SYSROOT=$(rustc --print sysroot)
 export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SYSROOT=/rust-sysroot --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=$STAGE=/hazync"
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR
 # --locked: the staged Cargo.lock is the checkout's, used as it is (never re-resolved)
+if [ "$ENGINE" = 1 ]; then
+    # the tree checked HERE, by the container, before anything of it is staged (the host made it)
+    got=$("$REPO/engine/scripts/tree_digest.sh" "$REPO/$OVM_TREE")
+    [ "$got" = "$OVM_DIGEST" ] || { echo "the patched OpenVM tree's digest is $got, not the pinned $OVM_DIGEST: refusing" >&2; exit 1; }
+    mkdir -p "$STAGE/openvm-src"
+    (cd "$REPO/$OVM_TREE" && tar --exclude=./.cache -cf - .) | (cd "$STAGE/openvm-src" && tar -xf -)
+    # the engine graph's own lock (every default package and version kept; the patched crates added as path packages)
+    cp "$REPO/$CRATE/Cargo.engine.lock" "$STAGE/swiftsync-verify-wasm/Cargo.lock"
+    CFG=(--config 'patch."https://github.com/openvm-org/openvm.git".openvm-verify-stark-host.path="../openvm-src/openvm/crates/verify"')
+    while read -r f; do
+        n=$(sed -n '/^\[package\]/,/^\[/{s/^name = "\(.*\)"/\1/p}' "$f" | head -1)
+        d=$(dirname "$f")
+        [ -n "$n" ] && CFG+=(--config "patch.\"https://github.com/openvm-org/stark-backend.git\".$n.path=\"../openvm-src/stark-backend/${d#"$STAGE/openvm-src/stark-backend/"}\"")
+    done < <(find "$STAGE/openvm-src/stark-backend/crates" -name Cargo.toml -not -path "*/tests/*" -not -path "*/benches/*" | LC_ALL=C sort)
+    # a random source that refuses (no randomness in verification; swiftsync-verify-wasm src/lib.rs no_rng)
+    export RUSTFLAGS="$RUSTFLAGS --cfg getrandom_backend=\"custom\""
+    (cd "$STAGE/swiftsync-verify-wasm" && cargo build --locked --release --target wasm32-unknown-unknown --features engine "${CFG[@]}")
+    W=swiftsync_verify_wasm_engine.wasm
+    cp "$STAGE/swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm" "$OUT/$W"
+else
 (cd "$STAGE/swiftsync-verify-wasm" && cargo build --locked --release --target wasm32-unknown-unknown)
 W=swiftsync_verify_wasm.wasm
 cp "$STAGE/swiftsync-verify-wasm/target/wasm32-unknown-unknown/release/$W" "$OUT/"
+fi
 printf 'built %s\n  raw     %8d bytes\n  gzipped %8d bytes\n  sha256  %s\n' "$CRATE/target/wasm32-unknown-unknown/release/$W" \
     "$(stat -c%s "$OUT/$W")" "$(gzip -9 -c "$OUT/$W" | wc -c)" "$(sha256sum "$OUT/$W" | cut -d' ' -f1)"
