@@ -3,13 +3,13 @@
 The questions to answer before deciding whether the engine replaces RISC Zero. Each answer is marked MEASURED,
 ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under each question; the list is the user's.
 
-## Status at 26.11.2026 (morning)
+## Status at 26.11.2026 (afternoon)
 
 | | question | status | in one line |
 |---|---|---|---|
 | Q1 | audits | OPEN | recursion/deferral audited at a pre-release commit; post-audit diffs measured (thousands of lines); ECC/algebra not in the 2.0 audit: ask OpenVM |
 | Q2-Q6 | params, maintenance, compat layer, image id, guest edits | answered | see each |
-| **Q7** | **#794 attack blocks** | **BAD as is** | **512 MiB guest memory (OpenVM's hard ceiling) vs RISC Zero's 3 GiB: tap_small not provable; needs the guest to use less memory (reclaiming allocator)** |
+| **Q7** | **#794 attack blocks** | **fix in, test pending** | **512 MiB guest memory is OpenVM's hard ceiling; #794's C-heap recycling now on the engine (+1% cost, journals identical, results/c_heap); tap_small re-run with it pending (anchors regenerated in node format 2)** |
 | Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
 | Q9 | Core vectors + rig | GOOD | 22,666 vectors identical; rig 96/96 agree with Core 31.1 |
 | Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
@@ -21,8 +21,9 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 | Q16 | whole-chain cost | ESTIMATE | ~$16-37k depending on card and fixed cost |
 | Q17 | tip time | GOOD | 969,122: 33.9 s proving on 4x PRO 6000 (RISC Zero 191 s end to end) |
 | Q18-Q19 | levers, scaling | measured | segpar -25% on the aggregate |
-| Q20 | migration | started | header zAPP ported: whole chain in 4.4 min vs RISC Zero's 99.5 on the same card (22.4x) |
-| Q21-Q24 | formats, genesis plan, composition, upkeep | answered | see each |
+| Q20 | migration | in progress | header zAPP: whole chain in 4.4 min vs RISC Zero's 99.5 on the same card (22.4x), MMR root equal; hints, utreexo, utreexo-tip, zeroconf guests compile (end-to-end needs an engine core chain: next) |
+| Q21-Q24 | formats, genesis plan, composition, upkeep | answered | see each; trie/coin log node format 2 ADOPTED (results/node_format2: -12% trie, engine == RISC Zero) |
+| Q24+ | upgrades | design + step 1 | engine/HANDOVER.md: the previous OpenVM's verifier in the new guest; step 1 measured (15.6B, accepts a real proof, refuses a flipped byte) |
 
   A. Trust and soundness
   1. Exactly which OpenVM version, commit and proving system does the engine use, and which audits cover that exact version? Include the auditor, the date,
