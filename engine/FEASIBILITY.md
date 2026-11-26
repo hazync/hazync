@@ -156,6 +156,16 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        built HAZYNC_NETWORK=regtest, block JSON from worst.py's regtest node (mkblock.py), engine-export, then execute
        every chunk on the engine (CPU) and compare journals; the single-tapscript and SIGHASH_NONE cases likewise.
   8. Does it prove an old block with many inputs (364,292), plus a few of the edge blocks from blocks.sh?
+
+     **Answer (26.11.2026): 364,292 PROVED on GPU; 10 era blocks MEASURED on CPU; blocks.sh edge blocks NOT YET.**
+     - 364,292 (5,569 inputs, legacy sighash over one huge transaction): 16 chunks + trie + aggregate on ONE RTX PRO
+       6000 Blackwell, 201 s wall, final proof verified, every chunk and trie journal IDENTICAL to RISC Zero's
+       (results/gpu_blackwell_364292). The default cost model mis-prices its legacy sighash (chunks 12.49B falling to
+       1.39B); the fitted model (HAZYNC_COST_MODEL=fit) balances them (7.28B .. 5.66B), journals again identical.
+     - Blocks 100,000, 200,000, 250,000, 300,000, 400,000 ... 900,000: every chunk and trie journal identical on the
+       engine (CPU, results/era_costs); 130,000, 140,000, 741,000, 962,000, 965,500, 976,379 likewise (exports on the
+       build box; 46 chunk/trie inputs of 976379t, 364292t, 962000t, 965500 also in a 64 MiB address space, below).
+     - The #794 attack blocks (regtest) are Q7; blocks.sh's mainnet edge list is still to run.
   9. Do all 22,666 Core test vectors and the 97 rig cases pass with verdicts identical to risc0's?
 
      **Answer (25.11.2026): Core vectors MEASURED, all identical; rig cases NOT YET.** All 22,666 of Core's script and
@@ -206,25 +216,43 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        (or carried as our one fork line). UNKNOWN: phone time (expect a small multiple of the laptop's).
   12. Windows: does the GPU prover build and prove on Windows with a native CUDA toolchain? What's the minimum driver version?
 
-     **In progress (25.11.2026; .github/workflows/engine-windows.yml on windows-2022, CUDA 12.9.1, MSVC 14.44):**
-     OpenVM v2.1.0 does not build with MSVC as shipped. Found and patched so far (engine/ci/*.patch, applied by
-     engine/ci/openvm-patches.sh; each a same-values portability edit, upstream candidates):
-     - stark-backend vpmm_shim.cu: C++20 designated initializers under --std=c++17 (GCC extension);
-     - `uint` (glibc's typedef) in histogram.cuh / matrix.cu / poseidon2.cuh: engine/ci/msvc_builtins.h;
-     - GCC's __builtin_clz / __builtin_ctz in four .cu files: same header (CUDA __clz/__ffs on device, _BitScan* host);
-     - C99 compound literals `(uint32_t[2]){a, b}` in rv32im mul/mulh/divrem and bigint: std::array temporaries;
-     - GCC's -Wno-maybe-uninitialized passed to cl (D8021) by openvm-circuit / recursion build.rs: only off MSVC.
-     hzengine's own Unix-only code (stdout capture, serve's reply channel) ported to SetStdHandle (71ae6d49).
-     Still to see: the rest of the build, linking, then proving on a real Windows card (Xesktop PRO 6000).
+     **Answer (26.11.2026): BUILDS (CI), proving on a real Windows card NOT YET.**
+     - The CUDA hzengine.exe builds with MSVC 14.44 + CUDA 12.9.1 on windows-2022: run 45660566592, 28 min, one
+       artifact for sm_61, 70, 75, 80, 86, 89 and 120 (Pascal through Blackwell). It is packaged, not run: it imports
+       nvcuda.dll, which the GPU-less runner lacks (exit 127).
+     - OpenVM v2.1.0 does not build with MSVC as shipped. engine/ci/openvm-msvc.patch + stark-backend-msvc.patch
+       (applied by engine/ci/openvm-patches.sh) carry same-values portability edits, each an upstream candidate:
+       C++20 designated initializers, glibc's `uint`, GCC's __builtin_clz/ctz (engine/ci/msvc_builtins.h), C99
+       compound literals, GCC-only warning flags, zero-length S-box arrays (same column layout), MSVC's traditional
+       preprocessor and __VA_ARGS__, the GNU `?:` operator, CUB scans over Fp with an explicit operator, and an nvlink
+       temp-file race (NVCC_THREADS=1). hzengine's own Unix-only code uses SetStdHandle on Windows (71ae6d49).
+     - The exe predates the 25.11 night's memory work (app VM release, aggregation tree, MiB segment cap): a new
+       build is needed before the Windows test (Xesktop RTX PRO 6000, then the GTX 1050 Ti laptop).
+     - Minimum driver: CUDA 12.9 needs a 575-series driver or newer (NVIDIA's CUDA 12.9 release notes); not tried
+       on Windows yet.
   13. Cards: which GPUs are supported (oldest architecture, minimum memory)? Do consumer cards like a 3060 or 4090 work, and how fast?
 
-     **Partly answered (25.11.2026):** OpenVM's CUDA kernels use `__match_any_sync` (histogram.cuh), which needs
-     **sm_70 (Volta) or newer**: Pascal (GTX 10xx, e.g. the GTX 1050 Ti test laptop) is NOT supported as shipped
-     (build error on sm_61, run 45642025937). Supported: Volta, Turing (RTX 20xx, GTX 16xx), Ampere (RTX 30xx, A40,
-     A6000), Ada (RTX 40xx, L40S), Blackwell (RTX 50xx, PRO 6000). Pascal would need an emulated __match_any_sync for
-     sm_61 (a kernel patch) or the CPU prover. MEASURED so far: A40, RTX A6000, RTX PRO 6000 Blackwell. Minimum
-     memory and consumer-card speed: not yet measured.
+     **Answer (26.11.2026): sm_61 (Pascal) and newer BUILD; MEASURED on five card types; 4 GB cards close.**
+     - Architectures: OpenVM's only Volta+ instruction is `__match_any_sync` (histogram.cuh, a de-duplication of
+       atomic adds). Below sm_70 each thread adds its own count, the same totals (124ff7b2, in openvm-msvc.patch), so
+       Pascal (GTX 10xx) builds; Pascal proving is NOT YET RUN (the GTX 1050 Ti laptop is the test).
+     - MEASURED, full block 976,379, every proof verified, journals identical: RTX PRO 6000 Blackwell 65 s (one card),
+       42.6-48 s (four); A40 132 s (engine defaults, 3 provers); RTX 4090 (consumer, 24 GB) 330-357 s one prover at
+       2 GiB segments; L4 604 s; RTX A6000. Consumer cards work.
+     - Minimum memory (results/gpu_a40_memory): one prover, full block, nvidia-smi peak, from 6.7 GB at OpenVM
+       defaults down to **3,943 MiB** (1.5 GiB segments, 584 s on a 4090) or **3,765 MiB** (1 GiB, 1,619 s), with:
+       a 2^26 guest address space (keygen; every heavy chunk/trie input fits, journals identical), a proving-time
+       aggregation tree of 2/2, the app VM's 1.2 GiB device key released before aggregation, and HZ_SEG_MEM_MB.
+       ~400 MiB of each figure is the 4090's CUDA context (SM-count dependent; a 1050 Ti's is not measured). So 6 GB
+       cards fit with margin; 4 GB cards are borderline until measured on one.
   14. Is there a CPU-only prover, and how fast is it?
+
+     **Answer (26.11.2026): YES, the same engine without the cuda feature; MEASURED on the 16-core build box.**
+     - hzengine built without `--features cuda` proves on CPU with the same keys and the same proofs (verified by the
+       same verifier). Block 130,000 (1 chunk + trie + aggregate): 373 s on 16 cores (results/gpu_a40_memory, CPU check
+       of f38eb2fa); 1,286 s with 2 leaf workers and 1 GiB segments (results/segpar_cpu).
+     - A modern full block on CPU is not measured end to end; from the era costs (~25.8B for 976,379) and 130,000's
+       rate it would be hours per block on 16 cores: a fallback and a verifier/test tool, not a way to keep up.
   15. Reproducible ids: do two clean builds on different machines give the same image id? Can that be pinned the way reproduce/LIBZYNC_IDS is pinned today?
 
      **Answer (25.11.2026): MEASURED on one machine, two setups.**
