@@ -40,6 +40,11 @@ def engine_exec(keys, inp, journal, self_id=False):
     r = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     return r.returncode, re.sub(r"\x1b\[[0-9;]*m", "", r.stdout + r.stderr)
 
+AGG_REFUSAL = "aggregate: bv=false ph=true carry=true rt=true time=true smt=true"
+
+def refusal(text):
+    return next((l.strip() for l in text.splitlines() if "aggregate: bv=" in l and "panicked" not in l), None)
+
 # the honest block: hints, then valid at both levels
 rc, _ = run([H, "libzync-hints", f"{O}/base.lzb"], dict(env, HAZYNC_BLOCK=B), f"{O}/base.hints.log")
 verdict(rc == 0, "base hints", f"rc {rc}")
@@ -73,11 +78,6 @@ chunk("height_lock_met", 304, 0, setp(coin_height=961999), "1")
 chunk("height_lock_unmet", 304, 0, setp(coin_height=962000), "0")
 chunk("value_more", 4, 0, setp(value=v + 1000), "1")
 chunk("value_below_outputs", 4, 0, setp(value=0), "0")
-
-AGG_REFUSAL = "aggregate: bv=false ph=true carry=true rt=true time=true smt=true"
-
-def refusal(text):
-    return next((l.strip() for l in text.splitlines() if "aggregate: bv=" in l and "panicked" not in l), None)
 
 def agg(name, edit, flag):
     # The block's coin-log collect run (the aggregate without ECMH hints) is where RISC Zero refuses it, before any
