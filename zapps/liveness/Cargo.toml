@@ -27,6 +27,8 @@ serde_json = "1"
 # TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): the regtest harness's image for the OK-verdict
 # tests on real regtest proofs. Never in a release or WASM build (corecheck's compile_error!, scripts/wasm-build.sh).
 regtest-test = ["zapp-corecheck/regtest-test"]
+# engine (OpenVM) core proofs (engine/VERIFIER.md): the image record carries the key
+engine = ["zapp-corecheck/engine"]
 
 [profile.release]
 opt-level = "z"
