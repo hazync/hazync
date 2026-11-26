@@ -3,6 +3,27 @@
 The questions to answer before deciding whether the engine replaces RISC Zero. Each answer is marked MEASURED,
 ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under each question; the list is the user's.
 
+## Status at 26.11.2026 (morning)
+
+| | question | status | in one line |
+|---|---|---|---|
+| Q1 | audits | OPEN | recursion/deferral audited at a pre-release commit; post-audit diffs measured (thousands of lines); ECC/algebra not in the 2.0 audit: ask OpenVM |
+| Q2-Q6 | params, maintenance, compat layer, image id, guest edits | answered | see each |
+| **Q7** | **#794 attack blocks** | **BAD as is** | **512 MiB guest memory vs RISC Zero's 3 GiB: tap_small not provable; needs a larger address space or a reclaiming allocator** |
+| Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
+| Q9 | Core vectors + rig | GOOD so far | 22,666 vectors identical; rig 55/55 agree, 41 to run |
+| Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
+| Q11 | browser verifier | GOOD | full check (STARK + image + journal) in Node and Chromium, 25-39 ms; phone not tried |
+| Q12 | Windows | builds | CI exe (sm_61..120); proving on a Windows card not tried |
+| Q13 | cards | GOOD | 5 card types; full block in 3.8-3.9 GB at 2^26 (test image only, Q7) |
+| Q14 | CPU prover | yes | slow (hours per modern block) |
+| Q15 | reproducible ids | answered | one machine, two setups |
+| Q16 | whole-chain cost | ESTIMATE | ~$16-37k depending on card and fixed cost |
+| Q17 | tip time | GOOD | 969,122: 33.9 s proving on 4x PRO 6000 (RISC Zero 191 s end to end) |
+| Q18-Q19 | levers, scaling | measured | segpar -25% on the aggregate |
+| Q20 | migration | started | header zAPP ported and proved |
+| Q21-Q24 | formats, genesis plan, composition, upkeep | answered | see each |
+
   A. Trust and soundness
   1. Exactly which OpenVM version, commit and proving system does the engine use, and which audits cover that exact version? Include the auditor, the date,
      the scope, and any open findings. Which parts are unaudited (GPU prover, recursion, SHA and bigint extensions, the STARK-to-SNARK wrapper)?
@@ -451,5 +472,10 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        unreviewed AND the OpenVM team will not cover them), Q9 (any verdict differing from RISC Zero / Core on the
        test vectors), Q7 (a Core-valid block the engine cannot prove at all).
        So far: Q1 partly open (audit at a pre-release commit; ECC not in the 2.0 audit); Q9 Core vectors ALL IDENTICAL (rig cases to do); Q7 untested.
+       **26.11.2026:** Q9: the rig's first 55 cases all agree with Core 31.1 (41 to run). Q7 CAME BACK BADLY as the
+       engine stands: tap_small (a Core-valid regtest block RISC Zero proves) cannot be proved at OpenVM's 512 MiB
+       (one input runs out of memory; RISC Zero's guest has 3 GiB). It is a deal-breaker unless one of two fixes
+       works: a larger OpenVM address space (soundness above 2^29 to be confirmed by OpenVM) or a reclaiming
+       allocator in the guest (an image change; also what tap_full needs on RISC Zero). Q1 diff sizes measured.
      - Just work: Q11 (WASM: the probe works), Q15 (ids: fixed on one machine, container next), Q12/Q13 (Windows,
        consumer cards), Q16-Q19 (cost/speed: measured strong), Q20-Q24 (migration).
