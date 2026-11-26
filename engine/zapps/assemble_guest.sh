@@ -31,7 +31,11 @@ for m in re.findall(r'#\[path = "(\.\./\.\./\.\./\.\./\.\./libzync/src/([a-z_]+)
     rel, name = m
     shutil.copy(os.path.join(repo, "libzync/src", name + ".rs"), os.path.join(out, "lz_" + name + ".rs"))
     rep('#[path = "%s"]' % rel, '#[path = "lz_%s.rs"]' % name)
-assert "../libzync" not in s, "an include outside libzync/src remains"
+# the core guest's files a zAPP include!s (handover_pin.rs: the lineage format), copied beside it as they are
+for rel, name in re.findall(r'include!\("(\.\./\.\./\.\./\.\./methods/guest/src/([a-z_]+)\.rs)"\)', s):
+    shutil.copy(os.path.join(repo, "prover/methods/guest/src", name + ".rs"), os.path.join(out, "core_" + name + ".rs"))
+    rep('include!("%s")' % rel, 'include!("core_%s.rs")' % name)
+assert "../libzync" not in s and "../methods/" not in s, "an include outside the copied files remains"
 open(p, "w").write(s)
 print("edits applied:", p)
 PY
