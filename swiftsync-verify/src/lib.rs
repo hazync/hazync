@@ -160,6 +160,10 @@ impl Image {
     pub fn with_product(&'static self) -> &'static Image {
         Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH, ..*self }))
     }
+    /// The same image as an engine (OpenVM) build: node format 2 (profile bit 7), what every engine guest computes.
+    pub fn with_node2(&'static self) -> &'static Image {
+        Box::leak(Box::new(Image { profile: self.profile | PROFILE_NODE2, ..*self }))
+    }
     pub fn method_id(&self) -> Digest {
         Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
     }

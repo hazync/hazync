@@ -13,6 +13,10 @@
 //!
 //! `--image <hex>` replaces the built-in image id for the network: the id you rebuilt yourself (§5 step 9).
 //!
+//! An engine (OpenVM) proof file (`HZE1`, engine/VERIFIER.md; a build with `--features engine`): `--vk <file>` is the
+//! image's verifying key, which must be PINNED (OpenVM's verifier trusts the key it is given). No engine image is
+//! published yet, so for now only your own rebuild pins one: `--image <id> --vk <that build's key>`.
+//!
 //! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
 //! one that pins any (docs/libzync/HANDOVER.md).
 //!
@@ -66,6 +70,7 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
+    let mut vk_path: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     let mut coinlog = false;
     let mut product = false;
@@ -80,6 +85,7 @@ fn main() {
             "--anchor" => anchor = Some(args.next().unwrap_or_else(|| usage())),
             "--bitcoin-cli" => cli = Some(args.next().unwrap_or_else(|| usage())),
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
+            "--vk" => vk_path = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
             "--coinlog" => coinlog = true,
             "--product" => { coinlog = true; product = true }
@@ -163,6 +169,8 @@ fn main() {
         let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(receipt))));
         println!("  {} is a proof bundle; its header is checked against the verified result", esc(receipt));
         check_bundle(&b, image, anchor, now)
+    } else if swiftsync_verify::is_engine_proof(&receipt_bytes) {
+        engine_verify(&receipt_bytes, image, image_hex.is_some(), vk_path.as_deref(), anchor, now, &read)
     } else {
         verify(&Inputs { receipt: &receipt_bytes, image, anchor, now })
     };
@@ -338,4 +346,30 @@ fn display(h: &[u8; 32]) -> String {
 /// cum_work (32 bytes LE) as `getblockheader` prints chainwork: 64 hex digits, big-endian.
 fn work_hex(w: &[u8; 32]) -> String {
     display(w)
+}
+
+/// An engine (OpenVM) proof file (engine/VERIFIER.md): `--vk <file>` is the image's verifying key. Its PIN (SHA-256 of
+/// the file) authenticates it: OpenVM's verifier trusts the key it is given. No engine image is published yet, so the
+/// only pin is the reader's own: with `--image <id>` (an image you rebuilt), the key file from that build is taken as
+/// yours and pinned as given; a published engine image's pin will come from its record.
+#[cfg(feature = "engine")]
+fn engine_verify(file: &[u8], image: &'static Image, own_image: bool, vk: Option<&str>, anchor: Option<ChainState>, now: u64,
+                 read: &dyn Fn(&str) -> Vec<u8>) -> swiftsync_verify::Report {
+    use sha2::Digest as _;
+    let Some(vk) = vk else { fail("an engine proof: give the image's verifying key with --vk <file>") };
+    if !own_image {
+        fail("an engine proof: no engine image is published yet, so its key cannot be pinned from a record; give the id of \
+              the image you rebuilt with --image <id> and that build's key with --vk");
+    }
+    let bytes = read(vk);
+    let pin: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+    println!("  engine proof; verifying key {} taken as your own build's (pin {})", esc(vk), swiftsync_verify::hex(&pin));
+    swiftsync_verify::verify_engine(&Inputs { receipt: file, image: image.with_node2(), anchor, now },
+                                    &swiftsync_verify::EngineKey { bytes: &bytes, pin })
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_verify(_: &[u8], _: &'static Image, _: bool, _: Option<&str>, _: Option<ChainState>, _: u64,
+                 _: &dyn Fn(&str) -> Vec<u8>) -> swiftsync_verify::Report {
+    fail("an engine (OpenVM) proof: this verifier was built without engine support (cargo build --features engine)")
 }
