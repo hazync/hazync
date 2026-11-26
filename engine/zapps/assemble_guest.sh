@@ -64,5 +64,9 @@ $SHA
 serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
 openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", features = ["std"] }
 $EXTRA
+
+[features]
+# metering only (hzengine build HZ_GUEST_FEATURES=bench-noverify): env::verify accepts without proofs; never shipped
+bench-noverify = ["risc0-zkvm/bench-noverify"]
 EOF
 echo "assembled $OUT ($Z)"
