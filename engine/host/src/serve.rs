@@ -94,13 +94,13 @@ fn handle(e: &Engine, dir: &Path, r: &Req) -> Result<serde_json::Value> {
     match r.op.as_str() {
         "execute" => {
             let input = r.input.as_ref().ok_or_else(|| eyre::eyre!("execute: input"))?;
-            let o = crate::r0::execute_with(e, dir, input, &r.children, r.self_id, r.dry, r.journal.as_deref(), r.log.as_deref())?;
+            let o = crate::r0::execute_with(e, dir, input, &r.children, r.self_id.then_some(crate::r0::SELF_ID_AT), r.dry, r.journal.as_deref(), r.log.as_deref())?;
             Ok(serde_json::json!({"ok": true, "exit": o.exit, "cost": o.cost, "instret": o.instret, "secs": t.elapsed().as_secs_f64()}))
         }
         "prove" => {
             let input = r.input.as_ref().ok_or_else(|| eyre::eyre!("prove: input"))?;
             let out = r.out.as_ref().ok_or_else(|| eyre::eyre!("prove: out"))?;
-            crate::r0::prove_with_known(e, dir, input, &r.children, r.self_id, r.journal.as_deref(), out)?;
+            crate::r0::prove_with_known(e, dir, input, &r.children, r.self_id.then_some(crate::r0::SELF_ID_AT), r.journal.as_deref(), out)?;
             Ok(serde_json::json!({"ok": true, "secs": t.elapsed().as_secs_f64()}))
         }
         "prove_segments" => {

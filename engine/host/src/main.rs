@@ -87,6 +87,9 @@ enum Cmd {
         /// Put this image's id at bytes 4..36 of the stream (where the product host writes its METHOD_ID).
         #[arg(long)]
         self_id: bool,
+        /// Put this image's id at this byte of the stream instead (a zAPP stream's own layout, e.g. utreexo: 0).
+        #[arg(long, conflicts_with = "self_id")]
+        self_id_at: Option<usize>,
         #[arg(long)]
         out: PathBuf,
     },
@@ -100,6 +103,9 @@ enum Cmd {
         child: Vec<PathBuf>,
         #[arg(long)]
         self_id: bool,
+        /// As prove's --self-id-at.
+        #[arg(long, conflicts_with = "self_id")]
+        self_id_at: Option<usize>,
         /// A collect run: no in-guest verification, and the guest cannot commit.
         #[arg(long)]
         dry: bool,
@@ -176,8 +182,8 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::SelftestLeaf { dir, value, out } => selftest::leaf(&dir, value, &out),
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
-        Cmd::Prove { dir, input, child, self_id, out } => r0::prove(&dir, &input, &child, self_id, &out),
-        Cmd::Execute { dir, input, child, self_id, dry, journal, log } => r0::execute(&dir, &input, &child, self_id, dry, journal.as_deref(), log.as_deref()),
+        Cmd::Prove { dir, input, child, self_id, self_id_at, out } => r0::prove(&dir, &input, &child, self_at(self_id, self_id_at), &out),
+        Cmd::Execute { dir, input, child, self_id, self_id_at, dry, journal, log } => r0::execute(&dir, &input, &child, self_at(self_id, self_id_at), dry, journal.as_deref(), log.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each, workers } => block::prove_block(&dir, &export, &out, verify_each, workers.unwrap_or_else(|| engine::gpu_count() * engine::default_gpu_share())),
         Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::GpuShare => {
@@ -199,4 +205,9 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
         Cmd::WasmInputs { dir, proof, out } => engine::wasm_inputs(&dir, &proof, &out),
     }
+}
+
+/// --self-id (the product host's layout) or --self-id-at <byte>.
+fn self_at(self_id: bool, at: Option<usize>) -> Option<usize> {
+    at.or(self_id.then_some(r0::SELF_ID_AT))
 }

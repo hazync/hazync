@@ -394,23 +394,39 @@ fn main() {
             println!("BENCH_TRIE total {} cycles, {} segments, executed in {:.1} s", info.cycles(), info.segments.len(), t.elapsed().as_secs_f64());
         }
         Some("prove-zeroconf") if a.len() >= 6 => {
+            // --stream <file> (the OpenVM engine): <core tip> and <chunk> are the JOURNALS of engine proofs (the proofs go
+            // to `hzengine prove --child`, tip first, then the chunk: the guest's env::verify order); the guest's input
+            // stream is written and nothing is proved here
+            let stream = flag(&a, "--stream");
             let load = |p: &str| -> Receipt { bincode::deserialize(&std::fs::read(p).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("{p}: {e}"))) };
-            let (tip, chunk) = (load(&a[1]), load(&a[2]));
-            let cs: ChainState = tip.journal.decode().unwrap_or_else(|e| die(&format!("tip journal: {e}")));
+            let (tip, chunk) = if stream.is_some() { (None, None) } else { (Some(load(&a[1])), Some(load(&a[2]))) };
+            let jread = |p: &str| std::fs::read(p).unwrap_or_else(|e| die(&format!("{p}: {e}")));
+            let (tip_j, chunk_j) = match (&tip, &chunk) {
+                (Some(t), Some(c)) => (t.journal.bytes.clone(), c.journal.bytes.clone()),
+                _ => (jread(&a[1]), jread(&a[2])),
+            };
+            let cs: ChainState = risc0_zkvm::serde::from_slice(&jwords(&tip_j)).unwrap_or_else(|e| die(&format!("tip journal: {e}")));
             let idx: u32 = a[3].parse().unwrap_or_else(|_| die("record index?"));
             let raw: Vec<(u64, Vec<String>)> = serde_json::from_slice(&std::fs::read(&a[4]).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("paths.json: {e}")));
             let paths: Vec<(u64, Vec<[u8; 32]>)> = raw.into_iter().map(|(p, v)| (p, v.iter().map(|x| h32(x)).collect())).collect();
             let signet = a.iter().any(|x| x == "--signet");
+            // one word vector for the ExecutorEnv and --stream alike (write(&T) is write_slice(serde::to_vec(T)))
+            let mut ws: Vec<u32> = Vec::new();
+            ws.extend(sw(&cs.self_id)); ws.extend(sw(&tip_j)); ws.extend(sw(&chunk_j)); ws.extend(sw(&signet));
+            ws.extend(sw(&idx)); ws.extend(sw(&paths));
+            if let Some(sp) = &stream {
+                let bytes: Vec<u8> = ws.iter().flat_map(|x| x.to_le_bytes()).collect();
+                std::fs::write(sp, &bytes).unwrap_or_else(|e| die(&format!("--stream: {e}")));
+                println!("ZEROCONF_STREAM record {idx} -> {sp} ({} bytes); core={} core_height={} children: tip, then chunk",
+                         bytes.len(), id_hex(&cs.self_id), cs.height);
+                return;
+            }
+            let (tip, chunk) = (tip.unwrap(), chunk.unwrap());
             let env = ExecutorEnv::builder()
                 .add_assumption(tip.clone()).add_assumption(chunk.clone())
-                .write(&cs.self_id).unwrap()
-                .write(&tip.journal.bytes).unwrap()
-                .write(&chunk.journal.bytes).unwrap()
-                .write(&signet).unwrap()
-                .write(&idx).unwrap()
-                .write(&paths).unwrap()
+                .write_slice(&ws)
                 .build().unwrap();
             let r = default_prover().prove(env, ZYNCAPP_ZEROCONF_ELF).unwrap_or_else(|e| die(&format!("prove: {e}"))).receipt;
             std::fs::write(&a[5], bincode::serialize(&r).unwrap()).unwrap_or_else(|e| die(&e.to_string()));
@@ -619,21 +635,13 @@ fn hints_prove(a: &[String]) {
                  cs.height, hp, w.file.len(), hex(&dv.hints_sha256), dv.n_counted, dv.n_unspent, dv.unspent_value,
                  hex(&dv.undo_sha256), disp(&dv.block_hash), t0.elapsed().as_secs_f64());
     }
+    // one word vector for the ExecutorEnv and --stream alike (write(&T) is write_slice(serde::to_vec(T)))
+    let mut ws: Vec<u32> = Vec::new();
+    ws.extend(sw(&core_id_in)); ws.extend(sw(&journal)); ws.extend(sw(&signet)); ws.extend(sw(&format)); ws.extend(sw(&stop));
+    ws.extend(sw(&hints_host::genesis(signet).to_vec())); ws.extend(sw(&prof));
+    ws.extend_from_slice(&w.frames); ws.push(cs.height - stop); ws.extend_from_slice(&w.tail);
     if let Some(sp) = &stream {
-        // the same values in the same order as the builder below: write(&T) is RISC Zero's serde words, write_slice raw words
-        let mut words: Vec<u32> = Vec::new();
-        let mut put = |v: Vec<u32>| words.extend(v);
-        put(risc0_zkvm::serde::to_vec(&core_id_in).unwrap());
-        put(risc0_zkvm::serde::to_vec(&journal).unwrap());
-        put(risc0_zkvm::serde::to_vec(&signet).unwrap());
-        put(risc0_zkvm::serde::to_vec(&format).unwrap());
-        put(risc0_zkvm::serde::to_vec(&stop).unwrap());
-        put(risc0_zkvm::serde::to_vec(&hints_host::genesis(signet).to_vec()).unwrap());
-        put(risc0_zkvm::serde::to_vec(&prof).unwrap());
-        put(w.frames.clone());
-        put(vec![cs.height - stop]);
-        put(w.tail.clone());
-        let bytes: Vec<u8> = words.iter().flat_map(|x| x.to_le_bytes()).collect();
+        let bytes: Vec<u8> = ws.iter().flat_map(|x| x.to_le_bytes()).collect();
         std::fs::write(sp, &bytes).unwrap_or_else(|e| die(&format!("--stream: {e}")));
         let dv = w.derived.as_ref().unwrap();
         println!("HINTS_STREAM H={stop} -> {sp} ({} bytes); expect hints_sha256={} block={} core={} core_height={}",
@@ -645,9 +653,7 @@ fn hints_prove(a: &[String]) {
         Some(r) => { b.add_assumption(r.clone()); }
         None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(cs.self_id), journal.clone())); }
     }
-    b.write(&core_id_in).unwrap().write(&journal).unwrap().write(&signet).unwrap().write(&format).unwrap().write(&stop).unwrap()
-        .write(&hints_host::genesis(signet).to_vec()).unwrap().write(&prof).unwrap()
-        .write_slice(&w.frames).write_slice(&[cs.height - stop]).write_slice(&w.tail);
+    b.write_slice(&ws);
     let env = b.build().unwrap();
     let t1 = std::time::Instant::now();
     let check = |z: &HintsStatement| {
@@ -731,14 +737,20 @@ fn utreexo_prove(a: &[String]) {
     let stop: u32 = a[2].parse().unwrap_or_else(|_| die("H?"));
     let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
     let signet = a.iter().any(|x| x == "--signet");
-    let execute = a.iter().any(|x| x == "--execute");
+    // --stream <file> (the OpenVM engine): write the guest's input stream, word for word what the ExecutorEnv below gets,
+    // and stop. One run only (a chained run needs the previous run's ENGINE proof). The guest's own id is the stream's
+    // first 8 words: zero here, the engine writes its image id there (`hzengine prove --self-id-at 0`).
+    let stream = flag(a, "--stream");
+    let execute = a.iter().any(|x| x == "--execute") || stream.is_some();
     let split: u32 = flag(a, "--split").map(|x| x.parse().unwrap_or_else(|_| die("--split N"))).unwrap_or(stop).max(1);
+    if stream.is_some() && split < stop { die("--stream writes one run: no --split"); }
     let elf: Vec<u8> = match flag(a, "--elf") {
         Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
         None => ZYNCAPP_UTREEXO_ELF.to_vec(),
     };
-    if elf.is_empty() { die("no utreexo guest: built with RISC0_SKIP_BUILD, so give --elf"); }
-    let self_id_d = risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}")));
+    if elf.is_empty() && stream.is_none() { die("no utreexo guest: built with RISC0_SKIP_BUILD, so give --elf"); }
+    let self_id_d = if stream.is_some() { risc0_zkvm::sha::Digest::default() } else {
+        risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))) };
     let self_id: [u32; 8] = self_id_d.as_words().try_into().unwrap();
     let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
@@ -857,11 +869,14 @@ fn utreexo_prove(a: &[String]) {
             }
         }
         let sid = if tc.as_deref() == Some("prev_id") && i > 0 { let mut x = self_id; x[0] ^= 1; x } else { self_id };
-        b.write(&sid).unwrap().write(&core_id_in).unwrap().write(&if last { journal.clone() } else { Vec::new() }).unwrap()
-            .write(&signet).unwrap().write(&stop).unwrap().write(&utreexo_host::genesis(signet).to_vec()).unwrap()
-            .write(&prof).unwrap().write(&hi).unwrap();
+        // The run's whole input as one word vector (write(&T) is write_slice(serde::to_vec(T))): the ExecutorEnv gets it,
+        // and so does --stream, so the two cannot drift apart.
+        let mut ws: Vec<u32> = Vec::new();
+        ws.extend(sw(&sid)); ws.extend(sw(&core_id_in)); ws.extend(sw(&if last { journal.clone() } else { Vec::new() }));
+        ws.extend(sw(&signet)); ws.extend(sw(&stop)); ws.extend(sw(&utreexo_host::genesis(signet).to_vec()));
+        ws.extend(sw(&prof)); ws.extend(sw(&hi));
         match &prev {
-            None => { b.write(&0u32).unwrap(); }
+            None => ws.extend(sw(&0u32)),
             Some((pj, pr)) => {
                 let mut ps = states[i - 1].clone();
                 if tc.as_deref() == Some("state_bytes") { let n = ps.len(); ps[n - 1] ^= 1; }
@@ -869,11 +884,20 @@ fn utreexo_prove(a: &[String]) {
                     Some(r) => { b.add_assumption(r.clone()); }
                     None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(self_id), pj.clone())); }
                 }
-                b.write(&1u32).unwrap().write(pj).unwrap().write(&ps).unwrap();
+                ws.extend(sw(&1u32)); ws.extend(sw(pj)); ws.extend(sw(&ps));
             }
         }
-        b.write_slice(&words[off[lo as usize - 1]..off[hi as usize]]);
-        if last { b.write_slice(&[cs.height - stop]).write_slice(&tail_w); }
+        ws.extend_from_slice(&words[off[lo as usize - 1]..off[hi as usize]]);
+        if last { ws.push(cs.height - stop); ws.extend_from_slice(&tail_w); }
+        if let Some(sp) = &stream {
+            let bytes: Vec<u8> = ws.iter().flat_map(|x| x.to_le_bytes()).collect();
+            std::fs::write(sp, &bytes).unwrap_or_else(|e| die(&format!("--stream: {e}")));
+            let dv = derived.as_ref().unwrap_or_else(|| die("no native derivation to check the engine's statement against"));
+            println!("UTREEXO_STREAM H={stop} -> {sp} ({} bytes, self id at byte 0); expect leaves={} roots={} block={} core={} core_height={}",
+                     bytes.len(), dv.utreexo.leaves, roots_str(&dv.utreexo.roots()), disp(&dv.block_hash), id_hex(&core_id_in), cs.height);
+            return;
+        }
+        b.write_slice(&ws);
         let env = b.build().unwrap();
         let t1 = std::time::Instant::now();
         let (jb, rc) = if execute {
@@ -933,6 +957,9 @@ struct TipStatement {
     anchor_id: [u8; 32], core_height: u32, tip_hash: [u8; 32], cum_work: [u8; 32], max_time: u32, profile: u32,
 }
 
+/// A value as the guest's env::read sees it: RISC Zero's serde words.
+fn sw<T: Serialize + ?Sized>(v: &T) -> Vec<u32> { risc0_zkvm::serde::to_vec(v).unwrap() }
+
 fn jwords(b: &[u8]) -> Vec<u32> { b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() }
 
 /// The core state a step rests on: a receipt (proving) or prep's state JSON (execute only, an unresolved assumption).
@@ -957,14 +984,20 @@ fn utreexo_tip_prove(a: &[String]) {
     let (dir, prev_path, core_path, out) = (&a[1], &a[2], &a[4], &a[5]);
     let stop: u32 = a[3].parse().unwrap_or_else(|_| die("H?"));
     let signet = a.iter().any(|x| x == "--signet");
-    let execute = a.iter().any(|x| x == "--execute");
+    // --stream <file> (the OpenVM engine): write the guest's input stream and stop. Its own id is the stream's first 8
+    // words, zero here (`hzengine prove --self-id-at 0` writes the engine image's id); --base-id must then be the ENGINE
+    // utreexo image's id, and the previous statement a .journal of an engine proof (the proof itself goes to --child).
+    let stream = flag(a, "--stream");
+    if stream.is_some() && flag(a, "--base-id").is_none() { die("--stream needs --base-id <the engine utreexo image id>"); }
+    let execute = a.iter().any(|x| x == "--execute") || stream.is_some();
     let prof: u32 = flag(a, "--prof").map(|x| x.parse().unwrap_or_else(|_| die("--prof N"))).unwrap_or(0);
     let elf: Vec<u8> = match flag(a, "--elf") {
         Some(p) => std::fs::read(p).unwrap_or_else(|e| die(&format!("--elf: {e}"))),
         None => ZYNCAPP_UTREEXO_TIP_ELF.to_vec(),
     };
-    if elf.is_empty() { die("no utreexo-tip guest: built with RISC0_SKIP_BUILD, so give --elf"); }
-    let self_id_d = risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}")));
+    if elf.is_empty() && stream.is_none() { die("no utreexo-tip guest: built with RISC0_SKIP_BUILD, so give --elf"); }
+    let self_id_d = if stream.is_some() { risc0_zkvm::sha::Digest::default() } else {
+        risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))) };
     let self_id: [u32; 8] = self_id_d.as_words().try_into().unwrap();
     let base_id: [u32; 8] = match flag(a, "--base-id") {
         Some(x) => swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(h32(x))),
@@ -1144,10 +1177,20 @@ fn utreexo_tip_prove(a: &[String]) {
         None => { b.add_assumption(risc0_zkvm::ReceiptClaim::ok(risc0_zkvm::sha::Digest::from(prev_id), pj.clone())); }
     }
     let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
-    b.write(&self_id).unwrap().write(&base_id).unwrap().write(&core_id_in).unwrap().write(&journal).unwrap()
-        .write(&signet).unwrap().write(&prof).unwrap().write(&stop).unwrap().write(&prev_kind_in).unwrap().write(&pj_in).unwrap();
-    b.write_slice(&words);
-    b.write_slice(&[link.len() as u32]).write_slice(&link_w);
+    // one word vector for the ExecutorEnv and --stream alike (write(&T) is write_slice(serde::to_vec(T)))
+    let mut ws: Vec<u32> = Vec::new();
+    ws.extend(sw(&self_id)); ws.extend(sw(&base_id)); ws.extend(sw(&core_id_in)); ws.extend(sw(&journal));
+    ws.extend(sw(&signet)); ws.extend(sw(&prof)); ws.extend(sw(&stop)); ws.extend(sw(&prev_kind_in)); ws.extend(sw(&pj_in));
+    ws.extend_from_slice(&words);
+    ws.push(link.len() as u32); ws.extend_from_slice(&link_w);
+    if let Some(sp) = &stream {
+        let bytes: Vec<u8> = ws.iter().flat_map(|x| x.to_le_bytes()).collect();
+        std::fs::write(sp, &bytes).unwrap_or_else(|e| die(&format!("--stream: {e}")));
+        println!("UTREEXO_TIP_STREAM blocks={}..{stop} -> {sp} ({} bytes, self id at byte 0); expect leaves={n_leaves} roots={} block={} base={} core={}",
+                 p_height + 1, bytes.len(), roots_str(&n_roots), utreexo_tip_host::disp(&n_last), id_hex(&base_id), id_hex(&core_id_in));
+        return;
+    }
+    b.write_slice(&ws);
     let env = b.build().unwrap();
     let t1 = std::time::Instant::now();
     let jb = if execute {

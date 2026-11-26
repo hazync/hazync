@@ -33,13 +33,24 @@ fn control_flags(flags: u32, commits: &[[u8; 32]]) -> Vec<u8> {
     c
 }
 
-pub fn prove(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, out: &Path) -> Result<()> {
-    let e = Engine::load(dir)?;
-    prove_with(&e, dir, input, children, set_self_id, out)
+/// Where the product host's streams carry their own image id (a mode word, then METHOD_ID).
+pub const SELF_ID_AT: usize = 4;
+
+/// This image's id into `stream` at byte `at` (32 bytes, the id's 8 words little-endian, as the guest reads them).
+fn put_self_id(dir: &Path, stream: &mut [u8], at: usize) -> Result<()> {
+    let img = Engine::image(dir)?;
+    ensure!(at % 4 == 0 && stream.len() >= at + 32, "no room for a self id at byte {at} of a {}-byte stream", stream.len());
+    stream[at..at + 32].copy_from_slice(&image_id(&img));
+    Ok(())
 }
 
-pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, out: &Path) -> Result<()> {
-    prove_with_known(e, dir, input, children, set_self_id, None, out)
+pub fn prove(dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, out: &Path) -> Result<()> {
+    let e = Engine::load(dir)?;
+    prove_with(&e, dir, input, children, self_id_at, out)
+}
+
+pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, out: &Path) -> Result<()> {
+    prove_with_known(e, dir, input, children, self_id_at, None, out)
 }
 
 /// `known`: the journal an execution of this same input committed (skips the emit pass; checked against the proof).
@@ -59,7 +70,7 @@ fn child_keys(dir: &Path, own: &openvm_verify_stark_host::vk::VerificationBaseli
     }
 }
 
-pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, known: Option<&Path>, out: &Path) -> Result<()> {
+pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, known: Option<&Path>, out: &Path) -> Result<()> {
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
     let (child_dir, cbase) = child_keys(dir, &baseline)?;
@@ -75,11 +86,10 @@ pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBu
             ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "{}: not a proof of this image", p.display());
         }
     }
-    if set_self_id {
-        // The product host writes its RISC Zero METHOD_ID at bytes 4..36 (mode word, then the id): the engine's goes there.
-        let img = Engine::image(dir)?;
-        ensure!(stream.len() >= 36, "stream too short for a self id");
-        stream[4..36].copy_from_slice(&image_id(&img));
+    if let Some(at) = self_id_at {
+        // The product host writes its RISC Zero METHOD_ID at bytes 4..36 (mode word, then the id; SELF_ID_AT); a zAPP
+        // stream names its own offset (utreexo: 0). The engine's id goes there.
+        put_self_id(dir, &mut stream, at)?;
     }
     let commits: Vec<[u8; 32]> = calls.iter().map(|c| c.input_commit).collect();
     let mk = |emit| {
@@ -110,9 +120,9 @@ pub struct ExecOut {
     pub instret: u64,
 }
 
-pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<()> {
+pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<()> {
     let e = Engine::load(dir)?;
-    let o = execute_with(&e, dir, input, children, set_self_id, dry, journal_out, log)?;
+    let o = execute_with(&e, dir, input, children, self_id_at, dry, journal_out, log)?;
     match o.exit {
         None => println!("EXECUTE_OK"),
         Some(c) => println!("EXECUTE_EXIT {c}"),
@@ -120,7 +130,7 @@ pub fn execute(dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool
     Ok(())
 }
 
-pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<ExecOut> {
+pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, dry: bool, journal_out: Option<&Path>, log: Option<&Path>) -> Result<ExecOut> {
     ensure!(!dry || children.is_empty(), "a dry run takes no proofs");
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
@@ -131,9 +141,8 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
         proofs.push(read_proof(e, &cbase, c)?.0);
     }
     let calls = e.child_calls(&cbase, &proofs)?;
-    if set_self_id {
-        let img = Engine::image(dir)?;
-        stream[4..36].copy_from_slice(&image_id(&img));
+    if let Some(at) = self_id_at {
+        put_self_id(dir, &mut stream, at)?;
     }
     let commits: Vec<[u8; 32]> = calls.iter().map(|c| c.input_commit).collect();
     let mut s = StdIn::default();
