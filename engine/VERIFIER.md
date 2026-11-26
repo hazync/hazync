@@ -130,8 +130,9 @@ carrying the key; inputs made from the ENGINE chain where they depend on the nod
 | liveness | 5 claims (block 9 coin spent at 170; Hal's coin unspent with its value; change spent at 181; change unspent after 170, opened through the forest; created/coinbase pinned), proofs from the engine history (`zapp-liveness prove`) | all hold; 7 wrong questions and a format-1 proof refused |
 | assume | Core v31.1's real UTXO snapshot at 200; assumevalid | 204 coins, Core's hash_serialized_3; the 199 snapshot and a changed byte refused; block 200 named |
 | deposit | block 170's Satoshi-to-Hal tx, core proof alone (bundle from the engine proof + engine history) | every check ok (in the fully validated chain, output 0 = 10 BTC, 31 confirmations); another amount, a deeper ask, and a bundle from the RISC Zero run's history refused |
+| headers | the header zAPP's engine proof of headers 0..4,031 (`verify_headers_with` + key) | accepted, tip = block 4,031's hash, chainwork 0xfc00fc00fc0 (4,032 headers); refused: another tip, a journal bit, another pin, another image, a repeated run, an engine file without the key, a non-engine file |
+| deposit, header-bound | the core tip 200 placed in the engine header chain 0..4,031 (MMR path, 11 hashes) | every check ok: 3,862 confirmations (31 fully validated, 3,831 proof of work only); one more refused; the header run without its key refused |
 | statement | two fresh keys' zero balances (absence proofs) on the engine chain's trie at 200 (native prep; its state = the engine-proven one but self_id), BIP-322 signed | holds; a claimed 1 sat refused; the format-1 trie file refused by the store (OldRoot) |
 
-Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6 passed). Left: deposit bundles bound to a
-header-chain proof (the header zAPP's engine proofs in the verifier), the zAPP CLIs / C ABIs / WASM taking a key for a
+Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6 passed). Left: the zAPP CLIs / C ABIs / WASM taking a key for a
 reader's own rebuild (published records will carry it), trie / tx / journey facts in the core verifier.

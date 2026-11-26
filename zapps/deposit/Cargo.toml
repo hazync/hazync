@@ -17,7 +17,7 @@ path = "src/lib.rs"
 
 [features]
 # engine (OpenVM) core proofs (engine/VERIFIER.md)
-engine = ["zapp-corecheck/engine"]
+engine = ["zapp-corecheck/engine", "zapp-headers/engine"]
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }

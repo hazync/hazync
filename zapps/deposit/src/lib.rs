@@ -207,6 +207,14 @@ pub fn op_return_payload(spk: &[u8]) -> Option<Vec<u8>> {
 /// caller's (the bundle's own `network` must agree); `now` is the caller's clock (unix seconds).
 pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_image: &'static Image, headers_image: &str,
                       now: u64) -> DepositReport {
+    verify_deposit_with(b, ask, network, core_image, headers_image, None, now)
+}
+
+/// [`verify_deposit`] with the header-chain image's engine key: the bundle's header runs are then engine (OpenVM) proofs
+/// of that image, checked under the pinned key (zapp_headers::verify_headers_with; engine/VERIFIER.md). The core proof
+/// is an engine proof whenever `core_image`'s record carries its key.
+pub fn verify_deposit_with(b: &DepositBundle, ask: &DepositAsk, network: &str, core_image: &'static Image, headers_image: &str,
+                           headers_key: Option<&swiftsync_verify::EngineKey>, now: u64) -> DepositReport {
     let mut rep = DepositReport { checks: Vec::new(), verdict: Verdict::Fail, accepted: false, identity_checked: false, statement: None };
     if !rep.check(b.kind == BUNDLE_KIND && b.version == BUNDLE_VERSION,
                   format!("a deposit bundle, version {BUNDLE_VERSION} (kind {:?}, version {})", b.kind, b.version)) {
@@ -237,7 +245,7 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
             return rep.fail("header receipts: not hex");
         };
         let refs: Vec<&[u8]> = bytes.iter().map(|x| x.as_slice()).collect();
-        let hr = headers::verify_headers(&refs, headers_image, now, None, None);
+        let hr = headers::verify_headers_with(&refs, headers_image, headers_key, now, None, None);
         for (ok, w) in &hr.checks { rep.checks.push((*ok, format!("headers: {w}"))); }
         let s = match (&hr.verdict, hr.state) {
             (Verdict::Fail, _) | (_, None) => return rep.fail("the header-chain proof verifies (see the headers: checks)"),
