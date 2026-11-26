@@ -18,7 +18,7 @@ fn verify_full_on_a_real_proof() {
     let id: [u8; 32] = Sha256::digest(&pre).into();
 
     // the image id derived from the vk alone equals the one the engine recorded at build
-    let v: openvm_verify_stark_host::vk::VmStarkVerifyingKey = bitcode::deserialize(&vk).unwrap();
+    let v: hazync_engine_verify::VerifyingKey = hazync_engine_verify::decode_vk(&vk).unwrap();
     let (exe, vm) = wasmv::image_of(&v);
     assert_eq!((exe, vm), (hx("exe"), hx("vm")), "image_of(vk) != image.json");
     assert_eq!(wasmv::image_id_of(&v), id);

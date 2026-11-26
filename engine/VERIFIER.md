@@ -48,6 +48,10 @@ The alternative, a separate engine verifier, duplicates steps 3-12.
    hints vector, and a file that is not a receipt.
 2. A shared crate for the engine front (`engine/verify-core`: wasm-verify's `verify_full` and `image_of`, no
    wasm-bindgen), used by wasm-verify and swiftsync-verify. It needs the abi-stable patch for wasm32 (OpenVM 2.1.0).
+   **Done 26.11**: `hazync-engine-verify` (typed `Refusal`, wasm-verify's codes kept); its test on a real proof passes
+   natively on OpenVM v2.1.0 as released; wasm-verify rebuilt on it passes natively and in Node (engine/wasm-verify/README.md).
+   The abi-stable patch is still applied to an OpenVM copy OUTSIDE the repo: a release build must apply it from the
+   repo (as engine/handover/assemble.sh does its patches), or get it upstream (roadmap 4.3).
 3. The engine front in swiftsync-verify behind the magic; engine images in the registry (the image's vk embedded).
 4. Tests: the engine chain 1..200's proof of block 200 accepted with the same Report as its RISC Zero twin (apart
    from the image lines); every negative the RISC Zero suite has, ported (flipped proof byte, wrong image, journal

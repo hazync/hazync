@@ -36,3 +36,9 @@ Codes: 1 valid, 0 STARK invalid, 2 bad vk, 3 proof does not decode, 4 journal mi
   `--virtual-time-budget --dump-dom`): the same codes, image id from the vk equal to image.json's. Timings there are
   not real (virtual time freezes the page clock); Node runs the same V8, so its times stand for a desktop browser.
 - Not yet: a phone.
+
+**26.11.2026: the checks moved to engine/verify-core** (crate `hazync-engine-verify`), shared with swiftsync-verify
+(engine/VERIFIER.md step 2); this crate is now its wasm-bindgen face, OpenVM [patch]ed with the abi-stable patch here.
+Re-measured after the move: native test (`WASMV_INPUTS=$PWD/in cargo test --release`) passes; wasm 738,247 bytes; Node
+24 `run_full.cjs`: valid 1 in 38.5 ms, journal bit 4, other image 5, flipped proof byte 0, ALL AS EXPECTED. verify-core
+itself builds and passes its test (tests/data: the same proof, committed) on OpenVM v2.1.0 UNPATCHED (native).
