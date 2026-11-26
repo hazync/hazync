@@ -228,8 +228,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        temp-file race (NVCC_THREADS=1). hzengine's own Unix-only code uses SetStdHandle on Windows (71ae6d49).
      - The exe predates the 25.11 night's memory work (app VM release, aggregation tree, MiB segment cap): a new
        build is needed before the Windows test (Xesktop RTX PRO 6000, then the GTX 1050 Ti laptop).
-     - Minimum driver: CUDA 12.9 needs a 575-series driver or newer (NVIDIA's CUDA 12.9 release notes); not tried
-       on Windows yet.
+     - Minimum driver (NVIDIA, CUDA 12.9 Update 1 release notes, Toolkit Driver Version table,
+       https://docs.nvidia.com/cuda/archive/12.9.1/cuda-toolkit-release-notes/index.html): Windows >= 576.57, Linux
+       >= 575.57.08. CUDA's minor-version compatibility lets 12.x run on Windows >= 528.33 / Linux >= 525.60.13 with
+       limitations (https://docs.nvidia.com/deploy/cuda-compatibility/latest/minor-version-compatibility.html); the
+       exe embeds compiled code for each architecture, but an older driver is NOT TRIED.
   13. Cards: which GPUs are supported (oldest architecture, minimum memory)? Do consumer cards like a 3060 or 4090 work, and how fast?
 
      **Answer (26.11.2026): sm_61 (Pascal) and newer BUILD; MEASURED on five card types; 4 GB cards close.**
