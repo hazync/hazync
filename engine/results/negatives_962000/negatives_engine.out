@@ -1,0 +1,13 @@
+PASS base hints rc 0
+PASS base chunk (engine == RISC Zero) rc 0
+PASS base block valid (engine aggregate) rc 0
+PASS base collect run finishes, not refused (engine) rc 0: guest exit(2) = COLLECT_EXIT
+PASS maturity_ok RISC Zero all_valid=1 (want 1); engine journal IDENTICAL
+PASS maturity_immature RISC Zero all_valid=0 (want 0); engine journal IDENTICAL
+PASS height_lock_met RISC Zero all_valid=1 (want 1); engine journal IDENTICAL
+PASS height_lock_unmet RISC Zero all_valid=0 (want 0); engine journal IDENTICAL
+PASS value_more RISC Zero all_valid=1 (want 1); engine journal IDENTICAL
+PASS value_below_outputs RISC Zero all_valid=0 (want 0); engine journal IDENTICAL
+PASS bad_nonce_pow (pow) RISC Zero: aggregate: bv=false ph=true carry=true rt=true time=true smt=true | engine rc 1: aggregate: bv=false ph=true carry=true rt=true time=true smt=true
+PASS coinbase_overpays (subsidy) RISC Zero: aggregate: bv=false ph=true carry=true rt=true time=true smt=true | engine rc 1: aggregate: bv=false ph=true carry=true rt=true time=true smt=true
+NEGATIVES_ENGINE_OK
