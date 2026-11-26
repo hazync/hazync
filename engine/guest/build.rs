@@ -74,6 +74,8 @@ fn main() {
     assert_eq!(regtest, net == "regtest", "the guest's `regtest` feature and HAZYNC_NETWORK ({net:?}) disagree");
     assert_eq!(signet, net == "signet", "the guest's `signet` feature and HAZYNC_NETWORK ({net:?}) disagree");
     if regtest { b.define("HAZYNC_REGTEST", "1"); }
+    // the freeing allocator (Cargo.toml.in `reclaim`): the address-keyed caches confirm a hit on the whole buffer
+    if std::env::var("CARGO_FEATURE_RECLAIM").is_ok() { b.define("HAZYNC_RECLAIM", "1"); }
     if signet { b.define("HAZYNC_SIGNET", "1"); b.file(format!("{core}/signet.cpp")); }
     for t in tus { b.file(format!("{core}/{t}")); }
     b.file(format!("{hzc}/verify_input.cpp")).file(format!("{hzc}/core_tx_rules.cpp"));

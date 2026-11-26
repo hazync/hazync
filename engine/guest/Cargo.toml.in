@@ -38,6 +38,11 @@ txlog = ["libzync"]
 test-lineage = ["coinlog"]
 xver-v3_0_5 = []
 xver-v3_1_0 = []
+# #794 / FEASIBILITY Q7 (26.11.2026, a measured prototype): OpenVM's freeing allocator (linked-list first fit) instead
+# of the bump allocator, with verify_input.cpp's address-keyed caches confirming every hit against the whole buffer
+# (HAZYNC_RECLAIM). OpenVM's guest memory is 512 MiB at most; a reclaiming allocator bounds a script's memory by what
+# is live. Changes the image (hzengine build with HZ_GUEST_FEATURES=reclaim).
+reclaim = ["openvm/heap-embedded-alloc"]
 # metering only, see the platform crate (hzengine build with HZ_GUEST_FEATURES=bench-noverify)
 bench-noverify = ["risc0-zkvm/bench-noverify"]
 

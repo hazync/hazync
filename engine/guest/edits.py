@@ -22,6 +22,14 @@ rep('mod liftx_hint;', 'mod liftx_hint;\n#[cfg(not(feature = "liftx-hint"))]\nmo
 # 4) The journal's hash becomes the proof's public values, once, at the end of main.
 i = s.index("\nfn main() {"); j = s.index("\n}\n", i)
 s = s[:j] + "\n    risc0_zkvm::guest::env::finalize();" + s[j:]
+# 4b) The allocator check. The product asserts its allocator never reuses an address (its address-keyed caches rely
+#     on it). With `reclaim` (OpenVM's freeing allocator) the caches confirm every hit on the whole buffer
+#     (HAZYNC_RECLAIM in verify_input.cpp), so the check inverts: a reclaim image must really reuse, or it is not one.
+rep('''        assert!(!a.is_null() && !b.is_null() && a != b, "the guest allocator reuses freed memory: the address-keyed caches need one that never does");''',
+    '''        #[cfg(not(feature = "reclaim"))]
+        assert!(!a.is_null() && !b.is_null() && a != b, "the guest allocator reuses freed memory: the address-keyed caches need one that never does");
+        #[cfg(feature = "reclaim")]   // ENGINE: the freeing allocator, with the caches' full-buffer hit check
+        assert!(!a.is_null() && !b.is_null() && a == b, "a reclaim image's allocator must reuse freed memory");''')
 # 5) SHA-256 in OpenVM's native layout: Core and libsecp call zkvm_sha256_impl directly (core-0201 / secp-0202, laid
 #    out by base.sh) and so does the coin log (edit 7). The engine defines no sys_sha_compress (RISC Zero's syscall,
 #    state byte-swapped); OpenVM's std PAL keeps its own unreachable!() stub of that name, which nothing calls.
