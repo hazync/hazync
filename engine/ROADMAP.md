@@ -22,7 +22,7 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 | 1.5 | **Final-image re-run** (format 2 + C heap): Core's vectors ✅ (identical), the rig ✅ 96/96 (tap_heap_794, the 97th, to run), edge blocks ✅ 10/10, mem_k1140 ✅ proved (16 chunks, 2x PRO 6000, 1,484 s; end state = RISC Zero's except the image id); 962,000 negatives ✅ (all 12, NEGATIVES_ENGINE_OK) | ◐ (tap_heap_794 left) | results/core_vectors, rig_engine, edge_blocks, q7_attack_blocks, negatives_962000 |
 | 1.6 | Block 2,016 | ✅ identical (its file is prover/testdata/libzync/edge/block_2016.json) | results/edge_blocks |
 | 1.7 | **[U]** OpenVM audit coverage: is v2.1.0's post-audit diff reviewed; do the 1.x ECC/algebra audits hold for 2.x. **User 26.11: later (park until Stage 4)**; gate 1 passes without it, gate 4 needs it | ☐ | FEASIBILITY Q1 (diff sizes measured) |
-| 1.8 | 512 MiB stated as a design limit: the guest's worst-case memory per chunk measured with the C heap: **62.9 MiB worst (mem_k1140)**, tap_small 4.6 MiB; the docs statement to adopt | ◐ (measured; docs text pending) | results/guest_memory |
+| 1.8 | 512 MiB stated as a design limit: the guest's worst-case memory per chunk measured with the C heap: **62.9 MiB worst (mem_k1140)**, tap_small 4.6 MiB; the docs statement to adopt | ✅ (ENGINE.md "Guest memory: a design limit") | results/guest_memory |
 
 **Gate 1:** every row ✅, the final image's evidence committed, the audit answer recorded.
 

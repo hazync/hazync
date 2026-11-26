@@ -76,6 +76,22 @@ Each lands only with its measurement, and with outputs checked against the produ
 settings, because nothing has been measured on them yet. A `prove-block` aggregate runs alone on the card, so it gets
 the 1-prover cap.
 
+## Guest memory: a design limit (26.11.2026, results/guest_memory)
+
+OpenVM's guest address space is **512 MiB at most** (pointer_max_bits <= F::bits() - 2 = 29): a hard limit of the VM,
+not a setting; more GPU memory or more cards do not raise it. **One chunk must fit in it.** RISC Zero's guest had 3 GiB.
+
+What makes that safe: #794's C-heap recycling (prover/methods/guest/src/c_heap.rs: per-size-class free lists for the
+C/C++ consensus code; Rust stays on the bump allocator). A chunk's heap then follows its live data, not everything the
+script interpreter ever allocated. Measured high-water marks per chunk (HZHEAP, metering images; an upper bound):
+**62.9 MiB worst** (mem_k1140, the rig's memory attack), 36.5 MiB tap_full, 4.6 MiB tap_small (> 512 MiB without
+recycling), 25.7 MiB block 962,000 in one chunk. A chunk's heap grows with its input size, so if a block ever came
+near the ceiling the lever is more chunks; the fallback, if a SINGLE input ever needed more than 512 MiB, is splitting
+that input's script check across proofs (not built: nothing measured needs it).
+
+Known gap (roadmap 5.1): the chunker's cost model misses heavy scripts by about four orders of magnitude, so on
+adversarial blocks the chunks are badly unbalanced in time (not in memory or correctness).
+
 ## Layout
 
 | path | what |
