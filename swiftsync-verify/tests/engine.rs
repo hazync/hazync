@@ -170,3 +170,31 @@ fn hazync_engine_verify_unpack_journal(file: &[u8]) -> &[u8] {
     let n = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
     &file[8 + n..]
 }
+
+/// Counting-trie facts at the engine chain's tip (zync-path trie on the engine chain's trie at 200, node format 2), each
+/// with its claimed answer, and the coin journey of Hal's coin (zync-path journey): checked against the verified
+/// engine state, as `swiftsync-verify --trie / --journey` do after `verify`.
+#[test]
+fn engine_trie_facts_and_journey() {
+    let (file, vk, img) = (rd("proof.hze"), rd("vk.bin"), image());
+    let r = run(&file, img, &vk, pin());
+    let cs = r.state.as_ref().unwrap();
+    let trie = |n: &str| -> TrieFact { serde_json::from_slice(&rd(n)).unwrap() };
+    for n in ["trie_coin_hal.json", "trie_balance_hal.json", "trie_history_hal.json", "trie_coin_absent.json"] {
+        let v = check_trie_fact(cs, r.undo_from, &trie(n));
+        eprintln!("  {n}: {v:?}");
+        assert!(v.is_ok(), "{n}: {v:?}");
+    }
+    // a claimed answer the trie does not give: refused
+    for (n, bad) in [("trie_coin_hal.json", "unspent:1000000001"), ("trie_balance_hal.json", "2:1000000000"),
+                     ("trie_history_hal.json", "never"), ("trie_coin_absent.json", "unspent:1")] {
+        let mut f = trie(n);
+        f.expect = Some(bad.into());
+        assert!(check_trie_fact(cs, r.undo_from, &f).is_err(), "{n} claiming {bad}");
+    }
+    // the journey: created in block 170, unspent at 200
+    let j: CoinJourney = serde_json::from_slice(&rd("journey_hal_170.json")).unwrap();
+    let ok = check_coin_journey(cs, r.undo_from, &j);
+    eprintln!("  journey: {ok:?}");
+    assert!(ok.is_ok());
+}
