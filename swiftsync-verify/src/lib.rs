@@ -409,6 +409,36 @@ pub struct Inputs<'a> {
     pub now: u64,
 }
 
+/// Steps 1 and 8 for a RISC Zero receipt: a single succinct or Groth16 proof, real (not a FakeReceipt), verified
+/// against image `m`. Returns the journal, for the prover-independent checks; None (after recording why) when
+/// there is no journal to read. A failed `verify` is recorded and the journal still returned, so the report also says
+/// what the receipt claims (the verdict is Fail either way).
+fn risc0_front(inp: &Inputs, m: &risc0_zkvm::sha::Digest, rep: &mut Report) -> Option<risc0_zkvm::Journal> {
+    if let Err(e) = receipt_kind(inp.receipt) {
+        rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));
+        return None;
+    }
+    let receipt: risc0_zkvm::Receipt = match decode_receipt(inp.receipt) {
+        Ok(r) => r,
+        Err(e) => {
+            rep.check(false, format!("the receipt file decodes ({e})"));
+            return None;
+        }
+    };
+    rep.check(!matches!(receipt.inner, risc0_zkvm::InnerReceipt::Fake(_)),
+              "receipt is a real proof (not a dev-mode FakeReceipt)");
+    // Not past this point under it: risc0 built with disable-dev-mode PANICS in Receipt::verify when RISC0_DEV_MODE is
+    // 1 / true / yes ("Inconsistent settings"; risc0-zkvm 3.1.0 lib.rs:213), an abort here. dev_mode_env() is true for
+    // every value risc0 reads as set (review 11-18).
+    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") {
+        return None;
+    }
+    let v = receipt.verify(*m);
+    rep.check(v.is_ok(), format!("receipt verifies against image {} ({}){}", inp.image.method_id_hex,
+              inp.image.network, v.err().map(|e| format!(": {e}")).unwrap_or_default()));
+    Some(receipt.journal)
+}
+
 /// The receipt's kind, from its first bytes, BEFORE it is decoded: a chain proof is succinct or Groth16. A composite
 /// receipt holds assumption receipts that may themselves be composite, without bound, so decoding a hostile one ~50k
 /// levels deep (~1 MB) overflowed the stack (an abort in the C ABI, a trap in WASM, no verdict line in the CLI; cold
@@ -517,33 +547,14 @@ pub fn verify(inp: &Inputs) -> Report {
     }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
     let m = inp.image.method_id();
-    if let Err(e) = receipt_kind(inp.receipt) {
-        rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));
-        return rep;
-    }
-
-    // Steps 1 and 8: a real proof of this image.
-    let receipt: risc0_zkvm::Receipt = match decode_receipt(inp.receipt) {
-        Ok(r) => r,
-        Err(e) => {
-            rep.check(false, format!("the receipt file decodes ({e})"));
-            return rep;
-        }
+    // Steps 1 and 8, which depend on the prover (engine/VERIFIER.md): the journal, or why there is none to read.
+    let journal = match risc0_front(inp, &m, &mut rep) {
+        Some(j) => j,
+        None => return rep,
     };
-    rep.check(!matches!(receipt.inner, risc0_zkvm::InnerReceipt::Fake(_)),
-              "receipt is a real proof (not a dev-mode FakeReceipt)");
-    // Not past this point under it: risc0 built with disable-dev-mode PANICS in Receipt::verify when RISC0_DEV_MODE is
-    // 1 / true / yes ("Inconsistent settings"; risc0-zkvm 3.1.0 lib.rs:213), an abort here. dev_mode_env() is true for
-    // every value risc0 reads as set (review 11-18).
-    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") {
-        return rep;
-    }
-    let v = receipt.verify(m);
-    rep.check(v.is_ok(), format!("receipt verifies against image {} ({}){}", inp.image.method_id_hex,
-              inp.image.network, v.err().map(|e| format!(": {e}")).unwrap_or_default()));
 
     // Step 2: the journal is this image's ChainState.
-    let cs: ChainState = match decode_journal(&receipt.journal) {
+    let cs: ChainState = match decode_journal(&journal) {
         Ok(c) => c,
         Err(e) => {
             rep.check(false, format!("journal is a ChainState ({e})"));

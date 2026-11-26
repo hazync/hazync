@@ -42,6 +42,10 @@ The alternative, a separate engine verifier, duplicates steps 3-12.
 ## Work, in order
 
 1. Move today's steps 1-3 into the RISC Zero front; the existing test suite must pass unchanged (no behaviour change).
+   **Done 26.11** (`risc0_front`): the crate's tests 33 passed / 1 ignored, before and after; the CLI built from the old and
+   the new lib.rs gives the same report, line for line (only the verifier's own clock differs, by the second), on block
+   700,000's real receipt (it verifies against image 46666b6f... and runs the statement checks), block 976,000's, the
+   hints vector, and a file that is not a receipt.
 2. A shared crate for the engine front (`engine/verify-core`: wasm-verify's `verify_full` and `image_of`, no
    wasm-bindgen), used by wasm-verify and swiftsync-verify. It needs the abi-stable patch for wasm32 (OpenVM 2.1.0).
 3. The engine front in swiftsync-verify behind the magic; engine images in the registry (the image's vk embedded).
