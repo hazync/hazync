@@ -146,7 +146,17 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
   7. Do the #794 attack blocks prove on the engine: the memory block, the single tapscript input, and the costly SIGHASH_NONE block at a small scale? What
   allocator does the guest use, and does it ever free memory?
 
-     **Answer so far (25.11.2026): allocator MEASURED, attack blocks NOT YET RUN on the engine.**
+     **Answer (26.11.2026): RUN on the engine (results/q7_attack_blocks). Not at parity: OpenVM's 512 MiB guest
+     memory is a sixth of RISC Zero's 3 GiB.** One A40, regtest images at 2^26 and 2^29:
+     - The #794 re-split works on the engine (OpenVM's "Maximum memory exceeded" is recognised).
+     - At 2^29: light_only PROVED; tap_small's single big input runs out of memory (RISC Zero proves it); tap_full
+       fails on both, as before; mem_k1140 splits into 36 pieces of up to 41.2B cost each (more than a whole modern
+       block), 768-778 s per piece on an A40, provable in principle but stopped (~2.6 h).
+     - At 2^26 (the 4 GB-card image): light_only's aggregate runs out of memory and tap_small fails too: too small
+       for adversarial blocks.
+     - So completeness on the worst single input needs a larger OpenVM address space (soundness above 29 bits
+       UNKNOWN: ask OpenVM) or a reclaiming allocator (an image change). This is the main open gate found tonight.
+     Earlier notes (25.11.2026):
      - Allocator: OpenVM's bump allocator (openvm-platform heap; never frees). The guest REFUSES an allocator that
        reuses memory (main.rs: verify_input.cpp's per-transaction caches and Core's legacy sighash cache are keyed
        by address; review 14.11). A measurement-only image with size-class reuse made chunks 4% MORE expensive
