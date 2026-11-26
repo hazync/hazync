@@ -1,5 +1,5 @@
 //! verify_full on a real engine proof (block 130,000's aggregate, keys-hz24; inputs from `hzengine wasm-inputs` plus
-//! the block journal and the keys' image.json). WASMV_INPUTS=<dir> with vk.bin, proof.zst, proof_bad.zst,
+//! the block journal and the keys' image.json). WASMV_INPUTS=<dir> with vk.bin, proof.bin (plain encoding),
 //! block.journal, image.json; skipped when unset.
 use sha2::{Digest, Sha256};
 
@@ -10,7 +10,7 @@ fn verify_full_on_a_real_proof() {
         return;
     };
     let rd = |n: &str| std::fs::read(format!("{d}/{n}")).unwrap_or_else(|e| panic!("{d}/{n}: {e}"));
-    let (vk, proof, bad, journal) = (rd("vk.bin"), rd("proof.zst"), rd("proof_bad.zst"), rd("block.journal"));
+    let (vk, proof, bad, journal) = (rd("vk.bin"), rd("proof.bin"), { let mut b = rd("proof.bin"); let k = b.len() / 2; b[k] ^= 1; b }, rd("block.journal"));
     let img: serde_json::Value = serde_json::from_slice(&rd("image.json")).unwrap();
     let hx = |k: &str| hex::decode(img[k].as_str().unwrap()).unwrap();
     let mut pre = hx("exe");

@@ -3,11 +3,11 @@ use sha2::{Digest, Sha256};
 
 #[test]
 fn verify_full_on_a_real_proof() {
-    // inputs (tests/data): `hzengine wasm-inputs` on block 130,000's aggregate proof (keys-hz24, the CPU segpar test),
-    // the block journal and the keys' image.json; WASMV_INPUTS=<dir> to check another proof
+    // inputs (tests/data): `hzengine wasm-inputs` on the engine chain's proof of block 200 (keys-ch), its journal and the
+    // keys' image.json; the proof in OpenVM's plain encoding (proof.bin); WASMV_INPUTS=<dir> to check another proof
     let d = std::env::var("WASMV_INPUTS").unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data").to_string());
     let rd = |n: &str| std::fs::read(format!("{d}/{n}")).unwrap_or_else(|e| panic!("{d}/{n}: {e}"));
-    let (vk, proof, journal) = (rd("vk.bin"), rd("proof.zst"), rd("block.journal"));
+    let (vk, proof, journal) = (rd("vk.bin"), rd("proof.bin"), rd("block.journal"));
     let mut bad = proof.clone();
     let k = bad.len() / 2;
     bad[k] ^= 1;

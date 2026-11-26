@@ -29,6 +29,15 @@ Only 1-3 know which prover made the proof. Steps 3-12 read the `ChainState` and 
   its verifying key (agg.vk + baseline, ~96 KB bitcode; embedded like the RISC Zero ids are today, or shipped as a
   file whose hash is pinned). Handovers stay a list of image ids; an id says which prover it is.
 
+## The proof file holds OpenVM's PLAIN encoding (26.11.2026 late)
+
+`HZE1 | u32 LE length | proof | journal`, the proof as OpenVM's codec writes it (`decode_from_bytes_using_vk`), not the
+zstd-compressed form: zstd is a C library, and without it no verifier build compiles C (the wasm engine graph has no
+zstd / cc / cmake: checked with cargo tree), so the wasm build needs no C toolchain image. Cost: ~19% larger files
+(block 200: 273,107 bytes vs 230,191). The test data was regenerated from the same proofs; every engine suite passes
+(verify-core 1, swiftsync-verify 39, corecheck 7, liveness 18, assume 32, deposit 25, statement 21, headers 18,
+wasm-verify native 1 and Node, the C ABI's test_engine.c, the engine wasm module's frame test: 1,406,503 bytes now).
+
 ## The verifying key must be PINNED (review finding, 26.11.2026 evening)
 
 OpenVM's host verifier checks the STARK under `vk.mvk` (the internal-recursive layer's key) and then compares the
