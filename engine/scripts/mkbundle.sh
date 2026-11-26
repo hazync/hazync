@@ -5,6 +5,8 @@ set -euo pipefail
 K=$1; X=$2; H=$3; O=$4; T=$(mktemp -d)
 mkdir -p $T/keys $T/export $T/host
 for f in sdk.pk agg.vk openvm.toml guest.vmexe baseline.json; do cp -L "$K/$f" $T/keys/; done
+# image.json when the key dir has one: the product host's engine backend reads the image id from it
+[ -f "$K/image.json" ] && cp -L "$K/image.json" $T/keys/
 cp -r "$X"/. $T/export/; rm -f $T/export/*.exec.log
 (cd "$H" && tar cf - --exclude="target*" .) | (cd $T/host && tar xf -)
 tar czf "$O" -C $T keys export host; rm -rf $T
