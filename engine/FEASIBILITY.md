@@ -175,7 +175,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      - Blocks 100,000, 200,000, 250,000, 300,000, 400,000 ... 900,000: every chunk and trie journal identical on the
        engine (CPU, results/era_costs); 130,000, 140,000, 741,000, 962,000, 965,500, 976,379 likewise (exports on the
        build box; 46 chunk/trie inputs of 976379t, 364292t, 962000t, 965500 also in a 64 MiB address space, below).
-     - The #794 attack blocks (regtest) are Q7; blocks.sh's mainnet edge list is still to run.
+     - blocks.sh's edge blocks (26.11.2026, results/edge_blocks): 9 of 10 run with every chunk and trie journal
+       identical to RISC Zero's and the aggregate identical except its 32-byte image id: both BIP30 repeats (91,842,
+       91,880), 185,956, the BIP34/66/65 activations (227,931, 363,725, 388,381), 364,292, and the retarget +
+       CSV / segwit activations (419,328, 481,824). 2,016 not run (its prepared block file is not in the repo).
+     - The #794 attack blocks (regtest) are Q7.
   9. Do all 22,666 Core test vectors and the 97 rig cases pass with verdicts identical to risc0's?
 
      **Answer (25.11.2026): Core vectors MEASURED, all identical; rig cases NOT YET.** All 22,666 of Core's script and

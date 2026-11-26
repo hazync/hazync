@@ -1,0 +1,15 @@
+metering image: build: 63.5 s; image exe 0ab6b04924e9345bbb310d31dbc7fa05956cd602718d8b1b1d0fca0da110fc4d vm 53ca596598268e282
+grep: edge/x2016.log: No such file or directory
+2016 EXPORT_FAIL: edge/h2016.log:thread 'main' (1) panicked at src/main.rs:2339:5:
+block 91842: chunks 0, chunk+trie journals 1/1 identical; aggregate 3688 vs RISC Zero 3688 bytes, 32 bytes differ :: execute: 9.1 s, cost 60429649, instructions 1118612, journal 3688 byte
+block 91880: chunks 1, chunk+trie journals 2/2 identical; aggregate 3816 vs RISC Zero 3816 bytes, 32 bytes differ :: execute: 8.3 s, cost 62077380, instructions 1149399, journal 3816 byte
+block 185956: chunks 1, chunk+trie journals 2/2 identical; aggregate 3708 vs RISC Zero 3708 bytes, 32 bytes differ :: execute: 9.0 s, cost 1501320559, instructions 24700528, journal 3708 b
+block 227931: chunks 1, chunk+trie journals 2/2 identical; aggregate 4352 vs RISC Zero 4352 bytes, 32 bytes differ :: execute: 14.7 s, cost 521673861, instructions 8995920, journal 4352 by
+block 363725: chunks 0, chunk+trie journals 1/1 identical; aggregate 4364 vs RISC Zero 4364 bytes, 32 bytes differ :: execute: 15.6 s, cost 85421510, instructions 1550476, journal 4364 byt
+block 364292: chunks 16, chunk+trie journals 17/17 identical; aggregate 4748 vs RISC Zero 4748 bytes, 32 bytes differ :: execute: 8.5 s, cost 1616356959, instructions 27811090, journal 4748 b
+block 388381: chunks 2, chunk+trie journals 3/3 identical; aggregate 4880 vs RISC Zero 4880 bytes, 32 bytes differ :: execute: 8.6 s, cost 1116106831, instructions 18180317, journal 4880 b
+grep: edge/x419328.log: No such file or directory
+419328 EXPORT_FAIL: edge/h419328.log:thread 'main' (1) panicked at src/main.rs:2339:5:
+grep: edge/x481824.log: No such file or directory
+481824 EXPORT_FAIL: edge/h481824.log:thread 'main' (1) panicked at src/main.rs:2339:5:
+EDGE_DONE
