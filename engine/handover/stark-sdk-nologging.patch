@@ -1,0 +1,75 @@
+--- a/crates/stark-sdk/Cargo.toml
++++ b/crates/stark-sdk/Cargo.toml
+@@ -27,10 +27,12 @@
+ rand.workspace = true
+ metrics = { workspace = true, optional = true }
+ dashmap.workspace = true
+-tracing-subscriber = { workspace = true, features = ["std", "env-filter"] }
+-tracing-forest = { workspace = true, features = ["ansi", "smallvec"] }
+-metrics-tracing-context.workspace = true
+-metrics-util.workspace = true
++# the logging stack (utils::setup_tracing*, bench, metrics_tracing): optional, feature `logging`, so the verifier builds
++# for a zkVM guest (no clock: quanta, under metrics-util, needs clock_gettime)
++tracing-subscriber = { workspace = true, features = ["std", "env-filter"], optional = true }
++tracing-forest = { workspace = true, features = ["ansi", "smallvec"], optional = true }
++metrics-tracing-context = { workspace = true, optional = true }
++metrics-util = { workspace = true, optional = true }
+ metrics-exporter-prometheus = { workspace = true, features = [
+   "push-gateway",
+ ], optional = true }
+@@ -53,7 +55,8 @@
+ sha3.workspace = true # already in tree via zkhash
+ 
+ [features]
+-default = ["parallel", "metrics", "cpu-backend"]
++default = ["parallel", "metrics", "cpu-backend", "logging"]
++logging = ["dep:tracing-subscriber", "dep:tracing-forest", "dep:metrics-tracing-context", "dep:metrics-util"]
+ baby-bear-bn254-poseidon2 = [
+   "dep:p3-bn254",
+   "dep:zkhash",
+@@ -66,11 +69,11 @@
+ mimalloc = ["openvm-stark-backend/mimalloc"]
+ jemalloc = ["openvm-stark-backend/jemalloc"]
+ jemalloc-prof = ["openvm-stark-backend/jemalloc-prof"]
+-metrics = ["dep:metrics", "openvm-stark-backend/metrics", "openvm-cpu-backend?/metrics"]
++metrics = ["dep:metrics", "openvm-stark-backend/metrics", "openvm-cpu-backend?/metrics", "logging"]
+ prometheus = [
+   "metrics",
+   "dep:metrics-exporter-prometheus",
+   "dep:tokio",
+   "dep:rustls",
+ ]
+-nvtx = ["dep:nvtx"]
++nvtx = ["dep:nvtx", "logging"]
+--- a/crates/stark-sdk/src/lib.rs
++++ b/crates/stark-sdk/src/lib.rs
+@@ -3,6 +3,7 @@
+ pub use openvm_stark_backend;
+ pub use p3_baby_bear;
+ 
++#[cfg(feature = "logging")]
+ pub mod bench;
+ pub mod config;
+ #[cfg(feature = "metrics")]
+--- a/crates/stark-sdk/src/utils.rs
++++ b/crates/stark-sdk/src/utils.rs
+@@ -1,14 +1,19 @@
+ use itertools::Itertools;
+ use p3_field::PrimeCharacteristicRing;
+ use rand::{rngs::StdRng, Rng, SeedableRng};
++#[cfg(feature = "logging")]
+ use tracing::Level;
++#[cfg(feature = "logging")]
+ use tracing_forest::ForestLayer;
++#[cfg(feature = "logging")]
+ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Registry};
+ 
++#[cfg(feature = "logging")]
+ pub fn setup_tracing() {
+     setup_tracing_with_log_level(Level::INFO);
+ }
+ 
++#[cfg(feature = "logging")]
+ pub fn setup_tracing_with_log_level(level: Level) {
+     // Set up tracing:
+     let env_filter = EnvFilter::try_from_default_env()
