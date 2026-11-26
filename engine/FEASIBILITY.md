@@ -309,7 +309,9 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        By era (F = 10 s): blocks 1-200k ~710 GPU-h, 200k-400k ~1,400, 400k-977k ~10,100 (83%). The fixed part is ~22%.
      - So the modern chain dominates; multi-block proofs for small blocks would save at most the early fixed costs
        (~6% of the total); per-block cost work on modern blocks is the bigger lever. To firm up: more blocks per era,
-       and F measured on a small block on Blackwell.
+       and F measured on a small block on Blackwell. MEASURED 26.11.2026: 130,000 (10 inputs) proves in 7.2 s on 4x PRO
+       6000 (leaves 3.6 + aggregate 3.5; results/gpu_blackwell_4x_969122), so F is under 10 s on 4 cards; one card
+       not measured.
   17. How do the tip-block times compare (detect to verified) with risc0's current 191 s on 4× PRO 6000?
 
      **Answer so far (25.11.2026): proving MEASURED, detect-to-verified NOT YET.**
@@ -323,8 +325,11 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
        PRO 6000, detect to verified receipt, of which the host's hints were 26.5 s on the pod (libzync 9c2123e
        rehearsal). Hints are the same code on either prover (976,379: 56 s on the 16-core build box). The engine
        proves 976,379 in 42.6-48 s on 4x PRO 6000. So the engine's detect-to-verified would be about 26.5 + 43-48 s
-       plus detection and staging, roughly 70-110 s against 191 s. Next: export 969,122 itself and prove it on the
-       engine (like for like), then the engine through the tip scripts on a live window.
+       plus detection and staging, roughly 70-110 s against 191 s.
+     - MEASURED like for like (26.11.2026, results/gpu_blackwell_4x_969122): 969,122 itself on 4x PRO 6000, prove-block
+       **33.9 s** (leaves 20.6 + aggregate 13.0), final proof verified; its hints 35 s on the build box (26.5 s on
+       RISC Zero's pod); every chunk/trie journal identical. So hints + proving is ~60-70 s against RISC Zero's 191 s
+       end to end. Still to measure: the engine in the live tip pipeline (detection, staging), on a live window.
   18. What do the three levers still on the table buy, measured: fewer and larger chunks, CPU/GPU overlap, and native SHA? Does any of them change a
   commitment or format?
 
@@ -354,7 +359,9 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
      | 4 | 42.6-48 s | leaves 25-28 s + aggregate 16-17 s |
      364,292: 201 s on 1 card, 76 s on 4. Scaling flattens because the aggregate (16-19 s) runs alone at the end.
      segpar (the aggregate's segments over all cards) cut it 16.8 -> 14.3 s on 4 cards; reusing the leaf workers for
-     it (37a02971) removes the startup cost that made the first try a net loss: to be re-measured.
+     it (37a02971) removes the startup cost that made the first try a net loss. RE-MEASURED 26.11.2026, same pod
+     (results/gpu_blackwell_4x_969122): 976,379 aggregate 19.4 s without segpar -> 14.5 s with it (-25%), block
+     42.4 -> 38.6 s; 969,122 33.9 s.
 
   E. Migration
   20. What has to be rebuilt? Cover the zAPPs (headers, hints, utreexo, deposit, assume, liveness, statement), the verifiers, the board and coordinator, the
