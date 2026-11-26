@@ -9,7 +9,7 @@ cd /workspace; source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
 mkdir -p out; X=/workspace/export
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader > out/gpu.txt
 chmod +x $X/host_regtest $X/bin/* host/target/release/hzengine
-export HAZYNC_ENGINE=/workspace/host/target/release/hzengine HAZYNC_ENGINE_KEYS=/workspace/keys HAZYNC_ENGINE_GPUS=1
+export HAZYNC_ENGINE=/workspace/host/target/release/hzengine HAZYNC_ENGINE_KEYS=/workspace/keys HAZYNC_ENGINE_GPUS=$(nvidia-smi -L | wc -l)
 export BITCOIND=$X/bin/bitcoind HZ_CORE_SRC=$X/core
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 5 > out/smi_rig.log ) & SMI=$!
 A=$X/attack
@@ -38,6 +38,7 @@ if [ -z "${SKIP_Q7:-}" ] && [ -d $A ]; then
   done
   export HAZYNC_ENGINE_KEYS=/workspace/keys
 fi
+if [ -f $X/skip_rig ]; then kill $SMI; echo done > out/RUN_DONE; exit 0; fi   # attack blocks only (export/skip_rig)
 s=$(date +%s)
 python3 $X/rig.py $X/host_regtest /workspace/rigroot ${RIG_CASES:-} > out/rig.log 2>&1; rc=$?
 kill $SMI
