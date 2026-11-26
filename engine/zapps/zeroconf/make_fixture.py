@@ -2,7 +2,7 @@
 """make_fixture.py <zapp-regtest dir> <test_framework parent dir> <out dir>: the zeroconf zAPP's regtest fixture
 (engine/results/zapp_utreexo, "zeroconf: the plan"). A transaction T spending two harness coins unspent at block 110
 (ALICE's P2WPKH output of 102 and her P2PKH output of 105, keys published in chain/scenarios.json; Core's own
-gettxout at 110 says both are unspent), signed with Core's test_framework, and the block fixture for height 111 on
+gettxout at 110 says both are unspent), signed with Core's test_framework (RFC 6979 nonces: the same bytes every run), and the block fixture for height 111 on
 top of 110 holding T alone (fetch_template_rpc.py's schema: a dummy coinbase never proved, the header fields a
 speculative chunk does not read as placeholders). Writes <out>/T.json (txid, wtxid, raw, fee, inputs) and
 <out>/template_111.json."""
@@ -11,7 +11,8 @@ ZR, TF, OUT = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path.insert(0, TF)
 from test_framework.key import ECKey
 from test_framework.messages import COutPoint, CTransaction, CTxIn, CTxInWitness, CTxOut
-from test_framework.script import CScript, LegacySignatureHash, SegwitV0SignatureHash, SIGHASH_ALL, keyhash_to_p2pkh_script
+from test_framework.script import CScript, LegacySignatureHash, SegwitV0SignatureHash, SIGHASH_ALL
+from test_framework.script_util import keyhash_to_p2pkh_script
 os.makedirs(OUT, exist_ok=True)
 sc = json.load(open(f"{ZR}/chain/scenarios.json"))["keys"]["ALICE"]
 utxo = json.load(open(f"{ZR}/oracle/snap_110.json"))["gettxout"]
@@ -42,13 +43,13 @@ for i, (t, v, kind, u) in enumerate(prev):
     if kind == "p2wpkh":
         assert spk == b"\x00\x14" + h160(pub), "the coin's script is not this key's P2WPKH"
         sh = SegwitV0SignatureHash(keyhash_to_p2pkh_script(h160(pub)), tx, i, SIGHASH_ALL, u["value_sat"])
-        tx.wit.vtxinwit[i].scriptWitness.stack = [k.sign_ecdsa(sh) + bytes([SIGHASH_ALL]), pub]
+        tx.wit.vtxinwit[i].scriptWitness.stack = [k.sign_ecdsa(sh, rfc6979=True) + bytes([SIGHASH_ALL]), pub]
     else:
         if spk != keyhash_to_p2pkh_script(h160(pub)):   # the harness may pay the uncompressed key's hash
             k2 = ECKey(); k2.set(bytes.fromhex(sc[kind]["secret"]), False); pub = k2.get_pubkey().get_bytes(); k = k2
         assert spk == keyhash_to_p2pkh_script(h160(pub)), "the coin's script is not this key's P2PKH"
         sh, _ = LegacySignatureHash(CScript(spk), tx, i, SIGHASH_ALL)
-        tx.vin[i].scriptSig = CScript([k.sign_ecdsa(sh) + bytes([SIGHASH_ALL]), pub])
+        tx.vin[i].scriptSig = CScript([k.sign_ecdsa(sh, rfc6979=True) + bytes([SIGHASH_ALL]), pub])
 raw = tx.serialize_with_witness().hex()
 info = {"txid": tx.rehash(), "wtxid": tx.getwtxid(), "raw": raw, "fee": fee, "vsize": tx.get_vsize(), "weight": tx.get_weight(),
         "inputs": [{"outpoint": f"{t}:{v}", "kind": kind, "height": u["height"], "value": u["value_sat"]} for t, v, kind, u in prev]}
