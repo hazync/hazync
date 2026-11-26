@@ -5,8 +5,8 @@ negative tests on block 962,000 (scripts/libzync/ci/negatives.py, the same edits
 Each case's block goes through `engine-export` (the exact guest inputs, with RISC Zero's journal for each). Chunk cases
 (HAZYNC_CHUNKS=1, the honest block's signature hints reused, as negatives.py): the engine's chunk journal must be
 byte-identical to RISC Zero's, AND RISC Zero's verdict (all_valid, from `exec-chunk`) the wanted one. Aggregate cases:
-the engine's aggregate (on the metering image: env::verify accepts without proofs) must REFUSE the block, its guest log
-naming the broken rule (pow / subsidy false), as RISC Zero's does. The honest block first, valid at both levels.
+the block's collect run (agg_collect.in, where RISC Zero refuses it) must be refused by the engine (metering image:
+env::verify accepts without proofs) with RISC Zero's own refusal line; the honest block's collect run is the control. The honest block first, valid at both levels.
 Prints NEGATIVES_ENGINE_OK only if every case is as expected."""
 import json, os, re, struct, subprocess, sys
 H, E, K, KB, B, O = (os.path.abspath(a) for a in sys.argv[1:7])
@@ -49,6 +49,9 @@ same = erc == 0 and open(f"{x}/chunk_00.j", "rb").read() == open(f"{x}/chunk_00.
 verdict(same, "base chunk (engine == RISC Zero)", f"rc {erc}")
 arc, ao = engine_exec(KB, f"{x}/agg.in", f"{x}/agg.j", True)
 verdict(arc == 0 and "INVALID" not in ao, "base block valid (engine aggregate)", f"rc {arc}")
+# control for the aggregate cases: the honest block's collect stream is NOT refused by the engine
+crc, co = engine_exec(KB, f"{x}/agg_collect.in", f"{x}/agg_collect.j", True)
+verdict(os.path.exists(f"{x}/agg_collect.in") and refusal(co) is None and "panicked" not in co, "base collect run not refused (engine)", f"rc {crc}: {(co.strip().splitlines() or [''])[-1][:120]}")
 
 def chunk(name, ti, inp, edit, want):
     b = json.loads(json.dumps(base)); edit(b["txs"][ti]["prevouts"][inp])
@@ -71,16 +74,26 @@ chunk("height_lock_unmet", 304, 0, setp(coin_height=962000), "0")
 chunk("value_more", 4, 0, setp(value=v + 1000), "1")
 chunk("value_below_outputs", 4, 0, setp(value=0), "0")
 
+AGG_REFUSAL = "aggregate: bv=false ph=true carry=true rt=true time=true smt=true"
+
+def refusal(text):
+    return next((l.strip() for l in text.splitlines() if "aggregate: bv=" in l and "panicked" not in l), None)
+
 def agg(name, edit, flag):
+    # The block's coin-log collect run (the aggregate without ECMH hints) is where RISC Zero refuses it, before any
+    # commit: the export writes that run's stream (agg_collect.in) first. The engine must refuse the same stream with
+    # the same line. The published image's aggregate logs only its summary, so the refusal is the block-validity bit
+    # alone, every other check passing; which rule (here `flag`) is the rig's to show against Core.
     b = json.loads(json.dumps(base)); edit(b); f = f"{O}/agg_{name}.json"; json.dump(b, open(f, "w"))
     run([H, "libzync-hints", f"{O}/{name}.lzb"], dict(env, HAZYNC_BLOCK=f), f"{O}/{name}.hints.log")
-    x, xrc, _ = export(f, name, f"{O}/{name}.lzb")   # RISC Zero's own aggregate refuses inside the export (agg.in is written first)
-    if not os.path.exists(f"{x}/agg.in"):
-        verdict(False, name, "no aggregate stream exported"); os.remove(f); return
-    arc, ao = engine_exec(KB, f"{x}/agg.in", f"{x}/agg.j", True)
-    m = re.search(r"block INVALID (all_ok=\w+ pow=\w+ merkle=\w+ subsidy=\w+.*?bip30=\w+)", ao, re.S)
-    fl = " ".join(m.group(1).split()) if m else None
-    verdict(arc != 0 and fl is not None and f"{flag}=false" in fl, name, f"engine rc {arc} | {fl or 'no INVALID line'}")
+    x, xrc, xo = export(f, name, f"{O}/{name}.lzb")
+    r0 = refusal(xo)
+    if not os.path.exists(f"{x}/agg_collect.in"):
+        verdict(False, name, "no collect stream exported"); os.remove(f); return
+    arc, ao = engine_exec(KB, f"{x}/agg_collect.in", f"{x}/agg_collect.j", True)
+    eng = refusal(ao)
+    ok = xrc != 0 and r0 == AGG_REFUSAL and arc != 0 and eng == AGG_REFUSAL
+    verdict(ok, name, f"({flag}) RISC Zero: {r0 or 'no refusal (rc %d)' % xrc} | engine rc {arc}: {eng or 'no refusal'}")
     os.remove(f)
 
 def rich(b):

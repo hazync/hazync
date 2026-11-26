@@ -146,11 +146,11 @@ fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {
     }
 }
 
-/// Outside the zkVM, which node format is computed: 2 (the default, what every guest since 26.11.2026 builds) or 1 (the
-/// chains proved before, whose ChainState profile lacks facts::PROFILE_NODE2). A verifier sets it from the profile of
-/// the proof it checks ([`use_format_of`]) before any path, so a fact about an old chain still holds. With std (the
-/// `std`, `reader` or `tls` feature) it is per THREAD, so threads checking proofs of both formats cannot interfere;
-/// without std (a guest, which computes format 2 only, or a single-threaded wasm) it is one per process.
+// Outside the zkVM, which node format is computed: 2 (the default, what every guest since 26.11.2026 builds) or 1 (the
+// chains proved before, whose ChainState profile lacks facts::PROFILE_NODE2). A verifier sets it from the profile of
+// the proof it checks ([`use_format_of`]) before any path, so a fact about an old chain still holds. With std (the
+// `std`, `reader` or `tls` feature) it is per THREAD, so threads checking proofs of both formats cannot interfere;
+// without std (a guest, which computes format 2 only, or a single-threaded wasm) it is one per process.
 #[cfg(all(not(target_os = "zkvm"), any(feature = "std", feature = "reader", feature = "tls")))]
 std::thread_local! {
     static NODE_FORMAT_1: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };

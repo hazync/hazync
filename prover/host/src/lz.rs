@@ -12,7 +12,7 @@ use crate::{BlockWitness, CHAIN_STATE_VERSION, ChainState, KIND_CHAIN, PackedHas
     build_full, demo_block_forest, genesis_anchor, genesis_params, header_hash, hex, hx, lineage_of,
     normalize_host, pinned_lineage, prove_session_resilient, read_block_json, rev, seg_po2, sha256_host,
     smt_advance_ex, state_journal_bytes, work_u128};
-use crate::chunks::{chunk_block_hash, chunk_bounds, nchunks_env, read_chunk_receipts, write_chunk_inputs};
+use crate::chunks::{chunk_block_hash, chunk_bounds, read_chunk_receipts, write_chunk_inputs};
 use crate::verify::{MAX_FUTURE_BLOCK_TIME, dev_mode_env, time_ok, verifier_clock};
 
 /// libzync: the per-block hint bundle at $HAZYNC_LZ_HINTS, if there is one for THIS block. None means
@@ -454,6 +454,7 @@ pub(crate) fn engine_export(dir: &str) {
     let put = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
     let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
     put("method_id", &idb);
+    *EXPORT_DIR.lock().unwrap() = Some(dir.to_string());
     let (anchor, mut w) = build_full();
     let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
     let pred: u64 = crate::chunks::input_costs(&w).iter().sum();
@@ -509,11 +510,22 @@ pub(crate) fn engine_export(dir: &str) {
 /// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
 /// `prove`: the modelled trie update (mode 17) is PROVED (succinct), for an aggregate that will be proved for real
 /// (agg-chunks, seg-serve HAZYNC_AGG): an executed one is a fake receipt the aggregate's proof could never resolve.
+/// Set by engine_export: where cl_synth_around writes the collect run's stream (agg_collect.in).
+static EXPORT_DIR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w: &mut BlockWitness, prove: bool) {
     // collect run for the block's spends, then a modelled log around them (cl_synth)
     let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
     std::env::remove_var("HAZYNC_LZ_HINTS");
     let mut log = Vec::new();
+    // engine-export: the collect run's own stream too (agg_collect.in), written BEFORE RISC Zero runs it, so a block
+    // RISC Zero refuses here (a bad header or coinbase: refused before any commit) can be given to the engine as well
+    if let Some(dir) = EXPORT_DIR.lock().unwrap().as_ref() {
+        let mut st = crate::sink::Stream::default();
+        write_aggregate_env(&mut st, receipts, anchor, w);
+        libzync_agg_tail(&mut st, w);
+        std::fs::write(format!("{dir}/agg_collect.in"), &st.0).unwrap_or_else(|e| panic!("{dir}/agg_collect.in: {e}"));
+    }
     {
         let mut b = ExecutorEnv::builder();
         b.stdout(&mut log);
