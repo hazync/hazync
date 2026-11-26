@@ -24,7 +24,8 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 | 1.7 | **[U]** OpenVM audit coverage: is v2.1.0's post-audit diff reviewed; do the 1.x ECC/algebra audits hold for 2.x. **User 26.11: later (park until Stage 4)**; gate 1 passes without it, gate 4 needs it | ☐ | FEASIBILITY Q1 (diff sizes measured) |
 | 1.8 | 512 MiB stated as a design limit: the guest's worst-case memory per chunk measured with the C heap: **62.9 MiB worst (mem_k1140)**, tap_small 4.6 MiB; the docs statement to adopt | ✅ (ENGINE.md "Guest memory: a design limit") | results/guest_memory |
 
-**Gate 1:** every row ✅, the final image's evidence committed, the audit answer recorded.
+**Gate 1:** every row ✅ but 1.7 (the audit question, moved to gate 4 by the user 26.11), the final image's evidence
+committed. **Status 26.11.2026 evening: PASSED** (1.1-1.6 and 1.8 ✅, evidence in results/).
 
 ## Stage 2: the code
 
