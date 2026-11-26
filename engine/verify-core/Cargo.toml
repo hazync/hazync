@@ -6,7 +6,9 @@ description = "Hazync: check an engine (OpenVM) proof against a published image 
 
 [dependencies]
 # OpenVM v2.1.0 as released for native builds; a wasm32 build [patch]es it with engine/wasm-verify/openvm-abi-stable.patch
-openvm-verify-stark-host = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+# default-features = false: with the nozstd patch (a wasm build) the zstd decoder, a C library, stays out; the proof
+# file carries OpenVM's plain encoding (engine/VERIFIER.md). Unpatched, the crate has no features: no difference.
+openvm-verify-stark-host = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", default-features = false }
 openvm-stark-sdk = { git = "https://github.com/openvm-org/stark-backend.git", tag = "v2.1.0", default-features = false }
 sha2 = "0.10"
 bitcode = { version = "0.6", features = ["serde"] }

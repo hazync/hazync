@@ -21,7 +21,7 @@ use openvm_stark_sdk::{
         p3_symmetric::Permutation,
     },
 };
-use openvm_verify_stark_host::{verify_vm_stark_proof, verify_vm_stark_proof_decoded, vk::VmStarkVerifyingKey, VmStarkProof};
+use openvm_verify_stark_host::{verify_vm_stark_proof_decoded, vk::VmStarkVerifyingKey, VmStarkProof};
 use sha2::{Digest as _, Sha256};
 
 pub use openvm_verify_stark_host::vk::VmStarkVerifyingKey as VerifyingKey;
@@ -73,8 +73,8 @@ pub fn code(r: Result<(), Refusal>) -> u32 {
     }
 }
 
-/// The engine proof file: `HZE1`, the compressed proof's length (u32 LE), the compressed proof (OpenVM's codec, zstd:
-/// what `hzengine wasm-inputs` writes as proof.zst), then the journal (the rest of the file). The magic comes first so
+/// The engine proof file: `HZE1`, the proof's length (u32 LE), the proof in OpenVM's plain codec encoding (not zstd:
+/// no C decoder in any verifier build; ~19% larger), then the journal (the rest of the file). The magic comes first so
 /// that no decoder is ever handed bytes of another kind (a RISC Zero receipt starts with a bincode u32 0..3).
 pub const MAGIC: [u8; 4] = *b"HZE1";
 
@@ -111,10 +111,12 @@ pub fn decode_vk(vk: &[u8]) -> Result<VmStarkVerifyingKey, Refusal> {
     bitcode::deserialize::<VmStarkVerifyingKey>(vk).map_err(|_| Refusal::Vk)
 }
 
-/// The STARK alone (no image or journal check): 1 valid, 0 invalid, 2 bad vk bytes.
+/// The STARK alone (no image or journal check) on a plain-encoded proof: 1 valid, 0 invalid, 2 bad vk bytes, 3 the
+/// proof does not decode.
 pub fn verify_stark_bytes(vk: &[u8], proof: &[u8]) -> u32 {
     let Ok(vk) = decode_vk(vk) else { return 2 };
-    verify_vm_stark_proof(&vk, proof).is_ok() as u32
+    let Ok(p) = VmStarkProof::decode_from_bytes_using_vk(&vk.mvk, &vk.baseline, proof) else { return 3 };
+    verify_vm_stark_proof_decoded(&vk, &p).is_ok() as u32
 }
 
 /// openvm-recursion's poseidon2_hash_slice (crates/recursion/src/utils.rs): absorb CHUNK field elements at a time
@@ -172,7 +174,7 @@ pub fn verify_full_pinned(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8]
     if image_id_of(vk)[..] != image_id[..] {
         return Err(Refusal::Image);
     }
-    let p = VmStarkProof::decode_compressed_using_vk(&vk.mvk, &vk.baseline, proof).map_err(|_| Refusal::Decode)?;
+    let p = VmStarkProof::decode_from_bytes_using_vk(&vk.mvk, &vk.baseline, proof).map_err(|_| Refusal::Decode)?;
     verify_vm_stark_proof_decoded(vk, &p).map_err(|_| Refusal::Stark)?;
     // one byte per field element (the guest reveals bytes); anything above 255 is not a byte
     let pvs: Option<Vec<u8>> = p.user_pvs_proof.public_values.iter().map(|f| u8::try_from(f.as_canonical_u32()).ok()).collect();

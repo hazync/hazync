@@ -525,7 +525,9 @@ pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
     let z = zstd::encode_all(&enc[..], 19)?;
     std::fs::write(out.join("proof.zst"), &z)?;
     // the engine proof file the verifiers read (engine/verify-core: HZE1, proof, journal), and the key's pin
-    std::fs::write(out.join("proof.hze"), hazync_engine_verify::pack(&z, &journal))?;
+    // plain encoding in the proof file (no zstd in any verifier build); proof.bin beside it for the wasm probe
+    std::fs::write(out.join("proof.hze"), hazync_engine_verify::pack(&enc, &journal))?;
+    std::fs::write(out.join("proof.bin"), &enc)?;
     std::fs::write(out.join("vk.sha256"), format!("{}\n", hex::encode(Sha256::digest(std::fs::read(out.join("vk.bin"))?))))?;
     let mut bad = enc.clone();
     let k = bad.len() / 2;
