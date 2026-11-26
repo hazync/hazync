@@ -1,0 +1,38 @@
+{
+  "at": 200,
+  "pos": 0,
+  "coin": "5aee720aa6a17f822f26c9362ffb99892d39568471d11c3f0396ee025f3cf88a",
+  "spent_by": null,
+  "path": [
+    "ae20cc70267b7303449dc558d7a1cc732c0a8abaed82b00824d177d8596729b6",
+    "2b13ec24f2775bef9769f3c7f6833cbf1d9a3f46e96b6af1a6f6d5c55a597794",
+    "1198ac794ecb41df3cd11d3525a72cc4cd970d821e1fff7f67bdac3f17b0b2de",
+    "2b3359709d9916b81f04fd70474e8be571e97e3f636dcb682b1232131548dc4e",
+    "0c776490d7543ef1e74a2fc9c3e28df98e4b1178b528a8da2c533ad988f52ad8",
+    "a8d52295dd3fe739ef1ad80d9140adcdb8810b3601c93f8bdb411950d0a309a8",
+    "cbc905b41c1ac9988c4df339d12abdc1315e7b60d2e202122e21d3f6f4084f6d"
+  ],
+  "log_leaves": 209,
+  "log_value": 1000000000000,
+  "log_roots": [
+    "70d43a0c91f8bbc58e8554ac2492fda2059176064a95f51b4c8ab43a0b2c9a78",
+    null,
+    null,
+    null,
+    "c34c270609b79e1ceeb814ec294bc18121256fcb94a040db571e01c860a5e744",
+    null,
+    "de27fb954a7f0e8372415df35dcfba39b1db2d69e5b8e2ac8ef66421459ebd25",
+    "c7c8b7ba4a7939697587ebc03694017f0157361d4cd3825eebbe5a27c7268ed2"
+  ],
+  "block": null,
+  "preimage": {
+    "txid": "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098",
+    "vout": 0,
+    "value": 5000000000,
+    "script_pubkey": "410496b538e853519c726a2c91e61ec11600ae1390813a627c66fb8be7947be63c52da7589379515d4e0a604f8141781e62294721166bf621e73a82cbf2342c858eeac",
+    "height": 1,
+    "coinbase": true,
+    "tracked": false,
+    "creation_mtp": 1231006505
+  }
+}

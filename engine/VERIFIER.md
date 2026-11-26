@@ -78,6 +78,9 @@ being handed to a decoder.
    block forest, lineage, genesis anchor, coin log; verdict Demo only for low work and the checkpoint); refused: a
    journal bit, a proof byte, a non-pinned key, another pin, another image's record, a RISC Zero receipt's bytes, a
    truncated file; the RISC Zero front refuses an engine file. Suites: default 33 passed, `engine` 35, 1 ignored each;
-   the CLI's reports on real RISC Zero receipts identical before and after (same --now). Fact checks: to do.
+   the CLI's reports on real RISC Zero receipts identical before and after (same --now). Coin facts (zync-path on the
+   engine chain's history.bin) on the verified engine state: block 1's coinbase UNSPENT at 200 (with its preimage), block
+   9's coinbase SPENT at 170 by tx 1 input 0; refused: a path node, a wrong preimage, no preimage, spent claimed
+   unspent. Trie, tx and journey facts: to do (they need the engine chain's trie dump / tx facts from the host).
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
 6. Review rounds (the user's rule) before any release.

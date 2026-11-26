@@ -1,0 +1,32 @@
+{
+  "at": 200,
+  "pos": 8,
+  "coin": "eaad77e1c86247b362f885ffe75d33b2808667e519c0975e8beb9879a27520a9",
+  "spent_by": [
+    170,
+    1,
+    0
+  ],
+  "path": [
+    "0e15ee4dae1b40ad94f3b40541556cddbc7357a47d1324fa73e2ba478572f1e4",
+    "3f98cf59b408ded02af39ccff720682e0078301b09aa436a8df0e67f507bb921",
+    "7fdf62ef62e1287e5ca7583b08a06bfc1ba67b1fedf1ca7559749b0485019e0a",
+    "80b72e8a7325a362f339933776f0e88ada4adbfd34c6e5b4fb0ea001892f5dfb",
+    "0c776490d7543ef1e74a2fc9c3e28df98e4b1178b528a8da2c533ad988f52ad8",
+    "a8d52295dd3fe739ef1ad80d9140adcdb8810b3601c93f8bdb411950d0a309a8",
+    "cbc905b41c1ac9988c4df339d12abdc1315e7b60d2e202122e21d3f6f4084f6d"
+  ],
+  "log_leaves": 209,
+  "log_value": 1000000000000,
+  "log_roots": [
+    "70d43a0c91f8bbc58e8554ac2492fda2059176064a95f51b4c8ab43a0b2c9a78",
+    null,
+    null,
+    null,
+    "c34c270609b79e1ceeb814ec294bc18121256fcb94a040db571e01c860a5e744",
+    null,
+    "de27fb954a7f0e8372415df35dcfba39b1db2d69e5b8e2ac8ef66421459ebd25",
+    "c7c8b7ba4a7939697587ebc03694017f0157361d4cd3825eebbe5a27c7268ed2"
+  ],
+  "block": null
+}

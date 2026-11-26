@@ -96,3 +96,35 @@ fn engine_negatives() {
     let r = verify(&Inputs { receipt: &file, image: img, anchor: None, now: 1_800_000_000 });
     assert_eq!(r.verdict, Verdict::Fail);
 }
+
+/// Coin facts (zync-path from the engine chain's history.bin) checked against the verified engine state, as
+/// `swiftsync-verify --coin` does after `verify`: block 1's coinbase unspent at 200 (with its preimage, which an UNSPENT
+/// answer requires), block 9's coinbase spent in block 170 (Satoshi to Hal).
+#[test]
+fn engine_coin_facts() {
+    let (file, vk, img) = (rd("proof.hze"), rd("vk.bin"), image());
+    let r = run(&file, img, &vk, pin());
+    let cs = r.state.as_ref().unwrap();
+    let fact = |n: &str| -> CoinFact { serde_json::from_slice(&rd(n)).unwrap() };
+    for n in ["coin_unspent_0.json", "coin_spent_8.json"] {
+        let ok = check_coin_fact(cs, r.undo_from, &fact(n));
+        eprintln!("  {n}: {ok:?}");
+        assert!(ok.is_ok(), "{n}: {ok:?}");
+    }
+    assert!(check_coin_fact(cs, r.undo_from, &fact("coin_spent_8.json")).unwrap().contains("170"), "spent in block 170");
+    // negatives: a path node changed; the preimage's value changed; the unspent answer without its preimage; the spent
+    // coin claimed unspent
+    let mut f = fact("coin_unspent_0.json");
+    let p0 = f.path[0].clone();
+    f.path[0] = format!("{}{}", if p0.starts_with('0') { "1" } else { "0" }, &p0[1..]);
+    assert!(check_coin_fact(cs, r.undo_from, &f).is_err(), "a changed path node");
+    let mut f = fact("coin_unspent_0.json");
+    f.preimage.as_mut().unwrap().value += 1;
+    assert!(check_coin_fact(cs, r.undo_from, &f).is_err(), "a preimage that is not the coin's");
+    let mut f = fact("coin_unspent_0.json");
+    f.preimage = None;
+    assert!(check_coin_fact(cs, r.undo_from, &f).is_err(), "an unspent answer without its preimage");
+    let mut f = fact("coin_spent_8.json");
+    f.spent_by = None;
+    assert!(check_coin_fact(cs, r.undo_from, &f).is_err(), "a spent coin claimed unspent");
+}
