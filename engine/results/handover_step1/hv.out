@@ -1,0 +1,13 @@
+7b16bf5c engine/handover: stark-sdk's logging stac
+assembled /root/engine/hv/w/guest (OpenVM from /root/.cargo/git/checkouts/openvm-e4fe658744a82733/05f3b73, patched; 74 path entries)
+build 87 s: build: 67.9 s; image exe a5382774b83c813d29721c3a2fc9bb4c3e35e535f09a4456904b5770131b8765 vm 00e00077450a5a5657b99e459ec
+proof 273107 B
+stream: vk 96425 B, proof 273107 B -> /root/engine/hv/ok.bin
+stream: vk 96425 B, proof 273107 B -> /root/engine/hv/bad.bin
+ok rc=0 31 s :: execute: 10.8 s, cost 15554909309, instructions 422694901, journal 260 bytes sha256 fcd88d024a667ee5bd074ce72851899f501158e9576d8d58b960bf359e373dd3
+  verified 1 image c45fb75609f14c2d pvs 9ac1acb33ed0210d
+bad rc=0 30 s :: execute: 10.3 s, cost 9221001509, instructions 249217724, journal 260 bytes sha256 d216af9f8bdb6aef7647eb4de40182563b2161d4c924626d345a6b59e31f6c9d
+  verified 0 image c45fb75609f14c2d pvs 9ac1acb33ed0210d
+  keys-hz24 image id c45fb75609f14c2d
+  sha256(block journal) 9ac1acb33ed0210d
+HV_DONE

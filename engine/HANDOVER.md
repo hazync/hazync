@@ -40,8 +40,10 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
 
 ## Plan
 
-1. Measure: OpenVM v2.1.0's verifier compiled into an engine guest mode, verifying a real engine proof (today the "old"
-   and "new" versions are the same, which tests the mechanism and gives the cost).
+1. **DONE (26.11.2026, results/handover_step1):** OpenVM v2.1.0's verifier compiled into an engine guest verifies a
+   real engine proof (verified 1, image id and public values as expected) and refuses it with one byte flipped
+   (verified 0). Cost 15.6B per check, paid once per upgrade. Needs two small upstreamable patches
+   (openvm-verify-nozstd, stark-sdk-nologging) besides the WASM one.
 2. The pin and the handover mode in the guest (aggregate input carries the old proof; the checks above), behind a
    build-time pin so an image without a predecessor cannot take that path.
 3. A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
