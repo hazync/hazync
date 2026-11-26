@@ -105,6 +105,10 @@ fn main() {
     let n_rec = r.u();
     assert!(rec_index < n_rec, "no such record");
     let coinlog_build = j.profile & facts::PROFILE_COINLOG != 0;
+    // the chunk record as prover/methods/guest/src/agg_lite.rs writes it: with the trie (profile bit 5), each output
+    // carries its script hash and each input its coin key and script hash; every input carries its undo digest (#729).
+    // The tip and the chunk are of the same core image (both verified under core_id), so the tip's profile is the chunk's.
+    let trie_build = j.profile & facts::PROFILE_TRIE != 0;
     let mut out = None;
     for k in 0..n_rec {
         let (txid, wtxid, _ph, start, count, first) = (r.h(), r.h(), r.h(), r.u(), r.u(), r.u());
@@ -114,14 +118,16 @@ fn main() {
             let (fee, weight, sigops) = (r.i64(), r.i64(), r.i64());
             if coinlog_build { let _ = r.i64(); }
             let n_out = r.u();
-            r.i += 11 * n_out as usize;
+            r.i += (11 + if trie_build { 8 } else { 0 }) * n_out as usize;   // out_leaf[8] vout value[2] [script hash[8]]
             head = Some((n_vin, fee, weight, sigops));
         }
         let mut leaves = Vec::with_capacity(count as usize);
         for _ in 0..count {
             let leaf = r.h();
             let f = r.u();
-            if f & 1 == 1 { let _ = r.h(); }
+            if f & 1 == 1 { let _ = r.h(); }                  // the coinbase / tracked coin's txid
+            if trie_build { let _ = r.h(); let _ = r.h(); }   // coin key, script hash
+            let _undo = r.h();                                // the spent coin's undo digest
             leaves.push((leaf, f));
         }
         if k == rec_index {
