@@ -62,6 +62,8 @@ being handed to a decoder.
    natively on OpenVM v2.1.0 as released; wasm-verify rebuilt on it passes natively and in Node (engine/wasm-verify/README.md).
    The abi-stable patch is still applied to an OpenVM copy OUTSIDE the repo: a release build must apply it from the
    repo (as engine/handover/assemble.sh does its patches), or get it upstream (roadmap 4.3).
+   **26.11 late:** `engine/scripts/openvm_src.sh` makes that tree from the pinned commits (fetched and checked, then
+   patched); next, swiftsync-verify-wasm/build.sh stages its output at a fixed path like its other path dependencies.
 3. The engine front REPLACES the RISC Zero front in swiftsync-verify (behind the magic); engine images in the
    registry (the image's vk embedded, or a file whose hash is pinned); the RISC Zero-only parts (receipt kinds, dev
    mode, Groth16, `earlier_image_named_by`) leave with it. The journal stays RISC Zero's serde word format (the

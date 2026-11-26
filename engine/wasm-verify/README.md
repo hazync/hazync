@@ -47,3 +47,9 @@ Codes: 1 valid, 0 STARK invalid, 2 bad vk, 3 proof does not decode, 4 journal mi
 Re-measured after the move: native test (`WASMV_INPUTS=$PWD/in cargo test --release`) passes; wasm 738,247 bytes; Node
 24 `run_full.cjs`: valid 1 in 38.5 ms, journal bit 4, other image 5, flipped proof byte 0, ALL AS EXPECTED. verify-core
 itself builds and passes its test (tests/data: the same proof, committed) on OpenVM v2.1.0 UNPATCHED (native).
+
+**Source of the patched OpenVM (26.11.2026 late):** `engine/scripts/openvm_src.sh <dir> <patches>` clones OpenVM and
+stark-backend v2.1.0 from their repos, refuses unless HEAD is the commit our lockfiles pin (05f3b73e / a6b4761a), and
+applies the patches. Its output with this crate's patch (plus the handover's two) is file-for-file the tree this crate
+was built and tested on (`diff -rq`: no file differs; only test-vector submodules a shallow clone leaves out). A
+shipped build stages that output, never a hand-made copy.
