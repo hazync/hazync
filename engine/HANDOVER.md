@@ -46,6 +46,29 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    (openvm-verify-nozstd, stark-sdk-nologging) besides the WASM one.
 2. The pin and the handover mode in the guest (aggregate input carries the old proof; the checks above), behind a
    build-time pin so an image without a predecessor cannot take that path.
+
+   **Design (26.11.2026 evening), from the product guest's own handover (prover/methods/guest: handover_pin.rs,
+   lineage/, the `is_base == 2` step in main.rs).** It already has the slot this needs: a `Handover` entry is
+   `{image, first_height, verifier}`, and `verifier` is the zkVM version the predecessor's proofs were made under
+   (SAME_ZKVM = zero: `env::verify`; non-zero: an older RISC Zero, checked by its vendored recursion circuit,
+   `xver::verify`). The lineage digest already commits `verifier` (`lineage_step`: 101-byte preimage when non-zero), so
+   a chain's lineage says which verifier every handover used. For OpenVM:
+   - `verifier` = SHA-256 of the previous OpenVM version's verifying key (the bitcode `VmStarkVerifyingKey`: agg vk +
+     the predecessor image's baseline, what verify-core takes). The key's bytes are embedded in the image
+     (include_bytes, a file per pinned predecessor under the lineage dir) and hashed at run time against the pin, so the
+     image id commits to exactly that key; the predecessor's image id (`image`) must equal image_id_of(that key)
+     (checked at build time and in the guest).
+   - The engine's `xver::verify` is the software OpenVM verifier of step 1 (verify_vm_stark_proof_decoded, the
+     nozstd + nologging patches), compiled ONLY into an image whose lineage has such an entry (a cargo feature, as
+     the RISC Zero `xver-*` features are), so every other image's code and id are unchanged. It is given the old proof
+     as plain input words and must establish exactly what `env::verify(p.image, &prev_journal)` would: the proof
+     verifies under the pinned key, and its public values are SHA-256(prev_journal).
+   - Everything after it is today's handover code, unchanged: `prev.self_id == p.image`, the profile, the pinned
+     height, the predecessor's own lineage. A same-OpenVM handover (a rule change on the same VM) needs no new code:
+     SAME_ZKVM, `env::verify`, which the engine maps to OpenVM's deferral (tested: zAPPs verify core proofs that way).
+   - Host: `engine-export` for the handover block writes the old proof's bytes into the aggregate stream where
+     `xver` reads them (`n`, then the words), from the old chain's tip proof (proof.json).
+   Cost: 15.6B once per upgrade (step 1), inside the handover block's aggregate.
 3. A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).
