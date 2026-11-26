@@ -4,4 +4,4 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 exec ../../../scripts/wasm-build.sh zapps/utreexo/wasm /tmp/zapp-utreexo-wasm-build zapp_utreexo_wasm.wasm \
-    zapps/utreexo swiftsync-verify libzync
+    zapps/utreexo swiftsync-verify engine/verify-core libzync
