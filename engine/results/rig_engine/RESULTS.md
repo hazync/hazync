@@ -49,3 +49,10 @@ the host passes on only the log's last 8 lines) over the harvested guest logs: *
 Gap: the rig in the repo has 97 cases since the #794 commits (tap_heap_794); this run's bundle carried the earlier
 96-case rig.py. tap_heap_794 is to run with the current rig.py (its substance, tap_small / tap_full proving with the C
 heap, is in results/q7_attack_blocks).
+
+## The 97th case, tap_heap_794 (26.11.2026 evening)
+
+The current rig.py (with #794's case), RIG_ONLY=tap_heap_794, the same final image (keys-rtch) and host; pod
+wwrgegro0ud9qv (A40), the 232-block base chain then the case: **`AGREE tap_heap_794 core=accept guest=accept`**
+("RIG 1 cases, 1 agree"). With the 96 above: **the rig is 97/97 on the final image.** (ONE tapscript input whose stack
+copies allocate ~5 GB in total, a few MB live: the case a bump-only heap cannot survive; the C heap proves it.)
