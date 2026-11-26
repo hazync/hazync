@@ -30,3 +30,20 @@ regtest in the glibc-2.35 container (rtc). pod/run_rig.sh, pod 728rss4avwkcsa. R
   SEEDED a demonstration anchor (smt_root 80,125,... instead of the replayed 34,121,...). The like-for-like reference
   is RISC Zero (dev mode, the same host build) from that same seeded anchor (block 126 alone): its state_126.json
   equals the engine's except self_id. The out-of-memory results do not depend on the anchor (they are per input).
+
+## FINAL image: C-heap recycling + node format 2, 2^29 (26.11.2026 afternoon; roadmap 1.2 / 1.3)
+
+Regtest image keys-rtch (exe 09dd8758, 2^29), the regtest product host at the same commit (built in the glibc-2.35
+container), anchors regenerated in node format 2 (anchors2: blocks 1..125 replayed from genesis, profile 0xf9). One A40
+(pod bt9qe3dkzq545o, pod/run_rig.sh). RISC Zero references: the SAME host build in dev mode from the same anchors (r0ref2).
+
+| block | engine (final image) | RISC Zero (same host, C heap) | end state vs RISC Zero |
+|---|---|---|---|
+| light_only | **PROVED** (603 s) | ok | identical except self_id |
+| tap_small (block 127: one big tapscript input) | **PROVED** (185 s) | ok | identical except self_id |
+| tap_full (block 127) | **PROVED** (1,177 s) | ok | identical except self_id |
+| mem_k1140 | to run on several GPUs (36 pieces of up to 41B each at 512 MiB, results above) | | |
+
+So with #794's C-heap recycling the engine proves, at OpenVM's 512 MiB ceiling, every attack block it was tested on,
+including the two that failed before (tap_small on the engine; tap_full on BOTH provers). self_id is the image id
+(each prover's own), the only field that may differ.

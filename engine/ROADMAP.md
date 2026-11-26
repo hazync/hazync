@@ -16,8 +16,8 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 | # | task | status | evidence |
 |---|---|---|---|
 | 1.1 | Guest memory: #794 C-heap recycling on the engine | ✅ | results/c_heap (+1% cost, journals identical) |
-| 1.2 | tap_small (block 127's one input) PROVED with the C heap at 2^29 | ◐ executes; proof running | results/q7_attack_blocks (to add) |
-| 1.3 | light_only proved with the C heap; mem_k1140's full cost at 2^29 (GPU) | ☐ | |
+| 1.2 | tap_small (block 127's one input) PROVED with the C heap at 2^29 | ✅ (and tap_full) | results/q7_attack_blocks |
+| 1.3 | light_only proved with the C heap ✅; mem_k1140's full cost at 2^29 (several GPUs) | ◐ | results/q7_attack_blocks |
 | 1.4 | Node format 2 (trie / coin log) adopted, both provers agree | ✅ | results/node_format2 |
 | 1.5 | **Final-image re-run**: Core's 22,666 vectors, the rig's 96 cases, blocks.sh edge blocks + 962,000 negatives, on the image with format 2 + C heap (today's evidence spans older images) | ☐ | |
 | 1.6 | Block 2,016 (the edge block not run: its prepared file is not in the repo) | ☐ | |

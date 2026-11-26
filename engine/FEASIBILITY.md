@@ -9,7 +9,7 @@ ESTIMATED or UNKNOWN and cites a file or log for every number. Answers go under 
 |---|---|---|---|
 | Q1 | audits | OPEN | recursion/deferral audited at a pre-release commit; post-audit diffs measured (thousands of lines); ECC/algebra not in the 2.0 audit: ask OpenVM |
 | Q2-Q6 | params, maintenance, compat layer, image id, guest edits | answered | see each |
-| **Q7** | **#794 attack blocks** | **fix in, test pending** | **512 MiB guest memory is OpenVM's hard ceiling; #794's C-heap recycling now on the engine (+1% cost, journals identical, results/c_heap); tap_small re-run with it pending (anchors regenerated in node format 2)** |
+| **Q7** | **#794 attack blocks** | **GOOD (mem_k1140 cost to measure)** | **512 MiB is OpenVM's ceiling; with #794's C-heap recycling (+1% cost) the engine PROVES light_only, tap_small and tap_full (tap_full was unprovable on both before), end states identical to RISC Zero's (results/q7_attack_blocks)** |
 | Q8 | old + edge blocks | GOOD | 364,292 proved; 9/10 edge blocks identical (2,016 not run) |
 | Q9 | Core vectors + rig | GOOD | 22,666 vectors identical; rig 96/96 agree with Core 31.1 |
 | Q10 | limits | answered | 512 MiB address space is the binding one (Q7) |
