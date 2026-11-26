@@ -74,6 +74,13 @@ fn main() {
     assert_eq!(regtest, net == "regtest", "the guest's `regtest` feature and HAZYNC_NETWORK ({net:?}) disagree");
     assert_eq!(signet, net == "signet", "the guest's `signet` feature and HAZYNC_NETWORK ({net:?}) disagree");
     if regtest { b.define("HAZYNC_REGTEST", "1"); }
+    // hazync#794, as prover/methods/guest/build.rs: the guest's C heap recycles freed blocks (src/c_heap.rs), and the C++
+    // side keeps the legacy sighash cache's key where that free() clears it. A Core tree without patch 0101's hz_lsh_key
+    // hunk must not build (it would leave the key unset).
+    b.define("HAZYNC_C_HEAP_RECYCLE", "1");
+    let interp = std::fs::read_to_string(format!("{core}/script/interpreter.cpp")).expect("read script/interpreter.cpp");
+    assert!(interp.contains("hz_lsh_key[0] = c.vin_data;") && interp.contains("const void* hz_lsh_key[2] = {nullptr, nullptr};"),
+        "{core}/script/interpreter.cpp lacks patches/libzync/0101's hz_lsh_key hunk (hazync#794): rebuild the engine base (engine/guest/base.sh)");
     if signet { b.define("HAZYNC_SIGNET", "1"); b.file(format!("{core}/signet.cpp")); }
     for t in tus { b.file(format!("{core}/{t}")); }
     b.file(format!("{hzc}/verify_input.cpp")).file(format!("{hzc}/core_tx_rules.cpp"));
