@@ -47,5 +47,14 @@ fn verify_full_on_a_real_proof() {
     pin2[0] ^= 1;
     assert_eq!(code(vf(&vk, &pin2, &proof, &journal, &id)), 7, "another pin");
     assert_eq!(code(vf(&vk, &pin[..31], &proof, &journal, &id)), 7, "short pin");
+    // the proof file round trip, and what is not one
+    let f = hazync_engine_verify::pack(&proof, &journal);
+    assert!(hazync_engine_verify::is_engine_proof(&f));
+    assert_eq!(hazync_engine_verify::unpack(&f), Ok((&proof[..], &journal[..])));
+    assert_eq!(hazync_engine_verify::unpack(&f[..7]), Err(hazync_engine_verify::Refusal::Container));
+    let mut g = f.clone();
+    g[4..8].copy_from_slice(&(proof.len() as u32 + journal.len() as u32 + 1).to_le_bytes());
+    assert_eq!(hazync_engine_verify::unpack(&g), Err(hazync_engine_verify::Refusal::Container), "proof length past the end");
+    assert!(!hazync_engine_verify::is_engine_proof(&[1, 0, 0, 0, 9, 9]), "a RISC Zero receipt's first bytes");
     eprintln!("verify_full: valid 1, journal 4, image 5, short id 6, bad proof {r}, bad vk 2 (decode) / 7 (pin)");
 }

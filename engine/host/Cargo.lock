@@ -1261,6 +1261,7 @@ dependencies = [
  "cfg-if",
  "clap",
  "eyre",
+ "hazync-engine-verify",
  "hex",
  "libc",
  "openvm-build",
@@ -1277,6 +1278,16 @@ dependencies = [
  "sha2",
  "windows-sys",
  "zstd",
+]
+
+[[package]]
+name = "hazync-engine-verify"
+version = "0.1.0"
+dependencies = [
+ "bitcode",
+ "openvm-stark-sdk",
+ "openvm-verify-stark-host",
+ "sha2",
 ]
 
 [[package]]

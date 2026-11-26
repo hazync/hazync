@@ -46,6 +46,8 @@ pub enum Refusal {
     IdLength = 6,
     /// The verifying key's bytes are not the pinned key's (SHA-256 differs), or the pin is not 32 bytes.
     VkPin = 7,
+    /// The file is not an engine proof container (magic, lengths).
+    Container = 8,
 }
 
 impl std::fmt::Display for Refusal {
@@ -58,6 +60,7 @@ impl std::fmt::Display for Refusal {
             Refusal::Image => "the verifying key is not the published image's (SHA-256(exe || vm) differs)",
             Refusal::IdLength => "the image id is not 32 bytes",
             Refusal::VkPin => "the verifying key is not the image's pinned key (SHA-256 of the key file differs)",
+            Refusal::Container => "not an engine proof file (HZE1 magic, proof length, journal)",
         })
     }
 }
@@ -68,6 +71,39 @@ pub fn code(r: Result<(), Refusal>) -> u32 {
         Ok(()) => 1,
         Err(e) => e as u32,
     }
+}
+
+/// The engine proof file: `HZE1`, the compressed proof's length (u32 LE), the compressed proof (OpenVM's codec, zstd:
+/// what `hzengine wasm-inputs` writes as proof.zst), then the journal (the rest of the file). The magic comes first so
+/// that no decoder is ever handed bytes of another kind (a RISC Zero receipt starts with a bincode u32 0..3).
+pub const MAGIC: [u8; 4] = *b"HZE1";
+
+/// An engine proof file from its parts.
+pub fn pack(proof: &[u8], journal: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(8 + proof.len() + journal.len());
+    v.extend_from_slice(&MAGIC);
+    v.extend_from_slice(&(proof.len() as u32).to_le_bytes());
+    v.extend_from_slice(proof);
+    v.extend_from_slice(journal);
+    v
+}
+
+/// (compressed proof, journal) from an engine proof file.
+pub fn unpack(file: &[u8]) -> Result<(&[u8], &[u8]), Refusal> {
+    if file.len() < 8 || file[..4] != MAGIC {
+        return Err(Refusal::Container);
+    }
+    let n = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
+    let rest = &file[8..];
+    if n == 0 || n > rest.len() {
+        return Err(Refusal::Container);
+    }
+    Ok(rest.split_at(n))
+}
+
+/// Is this an engine proof file (by its magic alone)?
+pub fn is_engine_proof(file: &[u8]) -> bool {
+    file.len() >= 4 && file[..4] == MAGIC
 }
 
 /// The verifying key from its bytes (bitcode of VmStarkVerifyingKey: agg.vk + baseline, `hzengine wasm-inputs`).

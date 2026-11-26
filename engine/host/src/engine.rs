@@ -516,7 +516,7 @@ pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
     use openvm_stark_backend::codec::Encode;
     let e = Engine::load(dir)?;
     let baseline = Engine::baseline(dir)?;
-    let (proof, _) = read_proof(&e, &baseline, proof_path)?;
+    let (proof, journal) = read_proof(&e, &baseline, proof_path)?;
     std::fs::create_dir_all(out)?;
     let vk = VmStarkVerifyingKey { mvk: e.agg_vk.as_ref().clone(), baseline };
     std::fs::write(out.join("vk.bin"), bitcode::serialize(&vk)?)?;
@@ -524,6 +524,9 @@ pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
     proof.encode(&mut enc)?;
     let z = zstd::encode_all(&enc[..], 19)?;
     std::fs::write(out.join("proof.zst"), &z)?;
+    // the engine proof file the verifiers read (engine/verify-core: HZE1, proof, journal), and the key's pin
+    std::fs::write(out.join("proof.hze"), hazync_engine_verify::pack(&z, &journal))?;
+    std::fs::write(out.join("vk.sha256"), format!("{}\n", hex::encode(Sha256::digest(std::fs::read(out.join("vk.bin"))?))))?;
     let mut bad = enc.clone();
     let k = bad.len() / 2;
     bad[k] ^= 1;
