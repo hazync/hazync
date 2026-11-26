@@ -63,3 +63,23 @@ test or fixture exists). The engine has its image (keys-z-zeroconf) and `prove-z
 tip and speculative chunk proofs as children, tip first). Finishing it needs a fixture: a transaction valid on top of
 a proven tip, its speculative chunk proved (HAZYNC_SPECULATIVE), and its inputs' coin-log paths; most practical on a
 regtest chain the rig builds (its own spendable coins).
+
+## zeroconf: the plan for its fixture (26.11.2026 late)
+
+What it needs and where it comes from:
+1. **Network.** The guest takes `signet: bool` and checks the core statement for mainnet or signet only; a valid test
+   transaction is impossible on mainnet's early chain (no keys). Change the input to a network code u32 (0 mainnet,
+   1 signet, 2 regtest): RISC Zero's serde writes a bool as one word, so every mainnet / signet stream stays
+   byte-identical; the guest was never published, so its new id costs nothing.
+2. **Chain.** scripts/zapp-regtest: 110 blocks + branches built with Core's test_framework, every key published on
+   purpose (chain/scenarios.json). Its states in node format 2 from native prep (seconds); its history.bin (for the
+   coin-log paths) from a host replay of 1..110 (RISC Zero dev mode, ~45 min CPU) or a prep history writer.
+3. **Transaction.** A spend of a harness coin unspent at the tip (e.g. an ALICE output of 102), signed with the
+   published key, valid for block 111 on branch a's parent.
+4. **Speculative chunk.** The host's HAZYNC_SPECULATIVE chunk (zero hash and time, height tip+1, MTP of the tip) over
+   a template block holding that transaction: its journal (identical on both provers).
+5. **Paths.** `zync-path coin` per input from that history.
+6. **Run.** `zyncapp prove-zeroconf --stream` with the two journals -> the engine on a metering zeroconf image
+   (env::verify accepts without proofs): the zAPP's own checks end to end; its statement compared with the
+   transaction (txid, wtxid, fee, weight, sigops). Then with real children: the regtest chain and the chunk proved on
+   the engine (a GPU run), and the negatives (a spent input, an unconfirmed parent, a chunk for another height).
