@@ -17,7 +17,7 @@ use openvm_stark_backend::keygen::types::MultiStarkVerifyingKey;
 use openvm_stark_sdk::config::{
     app_params_with_100_bits_security, hook_params_with_100_bits_security, MAX_APP_LOG_STACKED_HEIGHT,
 };
-use openvm_verify_stark_circuit::extension::{get_deferral_state, get_raw_deferral_results};
+use openvm_verify_stark_circuit::extension::get_raw_deferral_results;
 use openvm_verify_stark_host::{
     vk::{VerificationBaseline, VmStarkVerifyingKey},
     VmStarkProof,
@@ -268,10 +268,32 @@ impl Engine {
     /// For each child proof: its deferral input commitment (what the guest passes to verify_stark) and the
     /// (exe, vm, user public values) the guest will get back.
     pub fn child_calls(&self, baseline: &VerificationBaseline, children: &[VmStarkProof]) -> Result<Vec<ChildCall>> {
-        let vk = self.child_vk(baseline.clone());
+        let bs: Vec<&VerificationBaseline> = children.iter().map(|_| baseline).collect();
+        self.child_calls_of(&bs, children)
+    }
+
+    /// Each child's raw deferral result, checked under ITS image's baseline (`baselines[i]` for `children[i]`).
+    /// get_raw_deferral_results works proof by proof: the baseline enters only its host-side check of the proof's
+    /// public values (verify_vm_stark_proof_pvs: the proof is of that executable); the STARK is verified under the VM's
+    /// key and the input commit is the VM-level cached commit's. So children of several images on the SAME VM can be
+    /// verified in one run (a utreexo tip step: the previous utreexo statement and the core); each result carries its
+    /// own exe and vm commitments, which the guest binds to the id it asks env::verify for.
+    fn raw_results_of(&self, baselines: &[&VerificationBaseline], children: &[VmStarkProof])
+        -> Result<Vec<openvm_deferral_circuit::RawDeferralResult>> {
+        ensure!(baselines.len() == children.len(), "one baseline per child");
         let cc = self.verify_stark_cached_commit()?;
-        let raw = get_raw_deferral_results(&vk, children, cc)?;
-        ensure!(raw.len() == children.len(), "one deferral result per child");
+        let mut raw = Vec::with_capacity(children.len());
+        for (b, p) in baselines.iter().zip(children) {
+            let r = get_raw_deferral_results(&self.child_vk((*b).clone()), slice::from_ref(p), cc)?;
+            ensure!(r.len() == 1, "one deferral result per child");
+            raw.extend(r);
+        }
+        Ok(raw)
+    }
+
+    /// As `child_calls`, each child under its own image's baseline.
+    pub fn child_calls_of(&self, baselines: &[&VerificationBaseline], children: &[VmStarkProof]) -> Result<Vec<ChildCall>> {
+        let raw = self.raw_results_of(baselines, children)?;
         raw.into_iter()
             .map(|r| {
                 let input_commit: [u8; 32] = r.input.clone().try_into().map_err(|_| eyre!("input commit size"))?;
@@ -295,13 +317,26 @@ impl Engine {
         stdin: &mut StdIn,
         children: &[VmStarkProof],
     ) -> Result<Vec<DeferralInput>> {
+        let bs: Vec<&VerificationBaseline> = children.iter().map(|_| baseline).collect();
+        self.attach_children_of(&bs, stdin, children)
+    }
+
+    /// As `attach_children`, each child under its own image's baseline: the deferral state is OpenVM's
+    /// get_deferral_state, built from the per-child raw results (`raw_results_of`) instead of one baseline's.
+    pub fn attach_children_of(
+        &self,
+        baselines: &[&VerificationBaseline],
+        stdin: &mut StdIn,
+        children: &[VmStarkProof],
+    ) -> Result<Vec<DeferralInput>> {
         if children.is_empty() {
             stdin.deferrals = vec![Default::default()];
             return Ok(vec![DeferralInput::default()]);
         }
-        let vk = self.child_vk(baseline.clone());
-        let cc = self.verify_stark_cached_commit()?;
-        stdin.deferrals = vec![get_deferral_state(&vk, children, cc, VERIFY_STARK_DEF_IDX as u32)?];
+        let raw = self.raw_results_of(baselines, children)?;
+        let results = openvm_deferral_circuit::generate_deferral_results(
+            raw, VERIFY_STARK_DEF_IDX as u32, &openvm_deferral_circuit::poseidon2::deferral_poseidon2_chip::<F>());
+        stdin.deferrals = vec![openvm_sdk::openvm_circuit::arch::deferral::DeferralState::new(results)];
         Ok(vec![DeferralInput::from_inputs(children)])
     }
 

@@ -26,6 +26,8 @@ openvm-sdk-config = { git = "https://github.com/openvm-org/openvm.git", tag = "v
 openvm-verify-stark-circuit = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-verify-stark-host = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-recursion-circuit = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+# generate_deferral_results: children of several images in one run (engine.rs attach_children_of)
+openvm-deferral-circuit = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-stark-backend = { git = "https://github.com/openvm-org/stark-backend.git", tag = "v2.1.0", default-features = false }
 openvm-stark-sdk = { git = "https://github.com/openvm-org/stark-backend.git", tag = "v2.1.0", default-features = false, features = ["cpu-backend"] }
 

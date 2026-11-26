@@ -1264,6 +1264,7 @@ dependencies = [
  "hex",
  "libc",
  "openvm-build",
+ "openvm-deferral-circuit",
  "openvm-recursion-circuit",
  "openvm-sdk",
  "openvm-sdk-config",

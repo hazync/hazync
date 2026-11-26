@@ -54,37 +54,43 @@ pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], se
 }
 
 /// `known`: the journal an execution of this same input committed (skips the emit pass; checked against the proof).
-/// The image the child proofs are of: this one (`dir`), or HZ_CHILD_KEYS=<keys dir> for another image on the SAME VM
-/// (a zyncAPP verifying a core proof). Children are decoded, checked and attached against that image's baseline; the
-/// aggregation key is the VM's, so it is shared. Returns that dir and its baseline.
-fn child_keys(dir: &Path, own: &openvm_verify_stark_host::vk::VerificationBaseline)
-    -> Result<(std::path::PathBuf, openvm_verify_stark_host::vk::VerificationBaseline)> {
-    match std::env::var_os("HZ_CHILD_KEYS") {
-        None => Ok((dir.to_path_buf(), own.clone())),
-        Some(d) => {
-            let d = std::path::PathBuf::from(d);
-            let b = Engine::baseline(&d)?;
-            eprintln!("children: proofs of the image in {}", d.display());
-            Ok((d, b))
+/// The image each child proof is of: this one (`dir`), or HZ_CHILD_KEYS for other images on the SAME VM (a zyncAPP
+/// verifying a core proof): one keys dir for every child, or a comma-separated list, one per child in --child order
+/// (a utreexo tip step: the previous utreexo statement's image, then the core's). Each child is decoded, checked and
+/// attached against its own image's baseline; the aggregation key is the VM's, so it is shared.
+fn child_keys(dir: &Path, own: &openvm_verify_stark_host::vk::VerificationBaseline, n: usize)
+    -> Result<Vec<(std::path::PathBuf, openvm_verify_stark_host::vk::VerificationBaseline)>> {
+    let dirs: Vec<std::path::PathBuf> = match std::env::var("HZ_CHILD_KEYS") {
+        Err(_) => return Ok(vec![(dir.to_path_buf(), own.clone()); n]),
+        Ok(s) => {
+            let v: Vec<std::path::PathBuf> = s.split(',').map(std::path::PathBuf::from).collect();
+            ensure!(v.len() == 1 || v.len() == n, "HZ_CHILD_KEYS names {} images for {n} children", v.len());
+            if v.len() == 1 { vec![v[0].clone(); n] } else { v }
         }
+    };
+    let mut out: Vec<(std::path::PathBuf, openvm_verify_stark_host::vk::VerificationBaseline)> = Vec::with_capacity(n);
+    for d in dirs {
+        let b = match out.iter().find(|(x, _)| *x == d) { Some((_, b)) => b.clone(), None => Engine::baseline(&d)? };
+        eprintln!("child {}: a proof of the image in {}", out.len(), d.display());
+        out.push((d, b));
     }
+    Ok(out)
 }
 
 pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], self_id_at: Option<usize>, known: Option<&Path>, out: &Path) -> Result<()> {
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
-    let (child_dir, cbase) = child_keys(dir, &baseline)?;
+    let ck = child_keys(dir, &baseline, children.len())?;
+    let cb: Vec<&openvm_verify_stark_host::vk::VerificationBaseline> = ck.iter().map(|(_, b)| b).collect();
     let mut stream = std::fs::read(input)?;
     let mut proofs = Vec::new();
-    for c in children {
-        proofs.push(read_proof(e, &cbase, c)?.0);
+    for (c, b) in children.iter().zip(&cb) {
+        proofs.push(read_proof(e, b, c)?.0);
     }
-    let calls = e.child_calls(&cbase, &proofs)?;
-    if !calls.is_empty() {
-        let img = Engine::image(&child_dir)?;
-        for (c, p) in calls.iter().zip(children) {
-            ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "{}: not a proof of this image", p.display());
-        }
+    let calls = e.child_calls_of(&cb, &proofs)?;
+    for ((c, p), (d, _)) in calls.iter().zip(children).zip(&ck) {
+        let img = Engine::image(d)?;
+        ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "{}: not a proof of the image in {}", p.display(), d.display());
     }
     if let Some(at) = self_id_at {
         // The product host writes its RISC Zero METHOD_ID at bytes 4..36 (mode word, then the id; SELF_ID_AT); a zAPP
@@ -99,8 +105,8 @@ pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBu
         s
     };
     let (mut emit, mut prv) = (mk(true), mk(false));
-    e.attach_children(&cbase, &mut emit, &proofs)?;
-    let defs = e.attach_children(&cbase, &mut prv, &proofs)?;
+    e.attach_children_of(&cb, &mut emit, &proofs)?;
+    let defs = e.attach_children_of(&cb, &mut prv, &proofs)?;
     let known = known.map(std::fs::read).transpose()?;
     let emit = if known.is_some() { None } else { Some(emit) };
     let (proof, journal) = e.prove_known(exe, emit, known, prv, &defs)?;
@@ -134,13 +140,14 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     ensure!(!dry || children.is_empty(), "a dry run takes no proofs");
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
-    let (_, cbase) = child_keys(dir, &baseline)?;
+    let ck = child_keys(dir, &baseline, children.len())?;
+    let cb: Vec<&openvm_verify_stark_host::vk::VerificationBaseline> = ck.iter().map(|(_, b)| b).collect();
     let mut stream = std::fs::read(input)?;
     let mut proofs = Vec::new();
-    for c in children {
-        proofs.push(read_proof(e, &cbase, c)?.0);
+    for (c, b) in children.iter().zip(&cb) {
+        proofs.push(read_proof(e, b, c)?.0);
     }
-    let calls = e.child_calls(&cbase, &proofs)?;
+    let calls = e.child_calls_of(&cb, &proofs)?;
     if let Some(at) = self_id_at {
         put_self_id(dir, &mut stream, at)?;
     }
@@ -148,7 +155,7 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     let mut s = StdIn::default();
     s.write_bytes(&control_flags(1 | if dry { 2 } else { 0 }, &commits));
     s.write_bytes(&stream);
-    e.attach_children(&cbase, &mut s, &proofs)?;
+    e.attach_children_of(&cb, &mut s, &proofs)?;
     let t = std::time::Instant::now();
     if std::env::var("HZ_SEGMENTS").is_ok() {
         // how the prover would segment this run (HZ_SEG_MEM_GB changes it)
