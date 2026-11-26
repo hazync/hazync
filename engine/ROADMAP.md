@@ -19,7 +19,7 @@ any image freeze; only measured numbers; merged is not deployed (every stage end
 | 1.2 | tap_small (block 127's one input) PROVED with the C heap at 2^29 | ✅ (and tap_full) | results/q7_attack_blocks |
 | 1.3 | light_only proved with the C heap ✅; mem_k1140's full cost at 2^29 (several GPUs) | ◐ | results/q7_attack_blocks |
 | 1.4 | Node format 2 (trie / coin log) adopted, both provers agree | ✅ | results/node_format2 |
-| 1.5 | **Final-image re-run**: Core's 22,666 vectors, the rig's 96 cases, blocks.sh edge blocks + 962,000 negatives, on the image with format 2 + C heap (today's evidence spans older images) | ☐ | |
+| 1.5 | **Final-image re-run** (format 2 + C heap): Core's vectors ✅ (identical), the rig ✅ 96/96 (tap_heap_794, the 97th, to run), edge blocks ✅ 9/10, mem_k1140 ✅ proved (16 chunks, 2x PRO 6000, 1,484 s; RISC Zero reference pending); 962,000 negatives ☐ | ◐ | results/core_vectors, rig_engine, edge_blocks, q7_attack_blocks |
 | 1.6 | Block 2,016 (the edge block not run: its prepared file is not in the repo) | ☐ | |
 | 1.7 | **[U]** OpenVM audit coverage: is v2.1.0's post-audit diff reviewed; do the 1.x ECC/algebra audits hold for 2.x. **User 26.11: later (park until Stage 4)**; gate 1 passes without it, gate 4 needs it | ☐ | FEASIBILITY Q1 (diff sizes measured) |
 | 1.8 | 512 MiB stated as a design limit: the guest's worst-case memory per input documented, with the C heap | ☐ | |

@@ -14,3 +14,9 @@ on RISC Zero and on the engine (hz24 keys), verdict for verdict.
 **Result (cv.out): 176/176 streams with IDENTICAL verdicts (21,987 cases), 0 differing; all 679 RISC Zero aborts
 also refused by the engine, 0 accepted; 0 engine-only aborts.** The engine agrees with RISC Zero, and so with Core's
 expectations as the product's core-vectors run checks them, on every vector.
+
+## Re-run on the FINAL image (node format 2 + C-heap recycling; keys-ch, 26.11.2026 afternoon; roadmap 1.5)
+
+The same 855 streams through `hzengine serve` on keys-ch (cv_drive_ch.py, 3 workers, 9,540 s on the build box):
+**176/176 verdict streams IDENTICAL (21,987 cases), 0 differ; all 679 RISC Zero aborts refused, 0 accepted; 0
+engine-only aborts** (cv_final_image.out). The C heap (Core's interpreter now recycles its allocations) changes no verdict.
