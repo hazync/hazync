@@ -167,8 +167,16 @@ impl Engine {
         std::fs::write(&input, stream).unwrap();
         let (log, journal) = (input.with_extension("log"), input.with_extension("journal"));
         let ch: Vec<String> = children.iter().map(|c| c.path.display().to_string()).collect();
-        let r = self.req(serde_json::json!({"op": "execute", "input": input, "children": ch, "self_id": self_id,
-                                            "dry": dry, "journal": journal, "log": log}));
+        // A failed run panics with the end of the guest's log, as try_execute reports it: the guest's own verdict
+        // (e.g. "agg-lite: block INVALID ...", then its refusal to commit) is there, where RISC Zero's executor prints
+        // guest output straight to this process's output (the core-rules rig reads it; 26.11.2026).
+        let r = self.try_req(serde_json::json!({"op": "execute", "input": input, "children": ch, "self_id": self_id,
+                                                "dry": dry, "journal": journal, "log": log}))
+            .unwrap_or_else(|e| {
+                let text = std::fs::read_to_string(&log).unwrap_or_default();
+                let tail: Vec<&str> = text.lines().rev().take(8).collect();
+                panic!("engine: execute of {name} failed: {e}; guest log ends: {}", tail.into_iter().rev().collect::<Vec<_>>().join(" | "))
+            });
         let exit = r["exit"].as_str().map(|c| c.parse().expect("engine: exit code"));
         let out = Exec {
             exit,
