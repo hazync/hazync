@@ -43,17 +43,34 @@ pub fn prove_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], se
 }
 
 /// `known`: the journal an execution of this same input committed (skips the emit pass; checked against the proof).
+/// The image the child proofs are of: this one (`dir`), or HZ_CHILD_KEYS=<keys dir> for another image on the SAME VM
+/// (a zyncAPP verifying a core proof). Children are decoded, checked and attached against that image's baseline; the
+/// aggregation key is the VM's, so it is shared. Returns that dir and its baseline.
+fn child_keys(dir: &Path, own: &openvm_verify_stark_host::vk::VerificationBaseline)
+    -> Result<(std::path::PathBuf, openvm_verify_stark_host::vk::VerificationBaseline)> {
+    match std::env::var_os("HZ_CHILD_KEYS") {
+        None => Ok((dir.to_path_buf(), own.clone())),
+        Some(d) => {
+            let d = std::path::PathBuf::from(d);
+            let b = Engine::baseline(&d)?;
+            eprintln!("children: proofs of the image in {}", d.display());
+            Ok((d, b))
+        }
+    }
+}
+
 pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], set_self_id: bool, known: Option<&Path>, out: &Path) -> Result<()> {
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
+    let (child_dir, cbase) = child_keys(dir, &baseline)?;
     let mut stream = std::fs::read(input)?;
     let mut proofs = Vec::new();
     for c in children {
-        proofs.push(read_proof(e, &baseline, c)?.0);
+        proofs.push(read_proof(e, &cbase, c)?.0);
     }
-    let calls = e.child_calls(&baseline, &proofs)?;
+    let calls = e.child_calls(&cbase, &proofs)?;
     if !calls.is_empty() {
-        let img = Engine::image(dir)?;
+        let img = Engine::image(&child_dir)?;
         for (c, p) in calls.iter().zip(children) {
             ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "{}: not a proof of this image", p.display());
         }
@@ -72,8 +89,8 @@ pub fn prove_with_known(e: &Engine, dir: &Path, input: &Path, children: &[PathBu
         s
     };
     let (mut emit, mut prv) = (mk(true), mk(false));
-    e.attach_children(&baseline, &mut emit, &proofs)?;
-    let defs = e.attach_children(&baseline, &mut prv, &proofs)?;
+    e.attach_children(&cbase, &mut emit, &proofs)?;
+    let defs = e.attach_children(&cbase, &mut prv, &proofs)?;
     let known = known.map(std::fs::read).transpose()?;
     let emit = if known.is_some() { None } else { Some(emit) };
     let (proof, journal) = e.prove_known(exe, emit, known, prv, &defs)?;
@@ -107,12 +124,13 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     ensure!(!dry || children.is_empty(), "a dry run takes no proofs");
     let exe = Engine::exe(dir)?;
     let baseline = Engine::baseline(dir)?;
+    let (_, cbase) = child_keys(dir, &baseline)?;
     let mut stream = std::fs::read(input)?;
     let mut proofs = Vec::new();
     for c in children {
-        proofs.push(read_proof(e, &baseline, c)?.0);
+        proofs.push(read_proof(e, &cbase, c)?.0);
     }
-    let calls = e.child_calls(&baseline, &proofs)?;
+    let calls = e.child_calls(&cbase, &proofs)?;
     if set_self_id {
         let img = Engine::image(dir)?;
         stream[4..36].copy_from_slice(&image_id(&img));
@@ -121,7 +139,7 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     let mut s = StdIn::default();
     s.write_bytes(&control_flags(1 | if dry { 2 } else { 0 }, &commits));
     s.write_bytes(&stream);
-    e.attach_children(&baseline, &mut s, &proofs)?;
+    e.attach_children(&cbase, &mut s, &proofs)?;
     let t = std::time::Instant::now();
     if std::env::var("HZ_SEGMENTS").is_ok() {
         // how the prover would segment this run (HZ_SEG_MEM_GB changes it)
