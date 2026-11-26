@@ -30,5 +30,13 @@ node changed (both "an input's coin is not unspent at the tip"), one path for tw
 a chunk for another height (both "not for the block after this tip"), a chunk not all valid, no such record, the
 wrong network ("wrong network"); the control (the fixture) accepted.
 
-Left: the same with REAL children (the regtest chain to 110 and the chunk proved on the engine, production image):
-a GPU run; and a spent input / an unconfirmed parent as fixture cases.
+**With REAL child proofs, on CPU** (`../real_proofs.sh`, build box): block 110 proved by the regtest core image
+(keys-rtch) as a base step on native prep's state at 109 (368 s); the speculative chunk proved by the same image
+(140 s; its journal = the fixture's); zeroconf proved by the PRODUCTION image (keys-z-zeroconf2) with both as children,
+verified in-guest (161 s); `hzengine verify` OK. Statement: kind 0x5A430002, tip 110 `2d5cc9c8...`, core_id = keys-rtch's
+image id, txid / wtxid = T's, fee 10,000, weight 1,031, sigops 1. (A tip proved from an anchor, not from genesis:
+enough for the zAPP, whose statement carries the anchor_id for its verifier to check; the chain from genesis is
+the core prover's, tested on mainnet 1..200.)
+
+Left: a spent input and an unconfirmed parent as fixture cases (both need their own chunk); the zeroconf verifier
+side (`zyncapp verify-zeroconf` on an engine proof: the statement's checks against a verified core state).
