@@ -404,7 +404,9 @@ fn main() {
             let jread = |p: &str| std::fs::read(p).unwrap_or_else(|e| die(&format!("{p}: {e}")));
             let (tip_j, chunk_j) = match (&tip, &chunk) {
                 (Some(t), Some(c)) => (t.journal.bytes.clone(), c.journal.bytes.clone()),
-                _ => (jread(&a[1]), jread(&a[2])),
+                // the tip as a journal file, or as a state JSON whose journal is rebuilt (load_core: an execute-only
+                // input, as the other zAPP hosts take one)
+                _ => (if a[1].ends_with(".json") { load_core(&a[1], true).1 } else { jread(&a[1]) }, jread(&a[2])),
             };
             let cs: ChainState = risc0_zkvm::serde::from_slice(&jwords(&tip_j)).unwrap_or_else(|e| die(&format!("tip journal: {e}")));
             let idx: u32 = a[3].parse().unwrap_or_else(|_| die("record index?"));
