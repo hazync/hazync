@@ -62,6 +62,16 @@ int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                            const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
 
+/* As swiftsync_verify_facts, for an ENGINE (OpenVM) proof file (`HZE1`, engine/VERIFIER.md; a library built with the
+ * `engine` feature). vk/vk_len: the image's verifying key file. vk_pin: 32 bytes, SHA-256 of that file, which you must
+ * hold as the image's PUBLISHED pin: never compute it from the key you were handed, because OpenVM's verifier trusts
+ * the key it is given (the image id does not authenticate a key). out->profile has bit 7 (node format 2). An engine
+ * proof given to swiftsync_verify / swiftsync_verify_facts is FAIL with a message saying to call this. */
+int swiftsync_verify_engine_facts(const uint8_t* proof, size_t proof_len,
+                                  uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
+                                  const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin,
+                                  const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
+
 /* The built-in image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network. Static storage. */
 const char* swiftsync_image_id(uint8_t network);
 

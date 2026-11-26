@@ -85,6 +85,11 @@ being handed to a decoder.
    9's coinbase SPENT at 170 by tx 1 input 0; refused: a path node, a wrong preimage, no preimage, spent claimed
    unspent. Trie, tx and journey facts: to do (they need the engine chain's trie dump / tx facts from the host).
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
+   **C ABI, 26.11 late:** `swiftsync_verify_engine_facts(proof, ..., vk, vk_len, vk_pin, facts, expect, ...)`
+   (swiftsync-verify-ffi `--features engine`; header documents that the pin must be the PUBLISHED one). test_engine.c
+   on the engine chain's block 200: DEMO with profile 0xf1 and 209 coins; with block 9's coinbase spent-fact DEMO; FAIL
+   for: the fact with another spender, another pin, a journal bit, no key, an engine proof given to swiftsync_verify.
+   The default library: test.c's output identical to test.out (17 lines).
    **WASM probe 26.11 late** (a scratch copy of swiftsync-verify-wasm, `--features engine` on swiftsync-verify):
    compiles for wasm32-unknown-unknown as a RAW module (no JS glue) given three things: (a) OpenVM's abi-stable patch;
    (b) stark-backend's nologging patch and EVERY stark-backend crate [patch]ed to that one copy: without it stark-sdk's

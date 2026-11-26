@@ -50,6 +50,33 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
                                                 network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
                                                 facts_json: *const c_char, expect: *const c_char,
                                                 out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
+    verify_inner(receipt, receipt_len, network, now, image_hex, anchor_json, None, facts_json, expect, out, msg, msg_len)
+}
+
+/// As `swiftsync_verify_facts`, for an engine (OpenVM) proof file (engine/VERIFIER.md; a build with the `engine`
+/// feature): `vk`/`vk_len` is the image's verifying key file and `vk_pin` its 32-byte SHA-256, which the caller must hold
+/// as the image's PUBLISHED pin (never computed from the key it was handed: OpenVM's verifier trusts the key it gets).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn swiftsync_verify_engine_facts(proof: *const u8, proof_len: usize,
+                                                       network: u8, now: u64, image_hex: *const c_char, anchor_json: *const c_char,
+                                                       vk: *const u8, vk_len: usize, vk_pin: *const u8,
+                                                       facts_json: *const c_char, expect: *const c_char,
+                                                       out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
+    if vk.is_null() || vk_len == 0 || vk_pin.is_null() {
+        write_msg(msg, msg_len, "an engine proof needs its verifying key and the key's 32-byte pin");
+        return FAIL;
+    }
+    let mut pin = [0u8; 32];
+    pin.copy_from_slice(slice(vk_pin, 32));
+    verify_inner(proof, proof_len, network, now, image_hex, anchor_json, Some((slice(vk, vk_len), pin)), facts_json, expect,
+                 out, msg, msg_len)
+}
+
+#[allow(clippy::too_many_arguments)]
+unsafe fn verify_inner(receipt: *const u8, receipt_len: usize, network: u8, now: u64, image_hex: *const c_char,
+                       anchor_json: *const c_char, key: Option<(&[u8], [u8; 32])>, facts_json: *const c_char,
+                       expect: *const c_char, out: *mut SwiftsyncResult, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
     // network: 0 mainnet, 1 signet; bit 0x10 = a coin-log image (the one whose proofs carry coin facts); bit 0x20 = the
     // product image (coin log, counting trie, live-coin hash: the one whose proofs carry trie facts).
@@ -76,7 +103,14 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
         }
     };
     let receipt = slice(receipt, receipt_len);
-    let rep = if receipt.starts_with(BUNDLE_MAGIC) {
+    let rep = if let Some((vk, pin)) = key {
+        match engine_verify(&Inputs { receipt, image: image.with_node2(), anchor, now }, vk, pin) {
+            Ok(r) => r,
+            Err(e) => return fail(&e),
+        }
+    } else if swiftsync_verify::is_engine_proof(receipt) {
+        return fail("an engine (OpenVM) proof: call swiftsync_verify_engine_facts with its verifying key and pin");
+    } else if receipt.starts_with(BUNDLE_MAGIC) {
         match Bundle::decode(receipt) {
             Ok(b) => check_bundle(&b, image, anchor, now),
             Err(e) => return fail(&e),
@@ -273,4 +307,14 @@ mod trie_tests {
         let held = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
         assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &held).unwrap_err().contains("origin"));
     }
+}
+
+#[cfg(feature = "engine")]
+fn engine_verify(inp: &Inputs, vk: &[u8], pin: [u8; 32]) -> Result<swiftsync_verify::Report, String> {
+    Ok(swiftsync_verify::verify_engine(inp, &swiftsync_verify::EngineKey { bytes: vk, pin }))
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_verify(_: &Inputs, _: &[u8], _: [u8; 32]) -> Result<swiftsync_verify::Report, String> {
+    Err("an engine (OpenVM) proof: this library was built without engine support (--features engine)".into())
 }
