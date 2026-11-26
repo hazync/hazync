@@ -1,8 +1,11 @@
 # Verifying engine proofs: swiftsync-verify on OpenVM (roadmap 2.4, design, 26.11.2026)
 
 Goal: the released verifiers (swiftsync-verify's CLI, its C ABI, its WASM, and corecheck) accept a proof of the
-engine chain with the same checks and the same verdicts they give a RISC Zero receipt today, and keep accepting the
-frozen RISC Zero chain's receipts.
+engine chain with the same checks and the same verdicts they give a RISC Zero receipt today.
+
+**Decided (user, 26.11.2026): the new chain is OpenVM only, re-proved from genesis; no RISC Zero proofs in it.** So the
+new verifier checks ENGINE proofs only. The frozen RISC Zero chain stays checkable with the verifier versions already
+released (roadmap 6.4); the new release does not carry RISC Zero's verifier.
 
 ## What changes and what does not
 
@@ -26,18 +29,14 @@ Only 1-3 know which prover made the proof. Steps 3-12 read the `ChainState` and 
   its verifying key (agg.vk + baseline, ~96 KB bitcode; embedded like the RISC Zero ids are today, or shipped as a
   file whose hash is pinned). Handovers stay a list of image ids; an id says which prover it is.
 
-## Telling the two apart
+## The proof file
 
-A RISC Zero receipt file starts with bincode's InnerReceipt variant (u32 LE 0-3). The engine proof is a new container:
-a 4-byte magic (`HZE1`), then the zstd of OpenVM's codec encoding (what `hzengine wasm-inputs` writes as proof.zst).
-The magic is checked first, so neither decoder is ever handed the other's bytes.
+The engine proof is a new container: a 4-byte magic (`HZE1`), then the zstd of OpenVM's codec encoding (what
+`hzengine wasm-inputs` writes as proof.zst), then the journal. The magic is checked first, so a RISC Zero receipt (or
+anything else) is refused with a clear line ("not an engine proof: check the old chain with release <x>") instead of
+being handed to a decoder.
 
-## Recommendation (needs the user's OK: it decides the release shape)
-
-**One verifier for both provers.** The frozen RISC Zero chain stays checkable with the same tool, a user never has to
-know which prover a file came from, and the statement checks (most of the code, and all of its review history) stay
-in one place. Cost: the WASM grows by OpenVM's verifier, measured at ~0.7 MB (wasm-verify: 736,681 bytes standalone).
-The alternative, a separate engine verifier, duplicates steps 3-12.
+(Superseded: the recommendation of one verifier for BOTH provers. Not needed: the new chain has no RISC Zero proofs.)
 
 ## Work, in order
 
@@ -52,9 +51,12 @@ The alternative, a separate engine verifier, duplicates steps 3-12.
    natively on OpenVM v2.1.0 as released; wasm-verify rebuilt on it passes natively and in Node (engine/wasm-verify/README.md).
    The abi-stable patch is still applied to an OpenVM copy OUTSIDE the repo: a release build must apply it from the
    repo (as engine/handover/assemble.sh does its patches), or get it upstream (roadmap 4.3).
-3. The engine front in swiftsync-verify behind the magic; engine images in the registry (the image's vk embedded).
-4. Tests: the engine chain 1..200's proof of block 200 accepted with the same Report as its RISC Zero twin (apart
-   from the image lines); every negative the RISC Zero suite has, ported (flipped proof byte, wrong image, journal
+3. The engine front REPLACES the RISC Zero front in swiftsync-verify (behind the magic); engine images in the
+   registry (the image's vk embedded, or a file whose hash is pinned); the RISC Zero-only parts (receipt kinds, dev
+   mode, Groth16, `earlier_image_named_by`) leave with it. The journal stays RISC Zero's serde word format (the
+   engine guest writes the same bytes), so only its decoder is kept.
+4. Tests: the engine chain 1..200's proof of block 200 accepted, its Report the same as the RISC Zero chain's for
+   the same block (apart from the image lines); every negative the RISC Zero suite has, ported (flipped proof byte, wrong image, journal
    edit, another image's vk); the fact checks (swiftsync-verify's block / coin / trie / tx facts) on the engine chain.
 5. The C ABI and WASM builds; corecheck; the web page (Stage 3.5).
 6. Review rounds (the user's rule) before any release.
