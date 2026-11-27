@@ -261,18 +261,20 @@ genesis; a false tracked bit), and bad framing (count, trailing byte, truncation
 ## 6. Reproduce against a real node
 
 ```sh
-scripts/libzync/assume_check.sh <H> <proof.hze> <zapp-assume> "bitcoin-cli -datadir=<your node>"
+IMAGE=<core image id> VK=<its key file> scripts/libzync/assume_check.sh <H> <proof.hze> <zapp-assume> "bitcoin-cli -datadir=<your node>"
 ```
 
-⚠ The script does not pass `--image` / `--vk` yet, so on the engine-only checker it fails until it does (docs sweep
-finding, 27.11.2026). The run below is the RISC Zero one of 15.11.2026.
+Run 27.11.2026 on hazync-coord with the engine chain's proof of 1..200 (swiftsync-verify/tests/data/engine200): the
+snapshot (204 coins, 10,000 BTC) is the proven UTXO set (its live-coin hash equals the proof's, and the independent
+reference gives the same hash_serialized_3 and live_hash), assumevalid at 200 and at 100 proven, the snapshot at 199
+refused; DEMO (200 blocks are below Core's minimum work). The RISC Zero run of 15.11.2026 is in git history.
 
 On a box with Core ≥ 28 and an unpruned node: a throwaway node (its own datadir under `$WORK`) syncs blocks 0..H from
 your node over P2P (`-connect=127.0.0.1:8333 -stopatheight=H+1`), restarts offline, and dumps its UTXO set with
 `dumptxoutset … rollback=H`. Then the headers and the tracked list (`assume_inputs.py`), both checks against the
 proof with `--bitcoin-cli` of your node for the identity, the independent reference, and a refusal (the snapshot at
 H−1). Your node is never rolled back: `rollback` on a node at the tip disconnects every block above H and back,
-which for H = 200 on hazync-coord's node (at 975,954 on 15.11.2026) is 975,754 blocks each way. Output at H = 200 on hazync-coord:
+which for H = 200 on hazync-coord's node (at 977,806 on 27.11.2026) is 977,606 blocks each way. Output at H = 200 on hazync-coord:
 `scripts/libzync/assume_check_200.out`.
 
 ## 7. Open
