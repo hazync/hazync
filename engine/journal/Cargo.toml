@@ -1,0 +1,19 @@
+[package]
+name = "hazync-journal"
+version = "0.1.0"
+edition = "2021"
+description = "Hazync: the journal word encoding the guests commit (RISC Zero's serde format, Apache-2.0), with no zkVM crate"
+license = "Apache-2.0"
+
+# The verifiers' only use of risc0-zkvm was this encoding, its Journal and a 32-byte id (engine/CUTOVER.md C1).
+# src/serde is risc0-zkvm 3.1.0's src/serde, byte for byte but for WORD_SIZE (a constant here, as in engine/platform,
+# which the guests link as risc0_zkvm). compat/ (its own crate, so risc0-zkvm stays out of this graph) checks it against risc0-zkvm 3.1.0: cargo run --release.
+
+[dependencies]
+serde = { version = "1", default-features = false, features = ["alloc"] }
+bytemuck = { version = "1", features = ["derive", "extern_crate_alloc"] }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[workspace]

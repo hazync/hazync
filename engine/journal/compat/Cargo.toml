@@ -1,0 +1,10 @@
+[package]
+name = "jcompat"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+hazync-journal = { path = ".." }
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde = { version = "1", features = ["derive"] }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
+[workspace]
