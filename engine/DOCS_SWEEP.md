@@ -94,6 +94,10 @@ DRAFT.md (1,492 lines, 46 lines on RISC Zero / risc0, none on OpenVM). Its measu
 (engine/results/*, only measured numbers, no proving timeframe), and it describes Hazync as it is (no RISC Zero to
 OpenVM history in the abstract or introduction; at most a later development section). Persona reviews after.
 
+The change map, section by section with the engine evidence and what each waits for, is beside the draft (private:
+~/libzync-gpu/paper/ENGINE_CHANGES.md, 27.11.2026). Order: the statement and soundness first (§1.1, §3, §9), the numbers
+last, from the final image.
+
 ## Findings from group A (27.11.2026): code the docs had to contradict, not changed here
 
 - `scripts/libzync/assume_check.sh` calls `zapp-assume` with no `--image` / `--vk`: it fails on the engine-only checker.
