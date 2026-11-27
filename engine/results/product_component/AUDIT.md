@@ -26,6 +26,13 @@ What the product host relies on: `hzengine serve` (engine/host/src/serve.rs) and
 4. **Engine failures panic in the host** (exit 101 with the message), as the RISC Zero path does. A proving run cannot go on
    after either failure, so this is consistent. A long-lived service would want errors instead: Stage 3 (board, tip
    controller).
+   **Assessed 27.11 (no change):** `serve` already answers every error as `{"ok": false, "error": ...}` (serve.rs:
+   `handle` returns Result); only a panic inside the SDK ends the process, and the host then reports "the server is
+   gone (exit status ...)" (AUDIT item from the first round). The board runs the host once per job (prove-range-bridge,
+   fold-range, verify-any: Stage 3.2), so a panic is a failed job the worker retries, as on RISC Zero. Catching panics
+   inside `serve` would keep a process whose GPU state may be half torn down: not done. Re-check for the tip
+   controller (3.1), the one long-lived caller.
+
 5. **Logs.** The SDK's progress spans are INFO on stderr and land in the host's log. RUST_LOG=warn quiets them (now in
    serve's header). The default stays INFO, because the timings in the results come from those spans.
 6. ✅ **Done 27.11: zeroconf's own kind (0x5A5A0001).** See engine/zapps/zeroconf/fixture/README.md.
