@@ -60,7 +60,9 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
         # the pinned lock (the assemble scripts write it too, once they do: the same file)
         cp $K/reproduce/engine-locks/$lock.Cargo.lock "$g/Cargo.lock"
         k=/hz/keys-$n; rm -rf $k && mkdir $k && cp /hz/keys/{sdk.pk,agg.vk,openvm.toml} $k/
-        HZ_GUEST_FEATURES=$feats OPENVM_BUILD_LOCKED=1 HZ_BASE=/hz/base $E build --dir $k --guest "$g" > /hz/$n.build.log 2>&1 \
+        # the guest's build.rs requires HAZYNC_NETWORK to agree with a network feature
+        net=; case ",$feats," in *,signet,*) net=signet;; *,regtest,*) net=regtest;; esac
+        HAZYNC_NETWORK=$net HZ_GUEST_FEATURES=$feats OPENVM_BUILD_LOCKED=1 HZ_BASE=/hz/base $E build --dir $k --guest "$g" > /hz/$n.build.log 2>&1 \
             || { echo "$n: build failed; the log's last 60 lines:"; sed 's/\x1b\[[0-9;]*m//g' /hz/$n.build.log | tail -60; exit 1; }
         id=$(python3 -c "import json,hashlib;i=json.load(open('$k/image.json'));print(hashlib.sha256(bytes.fromhex(i['exe']+i['vm'])).hexdigest())")
         exe=$(python3 -c "import json;print(json.load(open('$k/image.json'))['exe'])"); vm=$(python3 -c "import json;print(json.load(open('$k/image.json'))['vm'])")
