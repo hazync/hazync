@@ -1,0 +1,7 @@
+# a SECOND OpenVM version in one crate graph (engine/HANDOVER.md step 3): Cargo allows one package per `links` value,
+# so the predecessor copy renames its CUDA native-library names (no CUDA in a verifier build).
+--- a/crates/cuda-common/Cargo.toml
++++ b/crates/cuda-common/Cargo.toml
+@@ -11 +11 @@
+-links = "cuda-common"
++links = "cuda-common-v2-0-1"

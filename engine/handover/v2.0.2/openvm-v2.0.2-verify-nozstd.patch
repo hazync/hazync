@@ -1,0 +1,26 @@
+diff -ruN a/crates/verify/Cargo.toml b/crates/verify/Cargo.toml
+--- a/crates/verify/Cargo.toml	2026-11-27 02:40:38.441828679 +0000
++++ b/crates/verify/Cargo.toml	2026-11-27 02:40:38.461050584 +0000
+@@ -21,7 +21,9 @@
+ p3-field.workspace = true
+ serde.workspace = true
+ thiserror.workspace = true
+-zstd.workspace = true
++zstd = { workspace = true, optional = true }
+ 
+ [features]
+-default = []
++# the zstd-compressed proof encoding (verify_vm_stark_proof); off for a zkVM guest (engine/HANDOVER.md)
++default = ["compressed"]
++compressed = ["dep:zstd"]
+diff -ruN a/crates/verify/src/lib.rs b/crates/verify/src/lib.rs
+--- a/crates/verify/src/lib.rs	2026-11-27 02:40:38.443451608 +0000
++++ b/crates/verify/src/lib.rs	2026-11-27 02:40:38.461208656 +0000
+@@ -74,6 +74,7 @@
+ 
+ /// Verifies a non-root VM STARK proof (as a byte stream) given the internal-recursive
+ /// layer verifying key and VM- and exe-specific baseline artifacts.
++#[cfg(feature = "compressed")]
+ pub fn verify_vm_stark_proof(
+     vk: &VmStarkVerifyingKey,
+     encoded_proof: &[u8],

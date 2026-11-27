@@ -81,3 +81,14 @@
      verify_vm_stark_proof_decoded(vk, &p).map_err(|_| Refusal::Stark)?;
      // one byte per field element (the guest reveals bytes); anything above 255 is not a byte
      let pvs: Option<Vec<u8>> = p.user_pvs_proof.public_values.iter().map(|f| u8::try_from(f.as_canonical_u32()).ok()).collect();
+--- a/engine/guest/msm_ovm.rs
++++ b/engine/guest/msm_ovm.rs
+@@ -101,7 +101,7 @@
+     let id = <P as WeierstrassPoint>::IDENTITY;
+     // identity bases contribute nothing; every point below is non-identity
+     let live: Vec<usize> = (0..bases.len()).filter(|&i| bases[i] != id).collect();
+-    let sc: Vec<&[u8]> = live.iter().map(|&i| coeffs[i].as_le_bytes_unchecked()).collect();
++    let sc: Vec<&[u8]> = live.iter().map(|&i| coeffs[i].as_le_bytes()).collect();
+     let bits: Vec<usize> = sc.iter().map(|s| bit_len(s)).collect();
+     let n = live.len();
+     if n <= STRAUS_MAX {

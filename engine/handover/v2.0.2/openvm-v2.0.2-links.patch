@@ -1,0 +1,7 @@
+# a SECOND OpenVM version in one crate graph (engine/HANDOVER.md step 3): Cargo allows one package per `links` value,
+# so the predecessor copy renames its CUDA native-library names (no CUDA in a verifier build).
+--- a/crates/circuits/primitives/Cargo.toml
++++ b/crates/circuits/primitives/Cargo.toml
+@@ -11 +11 @@
+-links = "circuit-primitives-cuda"
++links = "circuit-primitives-cuda-v2-0-2"
