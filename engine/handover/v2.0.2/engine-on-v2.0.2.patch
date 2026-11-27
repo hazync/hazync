@@ -1,0 +1,83 @@
+--- a/engine/host/src/engine.rs
++++ b/engine/host/src/engine.rs
+@@ -465,7 +465,7 @@
+ /// openvm-verify-stark-circuit's output_raw_from_proof; `record_image` checks it against a real proof.
+ pub fn image_of(baseline: &VerificationBaseline) -> Image {
+     use openvm_stark_backend::p3_field::PrimeField32;
+-    let exe = baseline.app_exe_commit();
++    let exe = baseline.app_exe_commit;
+     let parts = [
+         baseline.app_vk_commit.cached_commit, baseline.app_vk_commit.vk_pre_hash,
+         baseline.leaf_vk_commit.cached_commit, baseline.leaf_vk_commit.vk_pre_hash,
+@@ -499,7 +499,8 @@
+ 
+ pub fn read_proof(e: &Engine, baseline: &VerificationBaseline, p: &Path) -> Result<(VmStarkProof, Vec<u8>)> {
+     let v: VersionedVmStarkProof = read_from_file_json(with_ext(p, "proof.json"))?;
+-    let proof = v.decode_using_vk(&e.agg_vk, baseline)?;
++    let _ = baseline;
++    let proof = VmStarkProof::try_from(v)?;   // OpenVM v2.0.2: the proof decodes without the vk
+     let journal = std::fs::read(with_ext(p, "journal"))?;
+     Ok((proof, journal))
+ }
+--- a/engine/host/src/segpar.rs
++++ b/engine/host/src/segpar.rs
+@@ -19,7 +19,7 @@
+         },
+         system::{
+             memory::merkle::{public_values::UserPublicValuesProof, MerkleTree},
+-            program::trace::compute_initial_memory_commit,
++            program::trace::compute_exe_commit_from_mem_config,
+         },
+     },
+     prover::{compute_deferral_merkle_proofs, vm::new_local_prover},
+@@ -214,8 +214,8 @@
+     // deferral Merkle proofs), then the VM goes: its device proving key (~1.2 GiB) is not used by the aggregation
+     // layers, which hold the run's GPU memory peak.
+     let program_commit = *inst.program_commitment();
+-    let initial_state = compute_initial_memory_commit(&vm_poseidon2_hasher(), inst.exe(), &inst.vm.config().as_ref().memory_config);
+-    let initial_pc = F::from_u32(inst.exe().pc_start);
++    // OpenVM v2.0.2: the baseline holds the exe commitment (program, initial memory, pc), not its parts
++    let app_exe_commit = compute_exe_commit_from_mem_config(&program_commit, inst.exe(), &inst.vm.config().as_ref().memory_config);
+     let num_user_pvs = inst.vm.config().as_ref().num_public_values;
+     let final_tree = has_deferrals.then(|| MerkleTree::from_memory(final_memory, &memory_dimensions, &vm_poseidon2_hasher()));
+     drop(inst);
+@@ -250,9 +250,7 @@
+     lap("deferral merkle proofs");
+     // StarkProver::generate_baseline, from the values kept above
+     let baseline = openvm_verify_stark_host::vk::VerificationBaseline {
+-        program_commit,
+-        initial_state,
+-        initial_pc,
++        app_exe_commit,
+         memory_dimensions,
+         num_user_pvs,
+         app_vk_commit: agg.leaf_prover.get_vk_commit(false),
+--- a/engine/verify-core/src/lib.rs
++++ b/engine/verify-core/src/lib.rs
+@@ -115,7 +115,7 @@
+ /// proof does not decode.
+ pub fn verify_stark_bytes(vk: &[u8], proof: &[u8]) -> u32 {
+     let Ok(vk) = decode_vk(vk) else { return 2 };
+-    let Ok(p) = VmStarkProof::decode_from_bytes_using_vk(&vk.mvk, &vk.baseline, proof) else { return 3 };
++    let Ok(p) = (<VmStarkProof as openvm_stark_sdk::openvm_stark_backend::codec::Decode>::decode(&mut &proof[..])) else { return 3 };
+     verify_vm_stark_proof_decoded(&vk, &p).is_ok() as u32
+ }
+ 
+@@ -146,7 +146,7 @@
+ /// (exe, vm) as the guest sees them, from the baseline alone: engine.rs `image_of`.
+ pub fn image_of(vk: &VmStarkVerifyingKey) -> (Vec<u8>, Vec<u8>) {
+     let b = &vk.baseline;
+-    let exe = b.app_exe_commit();
++    let exe = b.app_exe_commit;
+     let parts = [
+         b.app_vk_commit.cached_commit, b.app_vk_commit.vk_pre_hash,
+         b.leaf_vk_commit.cached_commit, b.leaf_vk_commit.vk_pre_hash,
+@@ -174,7 +174,7 @@
+     if image_id_of(vk)[..] != image_id[..] {
+         return Err(Refusal::Image);
+     }
+-    let p = VmStarkProof::decode_from_bytes_using_vk(&vk.mvk, &vk.baseline, proof).map_err(|_| Refusal::Decode)?;
++    let p = (<VmStarkProof as openvm_stark_sdk::openvm_stark_backend::codec::Decode>::decode(&mut &proof[..])).map_err(|_| Refusal::Decode)?;
+     verify_vm_stark_proof_decoded(vk, &p).map_err(|_| Refusal::Stark)?;
+     // one byte per field element (the guest reveals bytes); anything above 255 is not a byte
+     let pvs: Option<Vec<u8>> = p.user_pvs_proof.public_values.iter().map(|f| u8::try_from(f.as_canonical_u32()).ok()).collect();
