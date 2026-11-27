@@ -54,7 +54,9 @@ Findings from ASSESSMENT.md, each assessed (cause, every path, risk) before the 
 - A generation tag for the double-free check: not implemented. The stale alias of a recycled block IS the new block's
   pointer, and a C pointer carries no tag, so a second free of it cannot be told from a legitimate free.
 - Heap-poison run (laptop): the core guest built with `heap-poison` (blocks poisoned on free and on reuse; exe 5e8b9513),
-  every chunk of the nine edge blocks executed: @@POISON@@
+  every chunk of the nine edge blocks executed (185,956, 227,931, 363,725, 364,292, 388,381,
+  419,328, 481,824, 91,842, 91,880: 29 chunks, 1,181 s): **29 of 29 journals byte-identical** to the recorded engine
+  journals (themselves identical to RISC Zero's). No poisoned read changed a result.
 
 ## R1-4 B3: producers and the node format
 
@@ -75,4 +77,7 @@ Findings from ASSESSMENT.md, each assessed (cause, every path, risk) before the 
 
 ## Image ids
 
-The platform (finalize) and comment changes move the core image: @@IDS@@
+Measured, not assumed: reproduce/engine-ids.sh (the container) at db6cad6b gives core 8d1bae9c (exe ca934e67, vm
+00e00077) and zeroconf 1ee5f2d7, the SAME ids as before these fixes (core 8d1bae9c is the batch-fixed image of
+r1_3_verification.md). The bench change only adds code a production build does not compile (cfg) and no panic site
+after it moves; the comment edits stayed on their lines. So the production images are untouched by this part.

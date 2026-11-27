@@ -41,3 +41,17 @@ domain tag for the lineage `verifier` field: consider at the next lineage format
 OpenVM's own claims every report relied on: the verifier accepts only exit code 0; app_vm_commit binds the deferral
 configuration and child key; the same-OpenVM handover's env::verify binding (R1-5 #4). And the guest's statement logic
 (domain tags, self_id propagation) outside the engine-specific code.
+
+## Status: the guest and build-side fixes (27.11.2026, fixes_guest.md)
+
+| # | state |
+|---|---|
+| R1-1 #1 | FIXED: bench images reveal sha256(tag \|\| journal), marked BENCH_NOVERIFY; pack / wasm-inputs refuse them; checked on the headers guest |
+| R1-5 #1 | FIXED: build-time provenance check (check_xver_provenance.py, reproduce/engine-records); HANDOVER.md corrected; ovm-xver pinned lock NOT done (freeze) |
+| R1-5 #3 | PREPARED, not run: hv_neg_r1.sh (needs hazync-coord and rebuilt images) |
+| R1-2 #1, #3, R1-4 A4 | FIXED |
+| R1-4 A1 | CHECKED: no use-after-free in cached_tx / the sighash cache; heap-poison core image: 29/29 edge chunks byte-identical; generation tag not feasible (reason in fixes_guest.md) |
+| R1-4 B3 | FIXED at the entry points; make_liveness kept caller-driven (documented) |
+| R1-3 #4, R1-6 wording | DOCUMENTED |
+
+Production ids unchanged by these fixes (container, db6cad6b): core 8d1bae9c, zeroconf 1ee5f2d7.
