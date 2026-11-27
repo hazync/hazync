@@ -65,5 +65,5 @@ ok=true, the SAME counts as the old image's recorded log for that chunk (chunk_0
 fallback=4 ok=true). So the fixes change no honest verdict and no honest item's path; only the weights (the seed now
 covers R.y) and the image id change.
 
-Not done here: proving (execution only); the other images (zAPPs do not link the batch module); the fixed image's
+Not done here: proving (execution only); the other images (no zAPP guest links the batch module: no batch_ecdsa / hazync_batch_defer in prover/zyncapps/methods/*/src or engine/zapps, grep 27.11); the fixed image's
 fixtures (the engine fixtures keep the old image's proofs and keys, and verify as such).
