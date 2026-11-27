@@ -1,0 +1,10 @@
+41c5f9e4 ovm-xver: keys tagged by OpenVM version (
+1. predecessor (OpenVM v2.0.2): image 37adf7e2196acfe567a23987b1a4c474a46c454cd33855c1e621903f06451b63, key pin e2519a33fb7193e64596e6b2ec1904ae13d35f7b9dcf33d9a84907afeff405ba, proof 273091 bytes
+  test lineage: 1 handover(s) pinned (assembled copy only)
+  ovm-xver: OpenVM v2.0.2's verifier added (feature ovm-xver-v2_0_2)
+  ovm-xver: 1 predecessor key(s) embedded; OpenVM from /root/engine-guestxv3/openvm-src (patched)
+2. keys-xv3 (v2.1.0 + v2.0.2's verifier) in 98 s: build: 78.7 s; image exe 0065e63ac4ef07264e1a6e14e6d9a3250961bd1ac1985620da13a563e7999e30 vm 00e00077450a5a565
+3. test-lineage host in 2355 s
+4. handover block 200 (v2.0.2 -> v2.1.0) rc=0 5754 s ::   block 200: 0 chunks, proved in 5754.4 s (handover: verifies predecessor), forest 209 live_set 1  [5754 s total] 
+verify: OK (0.05 s), journal 2068 bytes sha256 3ef7346a0756fa96dbf04ee8f9cd774e40fc3ac1f95e3305e7d68ea9fbff1c15
+XV3_DONE
