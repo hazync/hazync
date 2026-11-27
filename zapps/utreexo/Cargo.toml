@@ -19,6 +19,8 @@ path = "src/lib.rs"
 # Tip mode (docs/libzync/UTREEXO_ZAPP.md §10): the tip statement's checks. Off by default (a user of the base checks
 # alone builds without them); the CLI and the WASM enable it.
 tip = []
+# engine (OpenVM) utreexo proofs: verify_utreexo_with / verify_utreexo_tip_with + a key (engine/VERIFIER.md)
+engine = ["swiftsync-verify/engine"]
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }

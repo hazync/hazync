@@ -161,6 +161,16 @@ pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&s
 /// the journal is decoded is [`judge_verified_statement`]. A FAIL report carries no statement.
 pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64,
                          expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
+    verify_utreexo_with(network, receipt, image_hex, None, core_image_hex, now, expect_at, expect_tip)
+}
+
+/// [`verify_utreexo_on`] with the utreexo image's engine key: `receipt` is then an ENGINE (OpenVM) proof file of
+/// image `image_hex`, verified under the pinned key (engine/VERIFIER.md: the key, not the image id, authenticates
+/// it); the statement's checks are the same ([`judge_verified_statement`]). Without a key, a RISC Zero receipt.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_utreexo_with(network: &str, receipt: &[u8], image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>,
+                           core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
+                           expect_tip: Option<(u32, &str)>) -> UtreexoReport {
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: network.to_string(), image_source: hex32(image_hex).as_ref().map(image_source) };
     if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
@@ -173,22 +183,19 @@ pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_im
     if let Some(h) = core_image_hex {
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
+    // an engine zAPP proof can only rest on an ENGINE core proof (its child, verified in the same VM): the core
+    // image is then an engine build, node format 2 (profile bit 7), as every engine guest computes
+    if engine_key.is_some() {
+        img = img.with_node2();
+    }
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the utreexo image id is 32 bytes of hex ({image_hex})"));
         return rep;
     };
-    if let Err(e) = receipt_kind(receipt) {
-        rep.check(false, format!("the receipt is a single succinct or Groth16 proof ({e})"));
+    let Some(journal) = proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo image {image_hex}"), engine_key) else {
         return rep;
-    }
-    let r: risc0_zkvm::Receipt = match decode_receipt(receipt) {
-        Ok(r) => r,
-        Err(e) => { rep.check(false, format!("the receipt decodes ({e})")); return rep; }
     };
-    rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof");
-    let v = r.verify(Digest::from_bytes(id));
-    rep.check(v.is_ok(), format!("the receipt verifies against the utreexo image {image_hex}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default()));
-    let z: UtreexoStatement = match r.journal.decode() {
+    let z: UtreexoStatement = match journal.decode() {
         Ok(z) => z,
         Err(e) => { rep.check(false, format!("the journal is a utreexo statement ({e})")); return rep; }
     };
@@ -204,6 +211,51 @@ pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_im
         s.identity_checked = false;
     }
     s
+}
+
+/// The final run's journal and the checks that prove it (pushed to `checks`): a RISC Zero receipt verified under
+/// `id`, or, with `engine_key`, an ENGINE proof file of image `id` verified under the pinned key. None: the proof is
+/// not of a form whose journal may be read at all. A journal returned with a failed check is not proven; the caller
+/// must not pass on what it says (every caller turns any failed check into FAIL).
+pub(crate) fn proven_journal(checks: &mut Vec<(bool, String)>, file: &[u8], id: &[u8; 32], what: &str,
+                             engine_key: Option<&swiftsync_verify::EngineKey>) -> Option<risc0_zkvm::Journal> {
+    if let Some(k) = engine_key {
+        return match engine_run(file, k, id) {
+            Ok(j) => {
+                checks.push((true, format!("the engine proof verifies against {what} under the pinned key {}", hex(&k.pin))));
+                Some(j)
+            }
+            Err(e) => {
+                checks.push((false, format!("the engine proof verifies against {what}: {e}")));
+                None
+            }
+        };
+    }
+    if let Err(e) = receipt_kind(file) {
+        checks.push((false, format!("the receipt is a single succinct or Groth16 proof ({e})")));
+        return None;
+    }
+    let r: risc0_zkvm::Receipt = match decode_receipt(file) {
+        Ok(r) => r,
+        Err(e) => { checks.push((false, format!("the receipt decodes ({e})"))); return None; }
+    };
+    checks.push((!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof".to_string()));
+    let v = r.verify(Digest::from_bytes(*id));
+    checks.push((v.is_ok(), format!("the receipt verifies against {what}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default())));
+    Some(r.journal)
+}
+
+#[cfg(feature = "engine")]
+fn engine_run(file: &[u8], key: &swiftsync_verify::EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    if !swiftsync_verify::is_engine_proof(file) {
+        return Err("not an engine proof file".into());
+    }
+    swiftsync_verify::engine_proof_journal(file, key, id)
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_run(_: &[u8], _: &swiftsync_verify::EngineKey, _: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    Err("this build has no engine support (feature `engine`)".into())
 }
 
 /// The verdict on a decoded statement, a pure function of it: `id` the utreexo image its receipt verified under, `img`

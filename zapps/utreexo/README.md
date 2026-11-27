@@ -7,6 +7,7 @@ The Utreexo roots zyncAPP's own module (design, soundness, measurements: `docs/l
 | the check library `zapp_utreexo` and the CLI `zapp-utreexo` | here (`src/`), using `swiftsync-verify` as a library |
 | the WASM build | `wasm/` |
 | real receipts (CPU proofs, mainnet H = 2 under T = 3, H = 3 in one run and in two runs) | `vectors/` |
+| ENGINE (OpenVM) proofs: base 100 and a tip step 100 -> 150 (`--features engine,tip --test engine`; CLI `--vk`) | `tests/data/engine/`, `tests/engine.rs` |
 | the guest | `prover/zyncapps/methods/utreexo` (with the other zAPP guests) |
 | the derivation shared by guest and host | `libzync/src/utreexo_roots.rs` |
 | the prover (`zyncapp utreexo-prove`) | `prover/zyncapps/host` |

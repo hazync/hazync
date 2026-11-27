@@ -75,6 +75,11 @@ pub fn tip_image_source(id: &[u8; 32]) -> &'static str {
 /// because they nest without bound and bincode's recursion overflows the stack on a deep one (review H1, 18.11.2026:
 /// 300,000 nested levels, 6 MB, killed the CLI with a stack overflow when this decoded first).
 pub fn journal_kind(receipt: &[u8]) -> Option<u32> {
+    if swiftsync_verify::is_engine_proof(receipt) {
+        // an engine proof file: its journal by the framing alone (no decoder runs)
+        let j = swiftsync_verify::proof_journal(receipt).ok()?;
+        return j.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    }
     receipt_kind(receipt).ok()?;
     let r = decode_receipt(receipt).ok()?;
     r.journal.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
@@ -92,6 +97,15 @@ pub struct TipReport {
 #[allow(clippy::too_many_arguments)]
 pub fn verify_utreexo_tip_on(network: &str, receipt: &[u8], tip_image_hex: &str, base_image_hex: &str, core_image_hex: Option<&str>,
                              now: u64, expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> TipReport {
+    verify_utreexo_tip_with(network, receipt, tip_image_hex, None, base_image_hex, core_image_hex, now, expect_at, expect_tip)
+}
+
+/// [`verify_utreexo_tip_on`] with the TIP image's engine key: `receipt` is then an ENGINE proof file of the tip image,
+/// verified under the pinned key ([`crate::verify_utreexo_with`]); the statement's checks are the same.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_utreexo_tip_with(network: &str, receipt: &[u8], tip_image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>,
+                               base_image_hex: &str, core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
+                               expect_tip: Option<(u32, &str)>) -> TipReport {
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: network.to_string(), image_source: hex32(tip_image_hex).as_ref().map(tip_image_source) };
     let fail = |rep: UtreexoReport| TipReport { report: rep, tip: None };
@@ -105,22 +119,19 @@ pub fn verify_utreexo_tip_on(network: &str, receipt: &[u8], tip_image_hex: &str,
     if let Some(h) = core_image_hex {
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep_check(&mut rep, false, "--core-image is 64 hex digits"); return fail(rep); } }
     }
+    // an engine zAPP proof can only rest on an ENGINE core proof (its child, verified in the same VM): the core
+    // image is then an engine build, node format 2 (profile bit 7), as every engine guest computes
+    if engine_key.is_some() {
+        img = img.with_node2();
+    }
     let (Some(id), Some(base)) = (hex32(tip_image_hex), hex32(base_image_hex)) else {
         rep_check(&mut rep, false, format!("the tip and base image ids are 32 bytes of hex ({tip_image_hex}, {base_image_hex})"));
         return fail(rep);
     };
-    if let Err(e) = receipt_kind(receipt) {
-        rep_check(&mut rep, false, format!("the receipt is a single succinct or Groth16 proof ({e})"));
+    let Some(journal) = crate::proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo tip image {tip_image_hex}"), engine_key) else {
         return fail(rep);
-    }
-    let r: risc0_zkvm::Receipt = match decode_receipt(receipt) {
-        Ok(r) => r,
-        Err(e) => { rep_check(&mut rep, false, format!("the receipt decodes ({e})")); return fail(rep); }
     };
-    rep_check(&mut rep, !matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof");
-    let v = r.verify(Digest::from_bytes(id));
-    rep_check(&mut rep, v.is_ok(), format!("the receipt verifies against the utreexo tip image {tip_image_hex}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default()));
-    let z: TipStatement = match r.journal.decode() {
+    let z: TipStatement = match journal.decode() {
         Ok(z) => z,
         Err(e) => { rep_check(&mut rep, false, format!("the journal is a utreexo tip statement ({e})")); return fail(rep); }
     };
