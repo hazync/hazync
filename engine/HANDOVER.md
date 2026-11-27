@@ -60,7 +60,13 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
      ⛔ the pin is REQUIRED, not a convenience (engine/VERIFIER.md, review 26.11 evening): the image id does not bind
      the aggregation key `mvk`, so a key taken from input would let a forged `mvk` pass. Step 1's probe guest reads
      the key from input and commits only image_id_of(key): fine for measuring the cost, NOT a check to build on; the predecessor's image id (`image`) must equal image_id_of(that key)
-     (checked at build time and in the guest).
+     (checked IN THE GUEST, verify-core Refusal::Image). Until review round 1 (R1-5 #1, 27.11.2026) this line said
+     "at build time and in the guest", but no build-time check existed. Now the assembly checks PROVENANCE, which the
+     guest cannot: image_id_of(key) binds only the key's baseline, and a forged mvk can carry the genuine baseline, so
+     the pin must be the one the predecessor's RELEASE published. engine/guest/check_xver_provenance.py (run by
+     assemble.sh with HZ_OVM_XVER_KEYS) refuses unless a published record (reproduce/engine-records/<image>.json)
+     names the lineage's predecessor image with exactly its pin, the key is carried, and a test record (a rehearsal's
+     predecessor) is used only by lineage/test.rs.
    - The engine's `xver::verify` is the software OpenVM verifier of step 1 (verify_vm_stark_proof_decoded, the
      nozstd + nologging patches), compiled ONLY into an image whose lineage has such an entry (a cargo feature, as
      the RISC Zero `xver-*` features are), so every other image's code and id are unchanged. It is given the old proof

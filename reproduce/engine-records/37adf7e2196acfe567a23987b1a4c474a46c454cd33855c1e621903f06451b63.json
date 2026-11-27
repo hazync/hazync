@@ -1,0 +1,7 @@
+{
+  "image": "37adf7e2196acfe567a23987b1a4c474a46c454cd33855c1e621903f06451b63",
+  "key_pin": "e2519a33fb7193e64596e6b2ec1904ae13d35f7b9dcf33d9a84907afeff405ba",
+  "openvm": "v2.0.2",
+  "test": true,
+  "note": "handover step 3's predecessor (keys-v202; engine/results/handover_step3/xv3.out line 1): a rehearsal, never released"
+}

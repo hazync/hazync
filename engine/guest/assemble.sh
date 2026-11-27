@@ -52,6 +52,9 @@ if [ -n "${HZ_OVM_XVER_KEYS:-}" ]; then
         done
         echo "];"
     } > "$G/src/xver_keys.rs"
+    # provenance (review R1-5 #1): each cross-version predecessor's pin must be the one its RELEASE published
+    # (reproduce/engine-records, or HZ_ENGINE_RECORDS), and its key must be carried; the guest checks the rest
+    python3 "$K/check_xver_provenance.py" "$G/src/lineage" "$HZ_OVM_XVER_KEYS" "${HZ_ENGINE_RECORDS:-$R/reproduce/engine-records}"
     OVM=$OUT/openvm-src
     (cd "$R" && engine/scripts/openvm_src.sh "$OVM" engine/wasm-verify/openvm-abi-stable.patch engine/handover/openvm-verify-nozstd.patch \
         engine/handover/stark-sdk-nologging.patch > /dev/null)
