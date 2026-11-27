@@ -301,9 +301,30 @@ pub(crate) fn repeat_savings(w: &BlockWitness) -> Vec<u64> {
 }
 
 pub(crate) fn input_costs(w: &BlockWitness) -> Vec<u64> {
-    if std::env::var("HAZYNC_COST_MODEL").as_deref() == Ok("fit") {
-        return fitted_costs(w);
+    match std::env::var("HAZYNC_COST_MODEL").as_deref() {
+        Ok("fit") => return fitted_costs(w),
+        Ok("v1") => return input_costs_v1(w),
+        _ => {}
     }
+    w.inputs
+        .iter()
+        .map(|inp| {
+            let tx = &w.txs[inp.tx_idx as usize].0;
+            let prevouts = &w.tx_prevouts[inp.tx_idx as usize].0;
+            let f = cost_features(tx, inp.input_idx, prevouts);
+            cost_const("HAZYNC_COST_INPUT_BASE", COST_INPUT_BASE)
+                + f.ops.cost()
+                + cost_const("HAZYNC_COST_INPUT_BYTE", COST_PER_INPUT_BYTE) * f.share_bytes
+                + cost_const("HAZYNC_COST_LEGACY_POS", COST_PER_LEGACY_POS) * f.legacy_pos
+                + cost_const("HAZYNC_COST_SCRIPT_BYTE", COST_PER_SCRIPT_BYTE) * f.script_extra
+                + cost_const("HAZYNC_COST_LEGACY_BYTE", COST_PER_LEGACY_BYTE) * legacy_sighash_bytes(tx, inp.input_idx)
+        })
+        .collect()
+}
+
+/// The model before 27.11.2026 (`HAZYNC_COST_MODEL=v1`), kept for A/B runs: every input charged the WHOLE
+/// transaction's bytes, no legacy-position term, no executed-script term.
+pub(crate) fn input_costs_v1(w: &BlockWitness) -> Vec<u64> {
     w.inputs
         .iter()
         .map(|inp| {
@@ -319,12 +340,98 @@ pub(crate) fn input_costs(w: &BlockWitness) -> Vec<u64> {
         .collect()
 }
 
+/// The parts of an input's predicted cost that depend on its transaction (engine/results/cost_model_scripts).
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub(crate) struct CostFeatures {
+    pub(crate) ops: SigOps,
+    /// This input's share of its transaction's bytes (tx + prevouts, divided by the input count): the guest parses
+    /// and hashes a transaction ONCE per chunk (tx-once), so charging every input the whole transaction priced a
+    /// one-transaction block's inputs ~50x too high (mem_k1140: 24,374 inputs, each charged 12.4 MB).
+    pub(crate) share_bytes: u64,
+    /// For an input that signs with a LEGACY sighash (no witness, a scriptSig): the bytes that sighash hashes after the
+    /// guest's shared prefix, 41 x (inputs after this one, itself included) + the outputs, as the fitted model's LEGACY
+    /// feature. Makes a big legacy transaction's early inputs dearer than its late ones (364,292: its 16 chunks fell
+    /// from 12.5 G to 1.4 G while the old model priced them equal).
+    pub(crate) legacy_pos: u64,
+    /// Bytes beyond [`SCRIPT_ALLOWANCE`] of a script the interpreter executes that is not a template the signature
+    /// terms already price (see [`executed_script`]).
+    pub(crate) script_extra: u64,
+}
+
+/// Script bytes every input may execute at no extra charge: standard spends carry scripts far shorter (Core's push
+/// limit is 520; a P2WSH HTLC is ~100-150 bytes), so ordinary predictions do not move; the attacks run 9,818 to
+/// 3,985,001 bytes.
+pub(crate) const SCRIPT_ALLOWANCE: u64 = 520;
+
+pub(crate) fn cost_features(raw_tx: &[u8], input_idx: u32, prevouts_blob: &[u8]) -> CostFeatures {
+    let ops = predicted_sig_ops(raw_tx, input_idx, prevouts_blob);
+    let mut f = CostFeatures { ops, ..Default::default() };
+    let Ok(tx) = deserialize::<Transaction>(raw_tx) else { return f };
+    let n = tx.input.len().max(1);
+    f.share_bytes = ((raw_tx.len() + prevouts_blob.len()) / n) as u64;
+    let k = input_idx as usize;
+    if let Some(txin) = tx.input.get(k) {
+        if txin.witness.is_empty() && !txin.script_sig.is_empty() && !tx.is_coinbase() {
+            let outs: usize = tx.output.iter().map(|o| o.script_pubkey.len() + 9).sum();
+            f.legacy_pos = (41 * (tx.input.len() - k) + outs) as u64;
+        }
+    }
+    f.script_extra = executed_script(raw_tx, input_idx, prevouts_blob)
+        .map_or(0, |s| (s.len() as u64).saturating_sub(SCRIPT_ALLOWANCE));
+    f
+}
+
+/// The script this input makes the interpreter EXECUTE, when it is not a template the signature terms price: a
+/// tapscript leaf (P2TR script path); a P2WSH / P2SH-P2WSH witness script or a P2SH redeem script that is not
+/// `OP_m <keys> OP_n CHECKMULTISIG`; a bare output script that is not P2PKH, P2PK, multisig or OP_RETURN. None for
+/// P2WPKH, P2SH-P2WPKH, a taproot key path, anyone-can-spend witness programs and every template above. A scheduling
+/// hint only: an unparseable input is None.
+pub(crate) fn executed_script(raw_tx: &[u8], input_idx: u32, prevouts_blob: &[u8]) -> Option<Vec<u8>> {
+    use bitcoin::blockdata::script::Script;
+    let tx = deserialize::<Transaction>(raw_tx).ok()?;
+    let prevouts = deserialize::<Vec<TxOut>>(prevouts_blob).ok()?;
+    let i = input_idx as usize;
+    let (txin, prevout) = (tx.input.get(i)?, prevouts.get(i)?);
+    let spk = &prevout.script_pubkey;
+    let wit = &txin.witness;
+    let unless_multisig = |s: &[u8]| (multisig_extra(s).is_none()).then(|| s.to_vec());
+    if spk.is_p2tr() {
+        let mut n = wit.len();
+        if n >= 2 && wit.last().is_some_and(|e| e.first() == Some(&0x50)) { n -= 1; }
+        return if n >= 2 { wit.iter().nth(n - 2).map(|l| l.to_vec()) } else { None };
+    }
+    if spk.witness_version().is_some() {
+        return if spk.is_p2wsh() { wit.last().and_then(unless_multisig) } else { None };
+    }
+    if spk.is_p2sh() {
+        let redeem: Vec<u8> = txin.script_sig.instructions().last()
+            .and_then(|r| r.ok()).and_then(|ins| ins.push_bytes().map(|b| b.as_bytes().to_vec())).unwrap_or_default();
+        let rs = Script::from_bytes(&redeem);
+        if rs.is_p2wpkh() { return None }
+        if rs.is_p2wsh() { return wit.last().and_then(unless_multisig) }
+        return unless_multisig(&redeem);
+    }
+    if spk.is_p2pkh() || spk.is_p2pk() || spk.is_op_return() { return None }
+    unless_multisig(spk.as_bytes())
+}
+
 /// libzync: once signatures are batched, the dominant per-input cost the packer could not see is
 /// LEGACY sighash -- a non-witness input's signature hash serialises and hashes the WHOLE transaction,
 /// so a 400-input legacy transaction hashes ~400x its own size. Measured on block 962,000 (GHOST +
 /// batch + tx-once, 16 chunks): ~4.1 cycles per byte so hashed, and one such 59 KB transaction made
 /// a chunk 3x the median. Default 0 keeps every existing build's packing unchanged.
 pub(crate) const COST_PER_LEGACY_BYTE: u64 = 0;
+/// Engine scheduling (27.11.2026, engine/results/cost_model_scripts): the legacy-position and executed-script terms of
+/// [`CostFeatures`], in input_costs' units (on ordinary mainnet blocks one unit is ~4.2 engine cost: least squares over
+/// their 29 measured chunks). Fitted on MEASURED engine execution costs of every chunk of 185,956, 227,931, 364,292,
+/// 388,381, 419,328, 481,824, 91,880 and the attack blocks tap_small, tap_full, mem_k1140:
+/// - LEGACY_POS: ~155 engine cost per legacy-position byte on the ordinary blocks = 37 units (36.8; 30.9 jointly with
+///   the attacks); it is what makes 364,292's early chunks dear.
+/// - SCRIPT_BYTE: 49,147 engine cost per executed-script byte past the allowance on the attacks (52,165 directly from
+///   tap_small and tap_full: 26.08 G / 500,001 and 207.86 G / 3,985,001 bytes of OP_3DUP / OP_2DROP leaf) = 11,600
+///   units at the ordinary blocks' 4.22.
+pub(crate) const COST_PER_LEGACY_POS: u64 = 37;
+pub(crate) const COST_PER_SCRIPT_BYTE: u64 = 11_600;
 
 /// The transaction size this input's legacy sighash hashes, or 0 for a witness spend.
 pub(crate) fn legacy_sighash_bytes(raw_tx: &[u8], input_idx: u32) -> u64 {
@@ -1136,4 +1243,136 @@ mod chunk_packing_tests {
         assert_eq!(split_at_cap(&costs, cap).len(), r_diff.len());
     }
 
+}
+
+#[cfg(test)]
+mod cost_report {
+    //! Measurement harness for the cost model (engine/results/cost_model_scripts): for each block JSON in
+    //! HAZYNC_COST_REPORT ("<label>=<path>,..."), the chunk bounds and the predicted cost of each chunk under the current
+    //! model and env (set HAZYNC_CHUNK_TARGET / HAZYNC_CHUNKS as the engine does). Ignored: it reads local files.
+    //!   HAZYNC_CHUNK_TARGET=900000000 HAZYNC_CHUNKS=16 HAZYNC_COST_REPORT=a=block.json \
+    //!     cargo test --release -p host cost_report -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn report() {
+        let list = std::env::var("HAZYNC_COST_REPORT").expect("HAZYNC_COST_REPORT=<label>=<block.json>,...");
+        for item in list.split(',') {
+            let (label, path) = item.split_once('=').expect("<label>=<path>");
+            let j: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            let (_, w) = crate::build_full_from(j);
+            let costs = super::input_costs(&w);
+            let bounds = super::chunk_bounds(&w, super::nchunks_for(&w));
+            let total: u64 = costs.iter().sum();
+            println!("COSTREPORT {label} inputs {} chunks {} predicted {total}", w.inputs.len(), bounds.len());
+            if let Ok(d) = std::env::var("HAZYNC_COST_DUMP_DIR") {
+                // per input: v1 cost, base+signature cost, whole tx bytes, share bytes, legacy position, script extra
+                let v1 = super::input_costs_v1(&w);
+                let mut out = String::new();
+                for (k, inp) in w.inputs.iter().enumerate() {
+                    let (tx, pv) = (&w.txs[inp.tx_idx as usize].0, &w.tx_prevouts[inp.tx_idx as usize].0);
+                    let f = super::cost_features(tx, inp.input_idx, pv);
+                    out += &format!("{} {} {} {} {} {}\n", v1[k], super::COST_INPUT_BASE + f.ops.cost(), tx.len() + pv.len(),
+                                    f.share_bytes, f.legacy_pos, f.script_extra);
+                }
+                std::fs::write(format!("{d}/{label}.inputs"), out).unwrap();
+            }
+            for (i, (lo, hi)) in bounds.iter().enumerate() {
+                println!("COSTREPORT {label} chunk {i:02} [{lo}..{hi}) predicted {}", costs[*lo..*hi].iter().sum::<u64>());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod cost_features_tests {
+    //! The executed-script and legacy-position terms (engine/results/cost_model_scripts, 27.11.2026).
+    use super::{cost_features, executed_script, SCRIPT_ALLOWANCE};
+    use bitcoin::consensus::serialize;
+    use bitcoin::hashes::Hash;
+    use bitcoin::{absolute::LockTime, transaction::Version, Amount, OutPoint, ScriptBuf, Sequence, Transaction, TxIn, TxOut,
+                  Txid, Witness};
+
+    /// A transaction spending `spks.len()` coins (one per script / scriptSig / witness), with one output.
+    fn tx(spends: &[(ScriptBuf, ScriptBuf, Vec<Vec<u8>>)]) -> (Vec<u8>, Vec<u8>) {
+        let input = spends.iter().enumerate().map(|(i, (_, ss, w))| TxIn {
+            previous_output: OutPoint { txid: Txid::from_byte_array([7; 32]), vout: i as u32 },
+            script_sig: ss.clone(), sequence: Sequence::MAX, witness: Witness::from_slice(w),
+        }).collect();
+        let t = Transaction { version: Version::TWO, lock_time: LockTime::ZERO, input,
+                              output: vec![TxOut { value: Amount::from_sat(1), script_pubkey: ScriptBuf::from_bytes(vec![0x51]) }] };
+        let prev: Vec<TxOut> = spends.iter().map(|(spk, _, _)| TxOut { value: Amount::from_sat(2), script_pubkey: spk.clone() }).collect();
+        (serialize(&t), serialize(&prev))
+    }
+    fn p2wsh_of(ws: &[u8]) -> ScriptBuf {
+        let h = bitcoin::hashes::sha256::Hash::hash(ws).to_byte_array();
+        let mut v = vec![0x00, 0x20]; v.extend_from_slice(&h); ScriptBuf::from_bytes(v)
+    }
+    fn p2tr() -> ScriptBuf { let mut v = vec![0x51, 0x20]; v.extend_from_slice(&[9; 32]); ScriptBuf::from_bytes(v) }
+    fn p2wpkh() -> ScriptBuf { let mut v = vec![0x00, 0x14]; v.extend_from_slice(&[3; 20]); ScriptBuf::from_bytes(v) }
+    fn p2pkh() -> ScriptBuf {
+        let mut v = vec![0x76, 0xa9, 0x14]; v.extend_from_slice(&[4; 20]); v.extend_from_slice(&[0x88, 0xac]); ScriptBuf::from_bytes(v)
+    }
+    const E: ScriptBuf = ScriptBuf::new();
+
+    #[test]
+    fn a_tapscript_leaf_is_charged_past_the_allowance() {
+        for (len, want) in [(400usize, 0u64), (520, 0), (600, 80), (500_001, 500_001 - SCRIPT_ALLOWANCE)] {
+            let leaf = vec![0x6f; len]; // OP_3DUP, as the attack leaf
+            let (raw, pv) = tx(&[(p2tr(), E, vec![vec![1; 520], leaf, vec![0xc0; 33]])]);
+            assert_eq!(cost_features(&raw, 0, &pv).script_extra, want, "leaf of {len} bytes");
+        }
+        // with an annex the leaf is still the item before the control block
+        let (raw, pv) = tx(&[(p2tr(), E, vec![vec![1; 64], vec![0x6f; 1000], vec![0xc0; 33], vec![0x50, 1]])]);
+        assert_eq!(cost_features(&raw, 0, &pv).script_extra, 1000 - SCRIPT_ALLOWANCE);
+        // the key path executes no script
+        let (raw, pv) = tx(&[(p2tr(), E, vec![vec![1; 64]])]);
+        assert_eq!(executed_script(&raw, 0, &pv), None);
+    }
+
+    #[test]
+    fn a_p2wsh_script_is_charged_unless_it_is_multisig() {
+        let ws = vec![0x75; 1000]; // OP_DROP x 1000
+        let (raw, pv) = tx(&[(p2wsh_of(&ws), E, vec![vec![], ws.clone()])]);
+        assert_eq!(cost_features(&raw, 0, &pv).script_extra, 1000 - SCRIPT_ALLOWANCE);
+        // 2-of-3 multisig: priced by the signature terms, not here
+        let mut ms = vec![0x52]; for _ in 0..3 { ms.push(33); ms.extend_from_slice(&[2; 33]); } ms.extend_from_slice(&[0x53, 0xae]);
+        let (raw, pv) = tx(&[(p2wsh_of(&ms), E, vec![vec![], vec![1; 72], vec![1; 72], ms.clone()])]);
+        assert_eq!(executed_script(&raw, 0, &pv), None);
+        // a short P2WSH script (an HTLC is ~100-150 bytes) costs nothing extra
+        let (raw, pv) = tx(&[(p2wsh_of(&[0x51; 140]), E, vec![vec![0x51; 140]])]);
+        assert_eq!(cost_features(&raw, 0, &pv).script_extra, 0);
+    }
+
+    #[test]
+    fn standard_spends_are_unchanged() {
+        let (raw, pv) = tx(&[(p2wpkh(), E, vec![vec![1; 72], vec![2; 33]])]);
+        let f = cost_features(&raw, 0, &pv);
+        assert_eq!((executed_script(&raw, 0, &pv), f.script_extra, f.legacy_pos), (None, 0, 0));
+        let ss = ScriptBuf::from_bytes([vec![72], vec![1; 72], vec![33], vec![2; 33]].concat());
+        let (raw, pv) = tx(&[(p2pkh(), ss, vec![])]);
+        assert_eq!((executed_script(&raw, 0, &pv), cost_features(&raw, 0, &pv).script_extra), (None, 0));
+    }
+
+    #[test]
+    fn a_bare_non_template_script_is_charged() {
+        // mem_k1140's shape: a bare output script of 9,818 bytes (pushes of 520-byte items and OP_CHECKSIGs)
+        let mut spk = Vec::new();
+        for _ in 0..18 { spk.extend_from_slice(&[0x4d, 0x08, 0x02]); spk.extend_from_slice(&[1; 520]); }
+        while spk.len() < 9_818 { spk.push(0xac); }
+        let (raw, pv) = tx(&[(ScriptBuf::from_bytes(spk), E, vec![])]);
+        assert_eq!(cost_features(&raw, 0, &pv).script_extra, 9_818 - SCRIPT_ALLOWANCE);
+    }
+
+    #[test]
+    fn legacy_position_falls_with_the_input_index_and_share_splits_the_transaction() {
+        let ss = ScriptBuf::from_bytes([vec![72], vec![1; 72], vec![33], vec![2; 33]].concat());
+        let (raw, pv) = tx(&[(p2pkh(), ss.clone(), vec![]), (p2pkh(), ss.clone(), vec![]), (p2pkh(), ss, vec![])]);
+        let f: Vec<_> = (0..3).map(|i| cost_features(&raw, i, &pv)).collect();
+        // 41 per input from this one on, plus the one output (1-byte script + 9)
+        assert_eq!(f.iter().map(|x| x.legacy_pos).collect::<Vec<_>>(), vec![41 * 3 + 10, 41 * 2 + 10, 41 + 10]);
+        assert!(f.iter().all(|x| x.share_bytes == ((raw.len() + pv.len()) / 3) as u64));
+        // a witness spend signs with BIP143 / BIP341: no legacy position
+        let (raw, pv) = tx(&[(p2wpkh(), E, vec![vec![1; 72], vec![2; 33]])]);
+        assert_eq!(cost_features(&raw, 0, &pv).legacy_pos, 0);
+    }
 }
