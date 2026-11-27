@@ -229,3 +229,15 @@ Done on this branch (engine/CUTOVER.md C2-C4). The sections above are the record
 `hzengine pack --dir <keys> --proof <P> --out P.hze --key key.bin` writes the proof file (HZE1) and the image's key
 file, and prints the image id and the key's pin (SHA-256 of the key file). It checks the file with verify-core first,
 so it never writes a file a reader would refuse. `wasm-inputs` stays for the verifier builds' test inputs.
+
+## Which key bytes a proof binds (27.11.2026)
+
+The C4 work found that in keys-hdr's key file (zapps/headers/tests/data/engine4031) a changed byte among the last ~24
+still verified the header proof. `engine/verify-core/examples/vktail.rs` flips each of the last N bytes, decodes, and
+runs the full check. Measured: those bytes are the key's last field, `baseline.expected_def_hook_commit` (8 u32
+varints; flipping a varint's length byte is refused at decode). On the headers proof (no child proofs) every other
+flip still verifies; on block 200's core proof (swiftsync-verify/tests/data/engine200, which verifies child proofs
+in-guest) every one of the 20 is refused. OpenVM v2.1.0 crates/verify/src/lib.rs (~line 259) says why: with deferral
+flag 0 (no deferrals) the proof's own def_hook_commit must be unset and the key's value is never compared; with flag 2
+it must equal the key's. So a proof without deferrals does not depend on that field. Nothing to fix: the pin
+(SHA-256 of the whole key file) binds every byte a reader takes, and a deferral-carrying proof binds the field itself.
