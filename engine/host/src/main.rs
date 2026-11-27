@@ -145,9 +145,21 @@ enum Cmd {
         #[arg(long)]
         check: bool,
     },
-    /// FEASIBILITY Q11: write the inputs a WASM build of OpenVM's verifier takes: <out>/vk.bin (bitcode of
-    /// VmStarkVerifyingKey = agg.vk + baseline) and <out>/proof.zst (the proof's codec encoding, zstd), plus
-    /// <out>/proof_bad.zst (one byte of the encoding flipped, a negative control).
+    /// Write the published proof file `--out` (HZE1: the proof in OpenVM's plain encoding, then the journal), the file
+    /// every verifier reads; it is checked by the readers' own verifier first. `--key`: also write the image's key file
+    /// (its SHA-256, printed, is the pin a reader checks). Prints the image id and the pin.
+    Pack {
+        #[arg(long)]
+        dir: PathBuf,
+        #[arg(long)]
+        proof: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+        #[arg(long)]
+        key: Option<PathBuf>,
+    },
+    /// Test inputs for the verifier builds (FEASIBILITY Q11): <out>/vk.bin, proof.hze and vk.sha256 (as `pack`), plus
+    /// proof.bin, proof.zst and proof_bad.zst (one byte flipped) for the WASM probe and the negative controls.
     WasmInputs {
         #[arg(long)]
         dir: PathBuf,
@@ -204,6 +216,7 @@ fn run(cli: Cli) -> Result<()> {
         }
         Cmd::Verify { dir, proof } => engine::verify(&dir, &proof),
         Cmd::WasmInputs { dir, proof, out } => engine::wasm_inputs(&dir, &proof, &out),
+        Cmd::Pack { dir, proof, out, key } => engine::pack(&dir, &proof, &out, key.as_deref()),
     }
 }
 

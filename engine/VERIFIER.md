@@ -189,3 +189,9 @@ published verifiers must keep checking the chain that is LIVE, the RISC Zero one
 front (the default), the RISC Zero front, its receipt kinds, dev-mode check, Groth16 and earlier-image logic go, the
 engine image records go in with their embedded keys, the zAPP fixtures move to engine proofs, the published module
 shas are renewed (README, the site, deploy.sh), and the old chain stays checkable with the last RISC Zero release.
+
+## Making the files a reader takes (27.11.2026)
+
+`hzengine pack --dir <keys> --proof <P> --out P.hze --key key.bin` writes the proof file (HZE1) and the image's key
+file, and prints the image id and the key's pin (SHA-256 of the key file). It checks the file with verify-core first,
+so it never writes a file a reader would refuse. `wasm-inputs` stays for the verifier builds' test inputs.

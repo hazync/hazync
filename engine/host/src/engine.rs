@@ -511,6 +511,40 @@ pub fn with_ext(p: &Path, ext: &str) -> std::path::PathBuf {
     s.into()
 }
 
+/// See `Cmd::Pack`: the published proof file (HZE1: OpenVM's plain encoding of the proof, then the journal), checked
+/// by the readers' own verifier (engine/verify-core) before it is written; the key file and its pin with `--key`.
+/// Needs only agg.vk and baseline.json (not the proving keys).
+pub fn pack(dir: &Path, proof_path: &Path, out: &Path, key_out: Option<&Path>) -> Result<()> {
+    use openvm_stark_backend::codec::Encode;
+    let mvk: MultiStarkVerifyingKey<SC> = read_object_from_file(dir.join("agg.vk")).wrap_err("agg.vk")?;
+    let mvk = Arc::new(mvk);
+    let baseline = Engine::baseline(dir)?;
+    let v: VersionedVmStarkProof = read_from_file_json(with_ext(proof_path, "proof.json"))?;
+    let proof = v.decode_using_vk(&mvk, &baseline)?;
+    let journal = std::fs::read(with_ext(proof_path, "journal"))?;
+    let mut enc = Vec::new();
+    proof.encode(&mut enc)?;
+    let img = image_of(&baseline);
+    if let Ok(have) = Engine::image(dir) {
+        ensure!(have == img, "image.json {have:?} is not the baseline's {img:?}");
+    }
+    let id = crate::r0::image_id(&img);
+    let key = bitcode::serialize(&VmStarkVerifyingKey { mvk: mvk.as_ref().clone(), baseline })?;
+    let pin: [u8; 32] = Sha256::digest(&key).into();
+    let file = hazync_engine_verify::pack(&enc, &journal);
+    // what every reader runs (swiftsync-verify, the zAPP modules, the wasm): a file that would fail is never written
+    let (p, j) = hazync_engine_verify::unpack(&file).map_err(|e| eyre::eyre!("pack: {e}"))?;
+    hazync_engine_verify::verify_full_bytes(&key, &pin, p, j, &id).map_err(|e| eyre::eyre!("pack: the readers' verifier refuses it: {e}"))?;
+    std::fs::write(out, &file)?;
+    if let Some(k) = key_out {
+        std::fs::write(k, &key)?;
+    }
+    eprintln!("pack: {} ({} bytes: proof {}, journal {}), verified as the readers verify it", out.display(), file.len(), enc.len(), journal.len());
+    println!("image {}", hex::encode(id));
+    println!("key_pin {}{}", hex::encode(pin), key_out.map(|k| format!(" ({}, {} bytes)", k.display(), key.len())).unwrap_or_default());
+    Ok(())
+}
+
 /// See `Cmd::WasmInputs`.
 pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
     use openvm_stark_backend::codec::Encode;
