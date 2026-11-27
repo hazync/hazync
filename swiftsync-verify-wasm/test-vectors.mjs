@@ -26,6 +26,7 @@ for (const c of m.cases.filter((c) => !c.cli_only)) {
     if (v === '--network') a.network = c.args[++i];
     else if (v === '--image') a.image = c.args[++i];
     else if (v === '--vk') a.vk = fs.readFileSync(path.join(dir, c.args[++i]));
+    else if (v === '--vk-sha256') a.pin = Buffer.from(c.args[++i], 'hex');   // the case's own pin (review R1-6 #1)
     else if (v === '--now') a.now = Number(c.args[++i]);
     else a.files.push(v);
   }
@@ -33,7 +34,7 @@ for (const c of m.cases.filter((c) => !c.cli_only)) {
   const net = { mainnet: 0, signet: 1 }[a.network];
   const head = [Buffer.from([net | (a.vk ? 0x40 : 0)]), now, chunk(fs.readFileSync(path.join(dir, a.files[0]))),
                 chunk(Buffer.alloc(0)), chunk(Buffer.from(a.image))];
-  const r = call(Buffer.concat(a.vk ? [...head, chunk(a.vk), chunk(pin)] : head));
+  const r = call(Buffer.concat(a.vk ? [...head, chunk(a.vk), chunk(a.pin ?? pin)] : head));
   const ok = code[r.verdict] === c.expect_exit;
   bad += !ok;
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${c.name.padEnd(24)} ${r.verdict} (want exit ${c.expect_exit})`);

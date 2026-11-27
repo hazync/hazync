@@ -6,6 +6,7 @@
 // Usage: node test-deposit.mjs <zapp-deposit> [<zapp-deposit.js> <zapp_deposit_wasm.wasm>] (default: this directory's).
 import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -24,11 +25,13 @@ const v = { verifyDeposit: (a) => v0.verifyDeposit({ ...KEYS, ...a }) };
 const T = 'f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16';
 const TIP = '4031:00000000f037ad09d0b05ee66b8c1da83030abaf909d2b1bf519c3c7d2cd3fdf';
 const w = mkdtempSync(join(tmpdir(), 'deposit-wasm-'));
-const make = (out, extra) => execFileSync(resolve(zd), ['build', '--core', `${E}/proof.hze`, '--image', KEYS.coreImageHex, '--vk', `${E}/vk.bin`,
+// the key pin the caller gives with every key (review R1-6 #1): here the fixture key's own SHA-256
+const pin = (f) => createHash('sha256').update(readFileSync(f)).digest('hex');
+const make = (out, extra) => execFileSync(resolve(zd), ['build', '--core', `${E}/proof.hze`, '--image', KEYS.coreImageHex, '--vk', `${E}/vk.bin`, '--vk-sha256', pin(`${E}/vk.bin`),
   '--history', `${E}/history.bin`, '--height', '170', '--block', `${here}/block_170_raw.txt`, '--txid', T, ...extra, '-o', out],
   { stdio: ['ignore', 'ignore', 'ignore'] });
 make(`${w}/core.json`, []);
-make(`${w}/tip.json`, ['--headers-image', KEYS.headersImageHex, '--headers-vk', `${H}/vk.bin`, '--headers', `${H}/proof.hze`,
+make(`${w}/tip.json`, ['--headers-image', KEYS.headersImageHex, '--headers-vk', `${H}/vk.bin`, '--headers-vk-sha256', pin(`${H}/vk.bin`), '--headers', `${H}/proof.hze`,
   '--tip-path', `${H}/mmr_path_200_tip4031.txt`]);
 const core = readFileSync(`${w}/core.json`, 'utf8'), tip = JSON.parse(readFileSync(`${w}/tip.json`, 'utf8'));
 rmSync(w, { recursive: true });

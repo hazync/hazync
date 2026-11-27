@@ -1,12 +1,12 @@
 #!/bin/bash
 # swiftsync-verify end-to-end tests on the engine chain's real proof of mainnet 1..200 (vectors/mainnet_1_200_engine.*,
 # from tests/data/engine200): DEMO for the valid proof (below Core's minimum chainwork), FAIL for every broken input,
-# the argument rules (--image and --vk together; no published engine image yet), step 7 against a stand-in node, and
+# the argument rules (--image, --vk and --vk-sha256 together; no published engine image yet), step 7 against a stand-in node, and
 # the retired hints-file arguments. Run from the repo root after `cargo build --release`. Writes swiftsync-verify/test.out.
 cd "$(dirname "$0")/.." || exit 1
 BAD=0; N=0
 V=swiftsync-verify/target/release/swiftsync-verify; D=swiftsync-verify/vectors
-P=$D/mainnet_1_200_engine.hze; ID=$(cat $D/mainnet_1_200_engine.image_id); K="--image $ID --vk $D/mainnet_1_200_engine.vk"
+P=$D/mainnet_1_200_engine.hze; ID=$(cat $D/mainnet_1_200_engine.image_id); PIN=$(cat swiftsync-verify/tests/data/engine200/vk.sha256); K="--image $ID --vk $D/mainnet_1_200_engine.vk --vk-sha256 $PIN"
 TIP=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
 cat > $T/cli <<S
@@ -31,7 +31,12 @@ run 1 $V $P
 run 1 $V --image $ID $P
 run 1 $V --vk $D/mainnet_1_200_engine.vk $P
 run 1 $V --image xyz --vk $D/mainnet_1_200_engine.vk $P
-run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk $P
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk --vk-sha256 $PIN $P
+# the pin is the caller's (review R1-6 #1): none, or one that is not the key file's SHA-256, is refused; a changed key
+# pinned to ITS OWN hash still fails (OpenVM's check under a key that is not the image's)
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine.vk $P
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine.vk --vk-sha256 $(printf '00%.0s' $(seq 32)) $P
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk --vk-sha256 $(sha256sum $D/mainnet_1_200_engine_key_flipped.vk | cut -c1-64) $P
 run 1 $V $K $D/mainnet_1_200_engine_proof_flipped.hze
 run 1 $V $K $T/junk.hze
 run 1 $V $K /nonexistent.hze

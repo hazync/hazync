@@ -6,7 +6,7 @@
 //!   zapp-assume assumevalid [--block <hash>] [--headers <file>] [flags] <receipt>
 //!   zapp-assume assumeutxo --headers <file> [--tracked <file>] [flags] <receipt> <snapshot>
 //!
-//! flags: [--network mainnet|signet] --image <hex> --vk <key file> [--now <unix seconds>] and the chain-identity flags every zAPP CLI
+//! flags: [--network mainnet|signet] --image <hex> --vk <key file> --vk-sha256 <hex> [--now <unix seconds>] and the chain-identity flags every zAPP CLI
 //! takes (zapp-common): [--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<command>"].
 //! The core receipt is verified by the core verifier (`swiftsync_verify::verify`, a receipt or an .sspf bundle) from
 //! genesis: no anchor, a node's shortcut must rest on a chain from genesis. OK (exit 0) needs Core's minimum chainwork
@@ -19,8 +19,8 @@ use zapp_corecheck::{image_for, verify_core};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-assume assumevalid [--block <hash>] [--headers <file>] [--network <name>] --image <hex> --vk <key file> [--now <s>] {IDENTITY_USAGE} <proof.hze>");
-    eprintln!("       zapp-assume assumeutxo --headers <file> [--tracked <file>] [--network <name>] --image <hex> --vk <key file> [--now <s>] {IDENTITY_USAGE} <proof.hze> <snapshot>");
+    eprintln!("usage: zapp-assume assumevalid [--block <hash>] [--headers <file>] [--network <name>] --image <hex> --vk <key file> --vk-sha256 <hex> [--now <s>] {IDENTITY_USAGE} <proof.hze>");
+    eprintln!("       zapp-assume assumeutxo --headers <file> [--tracked <file>] [--network <name>] --image <hex> --vk <key file> --vk-sha256 <hex> [--now <s>] {IDENTITY_USAGE} <proof.hze> <snapshot>");
     exit(1);
 }
 
@@ -47,12 +47,14 @@ fn main() {
     let (mut network, mut image_hex, mut now, mut id) = ("mainnet".to_string(), String::new(), None, Identity::default());
     let (mut block, mut headers, mut tracked, mut pos) = (None, None, None, Vec::new());
     let mut vk: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let mut it = a.into_iter().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
             "--network" => network = it.next().unwrap_or_else(|| usage()),
             "--image" => image_hex = it.next().unwrap_or_else(|| usage()),
             "--vk" => vk = Some(it.next().unwrap_or_else(|| usage())),
+            "--vk-sha256" => vk_pin = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
             "--block" => block = Some(it.next().unwrap_or_else(|| usage())),
             "--headers" => headers = Some(it.next().unwrap_or_else(|| usage())),
@@ -76,10 +78,12 @@ fn main() {
     // the core image's id and key: no engine image is published yet, so both are the reader's own build's
     if image_hex.is_empty() { fail("--image <hex>: no engine core image is published yet: give the id of the image you rebuilt") }
     let vk = vk.unwrap_or_else(|| fail("--vk <file>: the verifying key from that image's build"));
-    let vkb = std::fs::read(&vk).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&vk))));
-    let image = zapp_corecheck::with_key(image_for(&network, &image_hex, false, false).unwrap_or_else(|e| fail(&e)), &vkb, None)
+    // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
+    let vkb = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
+    let pin = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
+    let image = zapp_corecheck::with_key(image_for(&network, &image_hex, false, false).unwrap_or_else(|e| fail(&e)), &vkb, Some(&pin))
         .unwrap_or_else(|e| fail(&e));
-    println!("  image id given on the command line: {}; its key {} taken as your own build's", image.method_id_hex, esc(&vk));
+    println!("  image id given on the command line: {}; its key {} matches the pin you gave", image.method_id_hex, esc(&vk));
     let rb = std::fs::read(&receipt).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&receipt))));
     let core = verify_core(&rb, image, None, now, None);
     let mut rep = core.report;

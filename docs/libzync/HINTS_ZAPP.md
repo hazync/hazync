@@ -160,7 +160,7 @@ wrap, so no trusted setup: nodes verify with our library, CLI, WASM or C ABI). S
   from the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the
   undo file, runs the same derivation natively, and writes the guest's input stream; `hzengine prove` proves it with the
   core's proof as the child (engine/results/zapp_hints). The guest's statement must equal the native one.
-- CLI: `zapp-hints --image <hex> --vk <key file> --core-image <hex> [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <proof.hze> <file>`;
+- CLI: `zapp-hints --image <hex> --vk <key file> --vk-sha256 <the key file's pin> --core-image <hex> [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <proof.hze> <file>`;
   exit 0 OK, 2 DEMO, 1 FAIL.
 - WASM `verify_hints` / JS `verifyHints({receipt, file, undo, imageHex, coreImageHex, vk, pin, expect})` (`receipt`:
   the proof file's bytes; the file is hashed on the device); C ABI

@@ -12,7 +12,7 @@ first. A T that spends an unconfirmed parent is refused by the guest (its coin i
 | the prover (`zyncapp prove-zeroconf --stream`, then `hzengine prove`) | `prover/zyncapps/host`, engine/host |
 | the regtest fixture, Core's verdicts, the guest's refusal cases | `engine/zapps/zeroconf/` |
 
-| the CLI `zapp-zeroconf` (`--vk`, `--image`, `--core-image`, `--txid`, the chain-identity flags; exit 0 OK, 2 DEMO, 1 FAIL) | `cli/` |
+| the CLI `zapp-zeroconf` (`--vk` with its pin `--vk-sha256`, `--image`, `--core-image`, `--txid`, the chain-identity flags; exit 0 OK, 2 DEMO, 1 FAIL) | `cli/` |
 
 Engine (OpenVM) proofs only: the module is new with the engine (engine/VERIFIER.md). No WASM build yet.
 The statement's kind is its own, 0x5A5A0001, since 27.11.2026; before, the guest committed the coin zAPP's 0x5A430002

@@ -201,8 +201,9 @@ Done on this branch (engine/CUTOVER.md C2-C4). The sections above are the record
   `dev_mode_env`. `verify` takes an engine proof file only; anything else is a FAIL that names v0.27.1's verifier.
 - Image records: one per network (mainnet, signet) with the network's parameters, profile with PROFILE_NODE2, and no
   image id or key until the Stage 4 freeze. `verify` on such a record FAILs with "no engine image is published for
-  <net> yet: give the image id and its key". Every CLI takes `--image` and `--vk` (the key pinned as given: the
-  reader's own build), the C ABIs take the image id, the key and its pin (a key whose SHA-256 is not the pin is FAIL),
+  <net> yet: give the image id and its key". Every CLI takes `--image`, `--vk` and `--vk-sha256` (the key's pin
+  from the record or the reader's own build; since review R1-6 #1, 27.11.2026, a key is never pinned to itself: the
+  image id does not bind the key), the C ABIs take the image id, the key and its pin (a key whose SHA-256 is not the pin is FAIL),
   the WASM frames carry the key and its pin.
 - zapps/corecheck: `with_key(image, vk, pin)` (cached); `verify_core` lost its `pinned` argument and `image_used` is
   gone (an engine proof verifies against one image only). REGTEST_IMAGE (tests only) is the engine harness image

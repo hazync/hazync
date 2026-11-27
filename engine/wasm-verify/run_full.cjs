@@ -13,7 +13,7 @@ const id = crypto.createHash("sha256").update(Buffer.concat([Buffer.from(img.exe
 // test stands in for it
 const pin = crypto.createHash("sha256").update(vk).digest();
 console.log(`image id (image.json) ${id.toString("hex")}`);
-console.log(`image id (from vk)    ${w.image_id_hex(vk)}`);
+console.log(`image id (unpinned vk, display only) ${w.unpinned_image_id_hex(vk)}`);
 const flip = (b, i) => { const c = Buffer.from(b); c[i] ^= 1; return c; };
 const cases = [
   ["valid", rd("proof.bin"), journal, id, 1],

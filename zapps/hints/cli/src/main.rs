@@ -8,7 +8,7 @@ use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-hints --image <hex> --vk <key file> --core-image <hex> {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>");
+    eprintln!("usage: zapp-hints --image <hex> --vk <key file> --vk-sha256 <hex> --core-image <hex> {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>");
     exit(1);
 }
 
@@ -32,7 +32,7 @@ fn main() {
     run(std::env::args().skip(1).collect());
 }
 
-/// `zapp-hints --image <hex> --vk <key file> --core-image <hex> [--expect <H>:<hash>] [--expect-tip <T>:<hash>]
+/// `zapp-hints --image <hex> --vk <key file> --vk-sha256 <hex> --core-image <hex> [--expect <H>:<hash>] [--expect-tip <T>:<hash>]
 /// [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>`: the SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md).
 /// `--expect` is block H from YOUR node's header chain; `--mempool` / `--bitcoin-cli` (zapp-common, every zAPP CLI's
 /// chain-identity flags) are asked for block H, and for the core tip when it is above H and no `--expect-tip` is given. Exit 0 OK, 2 DEMO (below minimum work or the checkpoint, or the
@@ -43,11 +43,13 @@ fn run(a: Vec<String>) -> ! {
     let (mut image, mut core, mut id, mut expect_tip, mut undo, mut now, mut files) =
         (String::new(), None, Identity::default(), None, None, None, Vec::new());
     let mut vk_path: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--image" => image = it.next().unwrap_or_else(|| usage()),
             "--vk" => vk_path = Some(it.next().unwrap_or_else(|| usage())),
+            "--vk-sha256" => vk_pin = Some(it.next().unwrap_or_else(|| usage())),
             "--core-image" => core = Some(it.next().unwrap_or_else(|| usage())),
             "--expect-tip" => expect_tip = Some(it.next().unwrap_or_else(|| usage())),
             "--undo" => undo = Some(it.next().unwrap_or_else(|| usage())),
@@ -63,13 +65,13 @@ fn run(a: Vec<String>) -> ! {
     let rd = |f: &str| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
     let (r, f) = (rd(&files[0]), rd(&files[1]));
     let u = undo.as_deref().map(rd);
-    // the key file, pinned by its own SHA-256 (the reader's build of the image)
+    // the key file, pinned by the CALLER (--vk-sha256; review R1-6 #1): never pinned to itself
     if image.is_empty() || vk_path.is_none() || core.is_none() {
         fail("no engine hints image is published yet: give --image, --vk and --core-image (the images you rebuilt)");
     }
     let core = core.unwrap();
-    let vk = rd(vk_path.as_deref().unwrap());
-    let key = { use sha2::Digest as _; swiftsync_verify::EngineKey { bytes: &vk, pin: sha2::Sha256::digest(&vk).into() } };
+    let vk = swiftsync_verify::read_pinned_key(vk_path.as_deref().unwrap(), vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
+    let key = swiftsync_verify::EngineKey { bytes: &vk, pin: swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default() };
     let pe = |e: &Option<String>| e.as_deref().map(|e| {
         let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
         (h.parse::<u32>().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string())

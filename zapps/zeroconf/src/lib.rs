@@ -89,6 +89,10 @@ pub fn verify_zeroconf(file: &[u8], image_hex: &str, key: &EngineKey, core: &Ima
         rep.check(false, format!("the zeroconf image id is 32 bytes of hex ({image_hex})"));
         return rep;
     };
+    // the trusted core image must name an image (review R1-6 #4): a network record with none is no image to rest on
+    if !rep.check(core.has_image(), format!("the trusted {} core image record names an image", core.network)) {
+        return rep;
+    }
     let journal = match engine_run(file, key, &id) {
         Ok(j) => {
             rep.check(true, format!("the engine proof verifies against the zeroconf image {image_hex} under the pinned key {}", hex(&key.pin)));
@@ -99,7 +103,8 @@ pub fn verify_zeroconf(file: &[u8], image_hex: &str, key: &EngineKey, core: &Ima
             return rep;
         }
     };
-    let z: ZeroconfStatement = match journal.decode() {
+    // through decode_journal: its whole-words check first (review R1-6 #3; unreachable after the proof, but cheap)
+    let z: ZeroconfStatement = match swiftsync_verify::decode_journal(&journal) {
         Ok(z) => z,
         Err(e) => {
             rep.check(false, format!("the journal is a zeroconf statement ({e})"));

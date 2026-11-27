@@ -16,8 +16,8 @@ The RISC Zero chain's proofs are checked with v0.27.1's verifier, the last RISC 
 ```sh
 cargo build --release --manifest-path swiftsync-verify/Cargo.toml
 V=swiftsync-verify/vectors/mainnet_1_200_engine
-swiftsync-verify/target/release/swiftsync-verify --network mainnet --image $(cat $V.image_id) --vk $V.vk $V.hze
-swiftsync-verify/target/release/swiftsync-verify --network mainnet --image <hex> --vk key.bin --mempool --trie fact.json proof.hze
+swiftsync-verify/target/release/swiftsync-verify --network mainnet --image $(cat $V.image_id) --vk $V.vk --vk-sha256 <the key file's pin> $V.hze
+swiftsync-verify/target/release/swiftsync-verify --network mainnet --image <hex> --vk key.bin --vk-sha256 <the key file's pin> --mempool --trie fact.json proof.hze
 ```
 
 The first line is the engine chain's proof of mainnet 1..200: `SWIFTSYNC_VERIFY_DEMO`, exit 2 (a valid chain from
@@ -30,9 +30,11 @@ genesis, below Core's minimum chainwork and the pinned checkpoint).
 | `SWIFTSYNC_VERIFY_FAIL` | 1 | anything else, including unreadable input |
 
 **The image and its key.** No engine image is published yet: the records go in at the Stage 4 freeze. Until then every
-call gives `--image <hex>` (the image id, SHA-256(exe || vm)) and `--vk <key file>` (its verifying key). OpenVM's
-verifier trusts the key it is given, so the key is pinned: its SHA-256 is printed and every check runs under exactly
-those bytes. Without them the verifier fails with "no engine image is published for <network> yet: give the image id
+call gives `--image <hex>` (the image id, SHA-256(exe || vm)) and `--vk <key file> --vk-sha256 <the key file's pin>` (its verifying key). OpenVM's
+verifier trusts the key it is given, so the key is pinned by YOU: `--vk-sha256` is the key file's SHA-256 from the
+image's record or your own build (`vk.sha256`), a key that does not hash to it is refused, and every check runs under
+exactly those bytes. The image id alone adds no security: it does not bind the key, so a key that came with the
+proof, unpinned, proves nothing (review R1-6 #1, 27.11.2026). Without them the verifier fails with "no engine image is published for <network> yet: give the image id
 and its key". A reader rebuilds the image and takes the key from that build.
 
 **What it checks:**

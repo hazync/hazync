@@ -5,13 +5,16 @@
 # Writes zapps/assume/test-assume.out.
 # Every case prints its verdict line and exit code. A proof at 200 is below Core's minimum chainwork, so a passing
 # check is DEMO (exit 2), never OK; the line `... is the proven UTXO set` / `-assumevalid=` says the check itself held.
+# the key pin a reader gives with every key (review R1-6 #1: a key is never pinned to itself); here the fixture key's own
+# SHA-256 stands for "your own build's vk.sha256"
+pin() { sha256sum "$1" | cut -c1-64; }
 V=$(realpath "${1:-$(dirname "$0")/cli/target/release/zapp-assume}")
 cd "$(dirname "$0")/../.." || exit 1
 exec > zapps/assume/test-assume.out 2>&1
 BAD=0; N=0
 A=zapps/assume/vectors
 R=swiftsync-verify/vectors/mainnet_1_200_engine.hze; F=swiftsync-verify/vectors/mainnet_1_200_engine_proof_flipped.hze
-ID=$(cat swiftsync-verify/vectors/mainnet_1_200_engine.image_id); K="--image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk"
+ID=$(cat swiftsync-verify/vectors/mainnet_1_200_engine.image_id); K="--image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --vk-sha256 $(pin swiftsync-verify/vectors/mainnet_1_200_engine.vk)"
 TIP=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 B170=00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee
 B1003=$(python3 -c "import sys; print(open(sys.argv[1],'rb').read()[11:43][::-1].hex())" $A/utxo_1003.dat)
@@ -84,10 +87,12 @@ run 2 "is the proven UTXO set" $U --bitcoin-cli $T/node $R $A/utxo_200.dat
 run 1 "" $U --bitcoin-cli $T/badnode $R $A/utxo_200.dat
 run 2 "assumevalid=$TIP" $V assumevalid $K --bitcoin-cli $T/node $R
 # the image id and key (no engine core image is published yet): another id, no id, no key, a key that is not the image's
-run 1 "" $V assumeutxo --image $(printf 'ab%.0s' $(seq 32)) --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers $A/headers_0_200.bin $R $A/utxo_200.dat
-run 1 "no engine core image is published" $V assumeutxo --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers $A/headers_0_200.bin $R $A/utxo_200.dat
+run 1 "" $V assumeutxo --image "$(printf 'ab%.0s' $(seq 32))" --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --vk-sha256 "$(pin swiftsync-verify/vectors/mainnet_1_200_engine.vk)" --headers $A/headers_0_200.bin $R $A/utxo_200.dat
+run 1 "no engine core image is published" $V assumeutxo --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --vk-sha256 "$(pin swiftsync-verify/vectors/mainnet_1_200_engine.vk)" --headers $A/headers_0_200.bin $R $A/utxo_200.dat
 run 1 "verifying key" $V assumeutxo --image $ID --headers $A/headers_0_200.bin $R $A/utxo_200.dat
-run 1 "" $V assumeutxo --image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine_key_flipped.vk --headers $A/headers_0_200.bin $R $A/utxo_200.dat
+run 1 "" $V assumeutxo --image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine_key_flipped.vk --vk-sha256 "$(pin swiftsync-verify/vectors/mainnet_1_200_engine_key_flipped.vk)" --headers $A/headers_0_200.bin $R $A/utxo_200.dat
+run 1 "needs its pin" $V assumeutxo --image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers $A/headers_0_200.bin $R $A/utxo_200.dat
+run 1 "not the pinned key" $V assumeutxo --image $ID --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 --headers $A/headers_0_200.bin $R $A/utxo_200.dat
 run 2 "is the proven UTXO set" $U $R $A/utxo_200.dat
 # the independent reference (scripts/libzync/assume_ref.py) must print the hash_serialized_3 and live hash the verifier printed
 echo "== assume_ref.py == the verifier's live_hash and hash_serialized_3"

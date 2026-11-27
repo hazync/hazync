@@ -79,6 +79,11 @@ fn engine_zeroconf_t_at_110() {
     refused(run(&file, ZC_ID, &key, other, Some(&anchor), TXID, None), "another core image");
     let node1 = Box::leak(Box::new(Image { profile: 0x79, ..*core() }));
     refused(run(&file, ZC_ID, &key, node1, Some(&anchor), TXID, None), "the core profile without node format 2");
+    // a core record that names no image (review R1-6 #4): refused, not compared with a zero id
+    let noimg = Box::leak(Box::new(Image { method_id_hex: "", ..*core() }));
+    let r = run(&file, ZC_ID, &key, noimg, Some(&anchor), TXID, None);
+    assert!(r.checks.iter().any(|(ok, s)| !ok && s.contains("names an image")), "{:?}", r.checks);
+    refused(r, "a core record with no image");
     // the clock: a core block more than 2 h ahead
     refused(verify_zeroconf(&file, ZC_ID, &key, core(), Some(&anchor), 1_296_000_000, TXID, None), "time-too-new");
     // the proof: a journal bit, a proof byte, another image id, a pin not the key's, another image's key

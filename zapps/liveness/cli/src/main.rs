@@ -3,7 +3,7 @@
 //! `swiftsync-verify --liveness`, the producer `zync-path live` and the server route `zync-serve /live`.
 //!
 //! ```text
-//!   zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog | --product] [--anchor state.json]
+//!   zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> --vk-sha256 <hex> [--coinlog | --product] [--anchor state.json]
 //!                 [--now <unix seconds>] [--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"]
 //!                 (--liveness <proof> <question>)... <receipt|bundle.sspf>
 //!       check each liveness proof against the verified core proof and against YOUR question
@@ -29,7 +29,7 @@ use zapp_liveness::{coin_source, LivenessAsk, LivenessFact};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])... <proof.hze|bundle.sspf>");
+    eprintln!("usage: zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> --vk-sha256 <hex> [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])... <proof.hze|bundle.sspf>");
     eprintln!("       zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli \"<cmd>\") [--height <h>]");
     eprintln!("       zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli \"<cmd>\")");
     exit(1);
@@ -81,6 +81,7 @@ fn main() {
 fn check_main(a: Vec<String>) -> ! {
     let (mut network, mut image_hex, mut anchor, mut now, mut id) = ("mainnet".to_string(), String::new(), None, None, Identity::default());
     let mut vk: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let (mut coinlog, mut product, mut liveness, mut files) = (false, false, Vec::<(String, String)>::new(), Vec::new());
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
@@ -88,6 +89,7 @@ fn check_main(a: Vec<String>) -> ! {
             "--network" => network = it.next().unwrap_or_else(|| usage()),
             "--image" => image_hex = it.next().unwrap_or_else(|| usage()),
             "--vk" => vk = Some(it.next().unwrap_or_else(|| usage())),
+            "--vk-sha256" => vk_pin = Some(it.next().unwrap_or_else(|| usage())),
             "--anchor" => anchor = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
             "--coinlog" => coinlog = true,
@@ -110,8 +112,12 @@ fn check_main(a: Vec<String>) -> ! {
     if image_hex.is_empty() { fail("--image <hex>: no engine core image is published yet: give the id of the image you rebuilt") }
     let vk = vk.unwrap_or_else(|| fail("--vk <file>: the verifying key from that image's build"));
     let image = zapp_liveness::image_for(&network, &image_hex, coinlog, product)
-        .and_then(|i| zapp_corecheck::with_key(i, &rd(&vk), None)).unwrap_or_else(|e| fail(&e));
-    println!("  image id given on the command line: {}; its key {} taken as your own build's", image.method_id_hex, esc(&vk));
+        .and_then(|i| {
+            // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
+            let b = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk")?;
+            zapp_corecheck::with_key(i, &b, Some(&swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default()))
+        }).unwrap_or_else(|e| fail(&e));
+    println!("  image id given on the command line: {}; its key {} matches the pin you gave", image.method_id_hex, esc(&vk));
     let anchor: Option<ChainState> = anchor.map(|p| serde_json::from_slice(&rd(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p)))));
     // The proof file's bytes (raw or hex) as the C ABI and WASM take them: lower-case hex.
     let facts: Vec<LivenessFact> = liveness.iter().map(|(p, q)| {

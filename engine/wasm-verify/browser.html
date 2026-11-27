@@ -5,7 +5,7 @@
 <meta charset="utf-8"><title>wasm verify</title>
 <pre id="out">running</pre>
 <script type="module">
-import init, { verify_full, image_id_hex } from "./pkg-web/wasmv.js";
+import init, { verify_full, unpinned_image_id_hex } from "./pkg-web/wasmv.js";
 const out = document.getElementById("out"), log = [];
 const say = (s) => { log.push(s); out.textContent = log.join("\n"); };
 const get = async (f) => new Uint8Array(await (await fetch("./in/" + f)).arrayBuffer());
@@ -19,7 +19,7 @@ try {
   // the key's pin: a real page carries it as a CONSTANT (never computed from the key it fetched); the test stands in
   const pin = new Uint8Array(await crypto.subtle.digest("SHA-256", vk));
   const idhex = [...id].map((b) => b.toString(16).padStart(2, "0")).join("");
-  say(`image id ${idhex} (vk says ${image_id_hex(vk) === idhex ? "the same" : image_id_hex(vk)})`);
+  say(`image id ${idhex} (the unpinned vk says ${unpinned_image_id_hex(vk) === idhex ? "the same" : unpinned_image_id_hex(vk)}; only verify_full with the pin counts)`);
   const flip = (b, i) => { const c = b.slice(); c[i] ^= 1; return c; };
   const bad = flip(proof, 130000);
   const cases = [["valid", proof, journal, id, 1], ["journal bit flipped", proof, flip(journal, 100), id, 4],

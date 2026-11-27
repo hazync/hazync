@@ -150,10 +150,10 @@ already carries the same words. A v2 would be a new `version`, a new header line
 ## 5. Using it
 
 ```sh
-zapp-statement draft --receipt <core proof.hze> --image <core id> --vk core.vk --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
+zapp-statement draft --receipt <core proof.hze> --image <core id> --vk core.vk --vk-sha256 <the key file's pin> --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
 zapp-statement message s.json                      # the text to sign in another wallet
 zapp-statement sign s.json --keys <WIF file>       # or: zapp-statement add-sig s.json <spk> simple|full|legacy <base64>
-zapp-statement --image <core id> --vk core.vk --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" --bitcoin-cli "<cmd>" --max-age 6 <core proof.hze> s.json
+zapp-statement --image <core id> --vk core.vk --vk-sha256 <the key file's pin> --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" --bitcoin-cli "<cmd>" --max-age 6 <core proof.hze> s.json
 ```
 
 `--max-age <blocks>`: block H must be at most that many blocks behind the network's tip, which `--bitcoin-cli`

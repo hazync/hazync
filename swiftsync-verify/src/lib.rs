@@ -2015,3 +2015,22 @@ mod bundle_tests {
         assert!(Bundle::decode(&v).is_err());
     }
 }
+
+// At the end of the file on purpose: every line above keeps its number, and with it every panic location the wasm
+// modules embed.
+/// A verifying key file the CALLER pins (review R1-6 #1, 27.11.2026): its bytes, refused unless SHA-256(file) equals
+/// `pin_hex` (64 hex digits, from the image's published record or the caller's own build's `vk.sha256`), never pinned
+/// to itself. OpenVM's verifier trusts the key it is given and the image id does not bind the key (engine/VERIFIER.md),
+/// so a key file that arrives with the proof, unpinned, proves nothing. `what` names the flags in the messages.
+pub fn read_pinned_key(path: &str, pin_hex: Option<&str>, what: &str) -> Result<Vec<u8>, String> {
+    use sha2::Digest as _;
+    let pin_hex = pin_hex.ok_or_else(|| format!("{what} needs its pin ({what}-sha256 <64 hex digits>, the SHA-256 of the key \
+        file from the image's record or your own build): the image id does not bind the key, so an unpinned key proves nothing"))?;
+    let want = hex32(pin_hex.trim()).ok_or_else(|| format!("{what}-sha256: not 64 hex digits ({pin_hex:?})"))?;
+    let bytes = std::fs::read(path).map_err(|e| format!("{what} {path}: {e}"))?;
+    let got: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+    if got != want {
+        return Err(format!("{what} {path}: its SHA-256 is {}, not the pin {}: not the pinned key", hex(&got), hex(&want)));
+    }
+    Ok(bytes)
+}

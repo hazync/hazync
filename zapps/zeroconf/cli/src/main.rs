@@ -2,7 +2,7 @@
 //! verifier's library.
 //!
 //! ```text
-//!   zapp-zeroconf <proof.hze> --vk <key file> --image <hex> --core-image <hex> --txid <txid>
+//!   zapp-zeroconf <proof.hze> --vk <key file> --vk-sha256 <hex> --image <hex> --core-image <hex> --txid <txid>
 //!                 [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>]
 //!                 [--expect <tip height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"] [--json]
 //! ```
@@ -19,7 +19,7 @@ use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("ZAPP_ZEROCONF_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-zeroconf <proof.hze> --vk <key file> --image <hex> --core-image <hex> --txid <txid> [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} [--json]");
+    eprintln!("usage: zapp-zeroconf <proof.hze> --vk <key file> --vk-sha256 <hex> --image <hex> --core-image <hex> --txid <txid> [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} [--json]");
     exit(1);
 }
 
@@ -43,12 +43,14 @@ fn main() {
     let a: Vec<String> = std::env::args().skip(1).collect();
     let (mut network, mut vk, mut image, mut core, mut txid, mut anchor, mut now, mut json, mut id, mut files) =
         ("mainnet".to_string(), None, None, None, None, None, None, false, Identity::default(), Vec::new());
+    let mut vk_pin: Option<String> = None;
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         let mut val = |f: &str| it.next().unwrap_or_else(|| fail(&format!("{f} needs a value")));
         match x.as_str() {
             "--network" => network = val("--network"),
             "--vk" => vk = Some(val("--vk")),
+            "--vk-sha256" => vk_pin = Some(val("--vk-sha256")),
             "--image" => image = Some(val("--image")),
             "--core-image" => core = Some(val("--core-image")),
             "--txid" => txid = Some(val("--txid")),
@@ -66,8 +68,10 @@ fn main() {
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let rd = |f: &str| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
-    let (file, key) = (rd(&files[0]), rd(&vk));
-    let pin: [u8; 32] = { use sha2::Digest as _; sha2::Sha256::digest(&key).into() };
+    // the key pinned by the CALLER (--vk-sha256; review R1-6 #1): never pinned to itself
+    let file = rd(&files[0]);
+    let key = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
+    let pin: [u8; 32] = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
     let key = EngineKey { bytes: &key, pin };
     // the trusted core image: the network's record re-pointed at --core-image (an engine build: node format 2)
     let img = zapp_corecheck::image_for(&network, &core, true, true).unwrap_or_else(|e| fail(&e));

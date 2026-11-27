@@ -264,7 +264,7 @@ signedness bug was in Hazync's own transcription.
 The engine: engine/guest/base.sh and assemble.sh build the guest from this checkout's sources, `hzengine build` makes
 the image and its keys, `hzengine prove-block` / `serve` prove, and `hzengine pack` writes the proof file (`HZE1`) and
 key file a reader takes (engine/ENGINE.md, engine/VERIFIER.md). The reproducible container build of the engine images
-is Stage 4 work (engine/ROADMAP.md 4.1). A reader checks a proof with `swiftsync-verify --image <hex> --vk <key file>
+is Stage 4 work (engine/ROADMAP.md 4.1). A reader checks a proof with `swiftsync-verify --image <hex> --vk <key file> --vk-sha256 <the key file's pin>
 <proof.hze>` (SWIFTSYNC_PROOFS.md §5). The RISC Zero build's commands (`host libzync-prove-range`, `libzync-join`,
 `libzync-verify`, `reproduce/libzync.Dockerfile`) are in this file's git history and v0.27.1.
 

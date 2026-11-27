@@ -17,8 +17,8 @@ fallback.
 ## 1. Commands
 
 ```sh
-zapp-assume assumevalid --image <core id> --vk core.vk [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <proof.hze>
-zapp-assume assumeutxo --image <core id> --vk core.vk --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <proof.hze> <snapshot>
+zapp-assume assumevalid --image <core id> --vk core.vk --vk-sha256 <the key file's pin> [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <proof.hze>
+zapp-assume assumeutxo --image <core id> --vk core.vk --vk-sha256 <the key file's pin> --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <proof.hze> <snapshot>
 ```
 
 Both run the full core proof verification first (SWIFTSYNC_PROOFS.md §5) and check nothing against a proof that

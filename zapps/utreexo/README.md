@@ -17,7 +17,7 @@ cargo test --release --features tip         # the engine proofs: DEMO (200 block
 bash test.sh                                # the CLI and WASM cases
 V=tests/data/engine
 cargo run --release --manifest-path cli/Cargo.toml -- verify $V/base100.hze --image 340f6675bafcdd893c12e0dfae0391043cc7fd8919b526ff756ec13d5d76cc95 \
-  --vk $V/base100.vk --core-image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 \
+  --vk $V/base100.vk --vk-sha256 <the key file's pin> --core-image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 \
   --expect 100:000000007bc154e0fa7ea32218a72fe2c1bb9f86cf8c9ebf9a715ed27fdb229a --floresta
 ```
 

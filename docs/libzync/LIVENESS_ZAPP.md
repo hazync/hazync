@@ -108,7 +108,7 @@ zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> |
 zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
 # paths in node format 2, the engine chain's
 # verifier: YOUR question, then the proof (the core proof is verified by the core verifier's library)
-zapp-liveness --image <core id> --vk core.vk [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <proof.hze>
+zapp-liveness --image <core id> --vk core.vk --vk-sha256 <the key file's pin> [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <proof.hze>
 ```
 
 In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in

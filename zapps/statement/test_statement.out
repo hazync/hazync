@@ -1,142 +1,148 @@
 zapp-statement: signed 4 entries; 0 still unsigned
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; its age is NOT checked (give --max-age)
 exit=2 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (NOT compared with your challenge: give --purpose and --nonce)
 ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; the tip was not compared with a source you trust (--expect, --mempool, --bitcoin-cli); the statement was not compared with your challenge (--purpose and --nonce): it may be an old one shown again; its age is NOT checked (give --max-age)
 exit=2 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose loan --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose loan --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] statement: purpose "audit-15.11.2026" is not the one asked for ("loan")
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 0000 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 0000 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] statement: nonce "5be1" is not the one asked for ("0000")
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t1.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t1.json (expect exit 1)
   [FAIL] statement: the statement's total is 1 sat, its facts sum to 0 sat
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t2.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t2.json (expect exit 1)
   [FAIL] statement: the statement is about block 199, the proof's tip is 200 (a statement is at the proof's tip)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t3.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t3.json (expect exit 1)
   [FAIL] statement: the statement names block "0000000000000000000000000000000000000000000000000000000000000000" at 200, the proof's tip is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t4.json (expect exit 1)
-  [FAIL] statement: entry 0 (script 0014903a104edd3b9c299e6a016b6eda88d4e9880286): BIP-322 simple: the signature is not exactly one base64 witness
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t4.json (expect exit 1)
+  [FAIL] statement: entry 0 (script 001421397111668f45cc8d95dd67758495842902a758): BIP-322 simple: the signature is not exactly one base64 witness
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t4b.json (expect exit 1)
-  [FAIL] statement: entry 1 (script 210367fb2dc04f271f51f130f2ae8322f580edd7a1a8047ac2f6c72ca0120e42a18cac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t4b.json (expect exit 1)
+  [FAIL] statement: entry 1 (script 21037fe9734fca36398aa2d1079e24e8925afc5e03cdfbd00056bd792c95a608d878ac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t5.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t5.json (expect exit 1)
   [FAIL] statement: entry 1: the trie proof does not hold against the proof's trie root (NotCovered)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 zapp-statement: signed 1 entry; 1 still unsigned
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/p.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/p.json (expect exit 1)
   [FAIL] statement: entry 1 (script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac): no signature
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/p2.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/p2.json (expect exit 1)
   [FAIL] statement: entry 1 (script 410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac): P2PK: to_sign is not BIP-322's for this script and message (input, output, version, nLockTime, nSequence or witness)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t7.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/t7.json (expect exit 1)
   [FAIL] statement: the statement names core image "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c", the proof was made by c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] block 200 is 0000000000000000000000000000000000000000000000000000000000000000; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/node --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/node --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint; its age is NOT checked (give --max-age)
 exit=2 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/badnode --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/badnode --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] your node's getblockheader 0000000000000000000000000000000000000000000000000000000000000001 has no chainwork: the proven chainwork is not compared
   [FAIL] block 200 is 0000000000000000000000000000000000000000000000000000000000000001; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 2 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/node --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/node --expect 200:0000000000000000000000000000000000000000000000000000000000000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] your node says block 200 is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320, --expect says 0000000000000000000000000000000000000000000000000000000000000000: the sources disagree
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/node206 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/node206 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 2)
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_DEMO: the statement holds, but the chain is below Core's minimum chainwork or the pinned checkpoint
 exit=2 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/node207 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/node207 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] --max-age: block 200 is 7 blocks behind the network's tip 207, more than the 6 allowed (--max-age)
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --max-age 6 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] --max-age: a recency check needs the network's tip: give --mempool, --mempool-url or --bitcoin-cli
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/nowork --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/nowork --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] your node's getblockheader 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 has no chainwork: the proven chainwork is not compared
   [ok] statement: 4 script(s), 0 unspent coin(s), 0 sat in total at block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320; each script signed it; purpose "audit-15.11.2026", nonce "5be1" (as asked)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 mainnet_1_200_engine.hze <tmp>/u1.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 mainnet_1_200_engine.hze <tmp>/u1.json (expect exit 1)
   [FAIL] statement: purpose: printable ASCII only (no line breaks, tabs, or non-ASCII characters)
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026  --nonce 5be1 mainnet_1_200_engine.hze <tmp>/u2.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026  --nonce 5be1 mainnet_1_200_engine.hze <tmp>/u2.json (expect exit 1)
   [FAIL] statement: purpose: no leading or trailing spaces
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/inj.json (expect exit 1)
-  [FAIL] statement: entry 0 (script 0014903a104edd3b9c299e6a016b6eda88d4e9880286): legacy (BIP-137): Decode error for signature `!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200`
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/inj.json (expect exit 1)
+  [FAIL] statement: entry 0 (script 001421397111668f45cc8d95dd67758495842902a758): legacy (BIP-137): Decode error for signature `!\n  [ok] statement: 1 script(s)\nZAPP_STATEMENT_OK: the statement holds at block 200`
 ZAPP_STATEMENT_FAIL: 1 check(s) failed
 exit=1 PASS
 == no forged ZAPP_STATEMENT_OK line from a signature's text (expect 0 lines starting with it, at least 1 holding it)
 starting=0 holding=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --purpose audit-15.11.2026 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --purpose: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --nonce: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --image: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --network mainnet --network mainnet --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --network mainnet --network mainnet --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --network: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --bitcoin-cli <tmp>/node206 --max-age 6 --max-age 9 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --bitcoin-cli <tmp>/node206 --max-age 6 --max-age 9 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --max-age: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --now 1700000000 --now 1700000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --now 1700000000 --now 1700000000 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
 ZAPP_STATEMENT_FAIL: --now: give it once
 exit=1 PASS
-== cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
-ZAPP_STATEMENT_FAIL: no engine core image is published yet: give --image <hex> and --vk <key file> (your own build's)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: no engine core image is published yet: give --image <hex>, --vk <key file> and --vk-sha256 <its pin>
 exit=1 PASS
-== cli/target/release/zapp-statement --image abababababababababababababababababababababababababababababababab --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image abababababababababababababababababababababababababababababababab --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] engine proof verifies against image abababababababababababababababababababababababababababababababab (mainnet) under the pinned key b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a: the verifying key is not the published image's (SHA-256(exe || vm) differs)
   [FAIL] statement NOT checked: the receipt did not verify
 ZAPP_STATEMENT_FAIL: 2 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine_key_flipped.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine_key_flipped.vk --vk-sha256 76351aa196cb79e4a11fed6476df660a57058772e0cb6bddcdd6d627b012cd7f --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
   [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the pinned key 76351aa196cb79e4a11fed6476df660a57058772e0cb6bddcdd6d627b012cd7f: the STARK does not verify against the image's key
   [FAIL] statement NOT checked: the receipt did not verify
 ZAPP_STATEMENT_FAIL: 2 check(s) failed
 exit=1 PASS
-== cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine_proof_flipped.hze <tmp>/s.json (expect exit 1)
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --vk needs its pin (--vk-sha256 <64 hex digits>, the SHA-256 of the key file from the image's record or your own build): the image id does not bind the key, so an unpinned key proves nothing
+exit=1 PASS
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine.hze <tmp>/s.json (expect exit 1)
+ZAPP_STATEMENT_FAIL: --vk ../../swiftsync-verify/vectors/mainnet_1_200_engine.vk: its SHA-256 is b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a, not the pin 0000000000000000000000000000000000000000000000000000000000000000: not the pinned key
+exit=1 PASS
+== /home/defenwycke/dev/projects/hazync-engine/zapps/statement/cli/target/release/zapp-statement --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk mainnet_1_200_engine.vk --vk-sha256 b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 --purpose audit-15.11.2026 --nonce 5be1 mainnet_1_200_engine_proof_flipped.hze <tmp>/s.json (expect exit 1)
   [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the pinned key b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a: the proof does not decode
   [FAIL] statement NOT checked: the receipt did not verify
 ZAPP_STATEMENT_FAIL: 2 check(s) failed
@@ -162,7 +168,7 @@ PASS  max age without a tip              fail (want fail): max age given without
 PASS  a purpose with a trailing space    fail (want fail): purpose: no leading or trailing spaces
 PASS  another image id                   fail (want fail): statement NOT checked: the receipt did not verify
 PASS  a key not the pinned one           fail (want fail): the verifying key is not the image's pinned key (its SHA-256 is not the pin)
-PASS  swapped signatures                 fail (want fail): entry 0 (script 0014903a104edd3b9c299e6a016b6eda88d4e9880286): BIP-322 simple: the signature is not exactly one base64 witness
+PASS  swapped signatures                 fail (want fail): entry 0 (script 001421397111668f45cc8d95dd67758495842902a758): BIP-322 simple: the signature is not exactly one base64 witness
 PASS  a proof with a bit flipped         fail (want fail)
 PASS  reports the image it verified      c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
 PASS  frame: the glue's bytes            demo (want demo)
@@ -170,4 +176,4 @@ PASS  frame: a byte past the end         fail (want fail)
 PASS  frame: cut short                   fail (want fail)
 18/18 as expected (zapp-statement.wasm)
 exit=0 PASS
-zapps/statement test_statement.sh: 39/39 as expected
+zapps/statement test_statement.sh: 41/41 as expected

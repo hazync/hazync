@@ -215,7 +215,7 @@ image is published, `"builtin-pinned"`), and the `--floresta` source starts with
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
 - `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
-  `zapp-utreexo verify <proof.hze> --image <hex> --vk <key file> --core-image <hex> [--base-image <hex>] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base> | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
+  `zapp-utreexo verify <proof.hze> --image <hex> --vk <key file> --vk-sha256 <the key file's pin> --core-image <hex> [--base-image <hex>] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base> | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
   `test.mjs`). `zapps/utreexo/tests/data/engine`: the engine proofs (base 100, step 150) with their keys and ids.

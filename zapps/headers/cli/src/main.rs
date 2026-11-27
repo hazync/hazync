@@ -8,7 +8,7 @@ use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-headers --image <hex> --vk <key file> {IDENTITY_USAGE} [--now <s>] [--include <height>:<hash> --path <file> [--tx <txid>:<tx.json>]] <receipt>...");
+    eprintln!("usage: zapp-headers --image <hex> --vk <key file> --vk-sha256 <hex> {IDENTITY_USAGE} [--now <s>] [--include <height>:<hash> --path <file> [--tx <txid>:<tx.json>]] <receipt>...");
     exit(1);
 }
 
@@ -32,7 +32,7 @@ fn main() {
     run(std::env::args().skip(1).collect());
 }
 
-/// `zapp-headers --image <hex> --vk <key file> [--expect <height>:<hash>] [--now <unix seconds>]
+/// `zapp-headers --image <hex> --vk <key file> --vk-sha256 <hex> [--expect <height>:<hash>] [--now <unix seconds>]
 /// [--include <height>:<hash> --path <file> [--tx <txid>:<tx.json>]] <proof.hze>...`: a
 /// proof of the mainnet header chain from genesis (the header-chain zyncAPP), as one engine proof file or a chain of
 /// runs, the first from genesis and each next one starting where the one before ended. `--image` / `--vk`: the headers
@@ -50,12 +50,14 @@ fn main() {
 fn run(a: Vec<String>) -> ! {
     let (mut image, mut id, mut now, mut files) = (None::<String>, Identity::default(), None, Vec::new());
     let mut vk_path: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let (mut include, mut path, mut tx) = (None, None, None);
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--image" => image = Some(it.next().unwrap_or_else(|| usage())),
             "--vk" => vk_path = Some(it.next().unwrap_or_else(|| usage())),
+            "--vk-sha256" => vk_pin = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
             "--include" => include = Some(it.next().unwrap_or_else(|| usage())),
             "--path" => path = Some(it.next().unwrap_or_else(|| usage())),
@@ -68,9 +70,10 @@ fn run(a: Vec<String>) -> ! {
     if files.is_empty() { usage(); }
     let image = image.unwrap_or_else(|| fail("--image <hex>: no engine header-chain image is published yet: give the id of the image you rebuilt"));
     let vk_path = vk_path.unwrap_or_else(|| fail("--vk <file>: the verifying key from that image's build"));
-    let vk = std::fs::read(&vk_path).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&vk_path))));
-    let key = swiftsync_verify::EngineKey { bytes: &vk, pin: { use sha2::Digest as _; sha2::Sha256::digest(&vk).into() } };
-    println!("  verifying key {} taken as your own build's (pin {})", esc(&vk_path), swiftsync_verify::hex(&key.pin));
+    // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
+    let vk = swiftsync_verify::read_pinned_key(&vk_path, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
+    let key = swiftsync_verify::EngineKey { bytes: &vk, pin: swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default() };
+    println!("  verifying key {} matches the pin you gave ({})", esc(&vk_path), swiftsync_verify::hex(&key.pin));
     let read_lines = |f: &str| -> Vec<String> {
         std::fs::read_to_string(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))))
             .lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect()

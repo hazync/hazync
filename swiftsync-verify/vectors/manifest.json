@@ -1,5 +1,5 @@
 {
- "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM), engine (OpenVM) proofs only since the cutover (27.11.2026). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. mainnet_1_200_engine.hze is the engine chain's real proof of mainnet 1..200 (swiftsync-verify/tests/data/engine200), with its image id and verifying key (.vk, pinned as given: no engine image is published yet); make_vectors.py writes every file here from it. `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
+ "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM), engine (OpenVM) proofs only since the cutover (27.11.2026). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. mainnet_1_200_engine.hze is the engine chain's real proof of mainnet 1..200 (swiftsync-verify/tests/data/engine200), with its image id and verifying key (.vk, pinned by the caller with --vk-sha256: no engine image is published yet, and a key is never pinned to itself, review R1-6 #1); make_vectors.py writes every file here from it. `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
  "cases": [
   {
    "name": "mainnet_1_200_demo",
@@ -11,6 +11,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 2
@@ -25,6 +27,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
@@ -39,6 +43,8 @@
     "abababababababababababababababababababababababababababababababab",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
@@ -63,6 +69,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine_key_flipped.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
@@ -77,6 +85,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine_proof_flipped.hze"
    ],
    "expect_exit": 1
@@ -91,6 +101,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine_journal_flipped.hze"
    ],
    "expect_exit": 1
@@ -105,6 +117,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine_trailing_byte.hze"
    ],
    "expect_exit": 1
@@ -119,6 +133,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine_truncated.hze"
    ],
    "expect_exit": 1
@@ -133,6 +149,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine_length_past_end.hze"
    ],
    "expect_exit": 1
@@ -147,6 +165,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "--now",
     "1231006505",
     "mainnet_1_200_engine.hze"
@@ -163,6 +183,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.sspf"
    ],
    "expect_exit": 2
@@ -177,6 +199,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "bundle_header_lies.sspf"
    ],
    "expect_exit": 1
@@ -191,6 +215,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "bundle_v1.sspf"
    ],
    "expect_exit": 1
@@ -205,6 +231,8 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze",
     "signet2600.hints"
    ],
@@ -221,8 +249,42 @@
     "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
     "--vk",
     "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a",
     "mainnet_1_200_engine.hze",
     "-"
+   ],
+   "expect_exit": 1,
+   "cli_only": true
+  },
+  {
+   "name": "mainnet_1_200_key_unpinned",
+   "description": "The real proof and key, but no --vk-sha256: refused (a key is never pinned to itself, review R1-6 #1).",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze"
+   ],
+   "expect_exit": 1,
+   "cli_only": true
+  },
+  {
+   "name": "mainnet_1_200_key_wrong_pin",
+   "description": "The real proof and key with a pin that is not the key file's SHA-256: refused before anything is decoded.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "--vk-sha256",
+    "0000000000000000000000000000000000000000000000000000000000000000",
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1,
    "cli_only": true

@@ -3,6 +3,9 @@
 # unit tests (the engine proof 0..4,031, MMR paths, transaction inclusion), the WASM crate's frame tests (natively), the
 # CLI on that proof (test_headers_verify.sh) with every chain-identity source, and the WASM module through its glue
 # (wasm/test-headers.mjs). Engine proofs only since the cutover (27.11.2026).
+# the key pin a reader gives with every key (review R1-6 #1: a key is never pinned to itself); here the fixture key's own
+# SHA-256 stands for "your own build's vk.sha256"
+pin() { sha256sum "$1" | cut -c1-64; }
 set -euo pipefail
 cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
@@ -13,7 +16,7 @@ cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-headers
 bash test_headers_verify.sh "$T/release/zapp-headers"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 4,031 as
 # the proof does (DEMO: valid, below minimum work), one that gives no chainwork, one that names another block (FAIL)
-D=tests/data/engine4031; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin")
+D=tests/data/engine4031; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin" --vk-sha256 "$(pin "$D/vk.bin")")
 TIP=00000000f037ad09d0b05ee66b8c1da83030abaf909d2b1bf519c3c7d2cd3fdf
 # (block 4,031's chainwork: 4,032 blocks of difficulty 1, 0x100010001 each)
 printf '#!/bin/sh\ncase "$1" in getblockhash) echo %s;; getblockheader) echo '"'"'{"chainwork": "%064x"}'"'"';; esac\n' $TIP $((4032 * 0x100010001)) > "$T/node"; chmod +x "$T/node"
@@ -27,7 +30,7 @@ set +e; "$T/release/zapp-headers" "${K[@]}" --bitcoin-cli "$T/badnode" $D/proof.
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node naming another block: exit $e, want 1"; exit 1; }
 # the whole chain 0..975,278 (tests/data/engine975278, proved 27.11.2026): above Core's minimum work, so OK with the
 # tip from an identity source; another tip hash FAIL
-D=tests/data/engine975278; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin")
+D=tests/data/engine975278; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin" --vk-sha256 "$(pin "$D/vk.bin")")
 TIP=00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
 set +e; "$T/release/zapp-headers" "${K[@]}" --expect 975278:$TIP $D/proof.hze > "$T/id.out"; e=$?; set -e
 [ $e = 0 ] && grep -q "SWIFTSYNC_VERIFY_OK: header chain from genesis to 975278 $TIP" "$T/id.out" \

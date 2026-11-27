@@ -2,7 +2,7 @@
 //! (docs/libzync/ZYNCAPPS.md §9) on the core verifier's library. The checker, and as subcommands the producer (until
 //! 15.11.2026 the separate `zync-statement`):
 //!
-//!   zapp-statement [--network mainnet|signet] --image <hex> --vk <key file> [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
+//!   zapp-statement [--network mainnet|signet] --image <hex> --vk <key file> --vk-sha256 <hex> [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
 //!                  [--bitcoin-cli "<command>"] [--purpose <text> --nonce <text>] [--max-age <blocks>] [--now <unix seconds>]
 //!                  <proof.hze> <statement.json>
 //!
@@ -24,7 +24,7 @@
 //!
 //! The producer: makes a balance statement for the checker.
 //!
-//!   zapp-statement draft --receipt <core proof.hze> --image <hex> --vk <key file> --trie <state_<H>.trie>
+//!   zapp-statement draft --receipt <core proof.hze> --image <hex> --vk <key file> --vk-sha256 <hex> --trie <state_<H>.trie>
 //!                        --purpose <text> --nonce <text> [--network mainnet|signet] <scriptPubKey hex>...      a statement with no signatures (stdout)
 //!   zapp-statement message <statement.json>                                    the exact text each script must sign
 //!   zapp-statement sign <statement.json> --keys <file>                         signs the entries it holds keys for
@@ -107,7 +107,7 @@ fn producer_flags(a: &[String], names: &[&str]) -> (std::collections::HashMap<St
 fn produce(a: Vec<String>) {
     match a.first().map(|s| s.as_str()) {
         Some("draft") => {
-            let (f, pos) = producer_flags(&a, &["--receipt", "--image", "--vk", "--trie", "--purpose", "--nonce", "--network"]);
+            let (f, pos) = producer_flags(&a, &["--receipt", "--image", "--vk", "--vk-sha256", "--trie", "--purpose", "--nonce", "--network"]);
             let need = |n: &str| f.get(n).cloned().unwrap_or_else(|| die(&format!("draft: {n} is required")));
             let (rp, tp, purpose, nonce) = (need("--receipt"), need("--trie"), need("--purpose"), need("--nonce"));
             let network = f.get("--network").cloned().unwrap_or_else(|| "mainnet".into());
@@ -117,9 +117,12 @@ fn produce(a: Vec<String>) {
             if scripts.is_empty() { die("draft: give at least one scriptPubKey"); }
             // as every zAPP resolves it (zapp_corecheck::image_for; "regtest" only under the tests-only regtest-test feature)
             let (ih, vkp) = (need("--image"), need("--vk"));
-            let vk = std::fs::read(&vkp).unwrap_or_else(|e| die(&format!("{vkp}: {e}")));
+            // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
+            let pin = f.get("--vk-sha256").cloned();
+            let vk = swiftsync_verify::read_pinned_key(&vkp, pin.as_deref(), "--vk").unwrap_or_else(|e| die(&e));
+            let pinb = swiftsync_verify::hex32(pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
             let image = zapp_corecheck::image_for(&network, &ih, false, false)
-                .and_then(|i| zapp_corecheck::with_key(i, &vk, None)).unwrap_or_else(|e| die(&e));
+                .and_then(|i| zapp_corecheck::with_key(i, &vk, Some(&pinb))).unwrap_or_else(|e| die(&e));
             let receipt = std::fs::read(&rp).unwrap_or_else(|e| die(&format!("{rp}: {e}")));
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let rep = verify(&Inputs { receipt: &receipt, image, anchor: None, now });
@@ -207,6 +210,7 @@ fn check(a: Vec<String>) {
     let mut it = a.into_iter();
     let (mut network, mut image_hex, mut id) = ("mainnet".to_string(), None, Identity::default());
     let mut vk_path: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let (mut purpose, mut nonce, mut now_arg, mut files) = (None, None, None, Vec::new());
     let mut max_age: Option<u32> = None;
     let need = |it: &mut dyn Iterator<Item = String>, f: &str| it.next().unwrap_or_else(|| fail(&format!("{f} needs a value")));
@@ -215,11 +219,12 @@ fn check(a: Vec<String>) {
     let mut seen: Vec<String> = Vec::new();
     let mut once = |f: &str| if seen.iter().any(|s| s == f) { fail(&format!("{f}: give it once")) } else { seen.push(f.to_string()) };
     while let Some(a) = it.next() {
-        if matches!(a.as_str(), "--network" | "--image" | "--vk" | "--purpose" | "--nonce" | "--now" | "--max-age") { once(&a); }
+        if matches!(a.as_str(), "--network" | "--image" | "--vk" | "--vk-sha256" | "--purpose" | "--nonce" | "--now" | "--max-age") { once(&a); }
         match a.as_str() {
             "--network" => network = need(&mut it, &a),
             "--image" => image_hex = Some(need(&mut it, &a)),
             "--vk" => vk_path = Some(need(&mut it, &a)),
+            "--vk-sha256" => vk_pin = Some(need(&mut it, &a)),
             "--purpose" => purpose = Some(need(&mut it, &a)),
             "--nonce" => nonce = Some(need(&mut it, &a)),
             "--now" => now_arg = Some(need(&mut it, &a)),
@@ -232,10 +237,12 @@ fn check(a: Vec<String>) {
     let [receipt, stf] = files.as_slice() else { fail("give <receipt> <statement.json>") };
     // the image as every zAPP resolves it (zapp_corecheck::image_for), with its key: no engine image is published yet
     let (Some(ih), Some(vkp)) = (image_hex.as_deref(), vk_path.as_deref()) else {
-        fail("no engine core image is published yet: give --image <hex> and --vk <key file> (your own build's)")
+        fail("no engine core image is published yet: give --image <hex>, --vk <key file> and --vk-sha256 <its pin>")
     };
-    let vk = std::fs::read(vkp).unwrap_or_else(|e| fail(&format!("{vkp:?}: {e}")));
-    let image = zapp_corecheck::image_for(&network, ih, false, false).and_then(|i| zapp_corecheck::with_key(i, &vk, None))
+    // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
+    let vk = swiftsync_verify::read_pinned_key(vkp, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&e));
+    let pinb = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
+    let image = zapp_corecheck::image_for(&network, ih, false, false).and_then(|i| zapp_corecheck::with_key(i, &vk, Some(&pinb)))
         .unwrap_or_else(|e| fail(&format!("--image: {e}")));
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
     let now = match now_arg.map(|v| v.parse::<u64>()) {

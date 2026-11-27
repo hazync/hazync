@@ -13,8 +13,10 @@
 //!
 //! The proof is an engine (OpenVM) proof file (`HZE1`, engine/VERIFIER.md); a RISC Zero receipt is checked with
 //! v0.27.1's verifier. `--image <hex>` is the engine image id (one you rebuilt, §5 step 9) and `--vk <file>` its
-//! verifying key, which is PINNED (OpenVM's verifier trusts the key it is given). No engine image is published yet
-//! (the Stage 4 freeze), so both are needed: the key is taken as your own build's and pinned as given.
+//! verifying key, which is PINNED (OpenVM's verifier trusts the key it is given): `--vk-sha256 <hex>` is the key file's
+//! SHA-256 from the image's record or your own build (`vk.sha256`), and a key that does not hash to it is refused. No
+//! engine image is published yet (the Stage 4 freeze), so all three are needed. The image id alone adds no security:
+//! it does not bind the key, so a key that came with the proof, unpinned, proves nothing (review R1-6 #1).
 //!
 //! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
 //! one that pins any (docs/libzync/HANDOVER.md).
@@ -44,7 +46,7 @@ use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inp
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--expect <height>:<block hash>] [--mempool | --mempool-url <url>] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <proof.hze|bundle.sspf>");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] --image <hex> --vk <key file> --vk-sha256 <hex> [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--expect <height>:<block hash>] [--mempool | --mempool-url <url>] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <proof.hze|bundle.sspf>");
     eprintln!("       swiftsync-verify [--network ...] --image <hex> --vk <key file> bundle <proof.hze> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
@@ -70,6 +72,7 @@ fn main() {
     let (mut network, mut anchor, mut cli, mut image_hex, mut files) = ("mainnet".to_string(), None, None, None, Vec::new());
     let mut now_arg: Option<String> = None;
     let mut vk_path: Option<String> = None;
+    let mut vk_pin: Option<String> = None;
     let mut handovers: Vec<swiftsync_verify::Handover> = Vec::new();
     let mut coinlog = false;
     let mut product = false;
@@ -85,6 +88,7 @@ fn main() {
             "--bitcoin-cli" => cli = Some(args.next().unwrap_or_else(|| usage())),
             "--image" => image_hex = Some(args.next().unwrap_or_else(|| usage())),
             "--vk" => vk_path = Some(args.next().unwrap_or_else(|| usage())),
+            "--vk-sha256" => vk_pin = Some(args.next().unwrap_or_else(|| usage())),
             "--now" => now_arg = Some(args.next().unwrap_or_else(|| usage())),
             "--coinlog" => coinlog = true,
             "--product" => { coinlog = true; product = true }
@@ -134,10 +138,8 @@ fn main() {
     }
     match (&image_hex, &vk_path) {
         (Some(_), Some(vk)) => {
-            use sha2::Digest as _;
-            let bytes = std::fs::read(vk).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(vk))));
-            let pin: [u8; 32] = sha2::Sha256::digest(&bytes).into();
-            println!("  verifying key {} taken as your own build's (pin {})", esc(vk), hex(&pin));
+            let bytes = swiftsync_verify::read_pinned_key(vk, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
+            println!("  verifying key {} matches the pin you gave ({})", esc(vk), vk_pin.as_deref().unwrap_or_default().trim().to_lowercase());
             image = image.with_engine_key(bytes);
         }
         (None, Some(_)) => fail("--vk needs --image: the id of the image you rebuilt, whose key it is"),

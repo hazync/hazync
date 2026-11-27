@@ -1,7 +1,7 @@
 //! zapp-utreexo: check a Utreexo roots zyncAPP proof (docs/libzync/UTREEXO_ZAPP.md §6) and print the proven
 //! accumulator in Floresta's `AssumeUtreexoValue` form.
 //!
-//!   zapp-utreexo verify <final run proof.hze> --image <hex> --vk <key file> --core-image <hex> [--base-image <hex>]
+//!   zapp-utreexo verify <final run proof.hze> --image <hex> --vk <key file> --vk-sha256 <hex> --core-image <hex> [--base-image <hex>]
 //!                       [--network mainnet|signet] [--expect <H>:<hash>] [--mempool | --mempool-url <base>]
 //!                       [--bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--json] [--floresta] [--allow-demo]
 //!   zapp-utreexo id
@@ -32,7 +32,7 @@ use zapp_common::Identity;
 use zapp_utreexo::{journal_kind, verify_utreexo_on, verify_utreexo_tip_on, TipStatement, UtreexoReport, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER,
                    KIND_UTREEXO_TIP, NETWORKS, UTREEXO_IMAGE_ID, UTREEXO_IMAGE_LABEL, UTREEXO_TIP_IMAGE_ID};
 
-const USAGE: &str = "usage: zapp-utreexo verify <proof.hze> --image hex --vk <key file> --core-image hex [--base-image hex] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<cmd>\"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo] | id";
+const USAGE: &str = "usage: zapp-utreexo verify <proof.hze> --image hex --vk <key file> --vk-sha256 hex --core-image hex [--base-image hex] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<cmd>\"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo] | id";
 
 fn usage(m: &str) -> ! {
     eprintln!("zapp-utreexo: {m}\n{USAGE}");
@@ -49,6 +49,7 @@ struct Opts {
     base_image: Option<String>,
     core_image: Option<String>,
     vk: Option<String>,
+    vk_pin: Option<String>,
     json: bool,
     floresta: bool,
     allow_demo: bool,
@@ -82,6 +83,8 @@ fn parse(a: &[String]) -> Opts {
             "--core-image" => o.core_image = Some(val(&mut it, x)),
             "--vk" if o.vk.is_some() => usage("--vk: give it once"),
             "--vk" => o.vk = Some(val(&mut it, x)),
+            "--vk-sha256" if o.vk_pin.is_some() => usage("--vk-sha256: give it once"),
+            "--vk-sha256" => o.vk_pin = Some(val(&mut it, x)),
             "--json" => o.json = true,
             "--floresta" => o.floresta = true,
             "--allow-demo" => o.allow_demo = true,
@@ -116,10 +119,10 @@ fn main() {
             let fail = |m: String| -> ! { say(&format!("ZAPP_UTREEXO_FAIL: {m}")); std::process::exit(1) };
             let pe = |k: &str, v: &Option<String>| v.as_ref().map(|e| swiftsync_verify::parse_expect(e).unwrap_or_else(|| usage(&format!("{k}: want <height>:<64 hex digits>"))));
             let r = std::fs::read(&o.receipt).unwrap_or_else(|e| fail(format!("{}: {e}", o.receipt)));
-            // --vk: the key file, pinned by its own SHA-256 (the reader's build of the image)
+            // --vk: the key file, pinned by the CALLER (--vk-sha256; review R1-6 #1): never pinned to itself
             let vkp = o.vk.as_deref().unwrap();
-            let vk = std::fs::read(vkp).unwrap_or_else(|e| fail(format!("--vk {vkp}: {e}")));
-            let key = { use sha2::Digest as _; swiftsync_verify::EngineKey { bytes: &vk, pin: sha2::Sha256::digest(&vk).into() } };
+            let vk = swiftsync_verify::read_pinned_key(vkp, o.vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(e));
+            let key = swiftsync_verify::EngineKey { bytes: &vk, pin: swiftsync_verify::hex32(o.vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default() };
             let core = o.core_image.as_deref().unwrap();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let net = o.network.as_deref().unwrap_or("mainnet");

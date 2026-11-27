@@ -15,9 +15,9 @@ every path it affects; the decision. Severity as I assess it, which may differ f
 
 | # | finding | assessment | decision |
 |---|---|---|---|
-| R1-6 #1 | CLIs pin a key to its own hash ("taken as your own build's"): a forged key next to a proof passes | correct; harmless only while no image is published and readers are told; a release must not ship it | require a separately given pin (`--vk-sha256`) when the record has no key; docs: the image id alone adds nothing |
-| R1-6 #2 | engine/wasm-verify exports the unpinned STARK-only check as valid=1 and an image id from the (forgeable) key | correct (a probe module, not the published one, but exported) | rename / remove the unpinned exports; fix the "compressed" doc line |
-| R1-6 #3 | zeroconf decodes the journal without decode_journal's %4 guard | unreachable after verify_full_bytes; cheap | use decode_journal; also check core.has_image() (#4) |
+| R1-6 #1 (DONE, fixes_verifier.md) | CLIs pin a key to its own hash ("taken as your own build's"): a forged key next to a proof passes | correct; harmless only while no image is published and readers are told; a release must not ship it | require a separately given pin (`--vk-sha256`) when the record has no key; docs: the image id alone adds nothing |
+| R1-6 #2 (DONE) | engine/wasm-verify exports the unpinned STARK-only check as valid=1 and an image id from the (forgeable) key | correct (a probe module, not the published one, but exported) | rename / remove the unpinned exports; fix the "compressed" doc line |
+| R1-6 #3, #4 (DONE) | zeroconf decodes the journal without decode_journal's %4 guard | unreachable after verify_full_bytes; cheap | use decode_journal; also check core.has_image() (#4) |
 | R1-5 #1 | handover: nothing checks the embedded predecessor key is the predecessor RELEASE's published key; HANDOVER.md claims a build-time check that does not exist | correct; trust rests on the assembler | build-time check: LINEAGE.last().verifier == the published predecessor pin and image_id_of(key) == LINEAGE.last().image; correct HANDOVER.md; pinned lock for ovm-xver builds |
 | R1-5 #3 | in-guest handover negatives missing (key != pin, another image's key, wrong height, lineage mismatch, non-chain journal) | correct | add them to the handover negatives |
 | R1-1 #1 | bench-noverify kept out of production only by the image id | correct; an operator error would publish a forgeable image | finalize reveals a domain-separated value in bench builds; hzengine build refuses the feature for a release keys dir |

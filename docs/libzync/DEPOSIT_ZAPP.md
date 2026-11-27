@@ -145,11 +145,11 @@ It does **not** add:
 
 ```sh
 # build (any machine; the core run's history.bin for the block-forest leaf, a node or the raw block)
-zapp-deposit build --core core.hze --image <core id> --vk core.vk --history history.bin \
-             --headers headers.hze --headers-image <headers id> --headers-vk headers.vk --headers-file headers.txt \
+zapp-deposit build --core core.hze --image <core id> --vk core.vk --vk-sha256 <the key file's pin> --history history.bin \
+             --headers headers.hze --headers-image <headers id> --headers-vk headers.vk --headers-vk-sha256 <the key file's pin> --headers-file headers.txt \
              --height 170 --txid f4184fc5…9e16 --bitcoin-cli "bitcoin-cli" -o deposit.json
 # check (the operator; every expectation is the caller's)
-zapp-deposit --image <core id> --vk core.vk --headers-image <headers id> --headers-vk headers.vk \
+zapp-deposit --image <core id> --vk core.vk --vk-sha256 <the key file's pin> --headers-image <headers id> --headers-vk headers.vk --headers-vk-sha256 <the key file's pin> \
              --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae1a…ac \
              --min-depth 6 --min-validated-depth 6 --expect <height>:<hash> --max-tip-age 7200 deposit.json
 ```

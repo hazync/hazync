@@ -5,12 +5,15 @@
 # is DEMO (exit 2); every refusal is FAIL (1). Run from this directory after `cargo build --release` (or give the
 # binary: test_statement.sh [<zapp-statement>]); ../test.sh does both.
 # STATEMENT_WASM=<zapp-statement.wasm> also runs wasm/test-statement.mjs. Writes test_statement.out.
+# the key pin a reader gives with every key (review R1-6 #1: a key is never pinned to itself); here the fixture key's own
+# SHA-256 stands for "your own build's vk.sha256"
+pin() { sha256sum "$1" | cut -c1-64; }
 cd "$(dirname "$0")" || exit 1
 exec > >(tee test_statement.out) 2>&1
 BAD=0; N=0
 Z=${1:-cli/target/release/zapp-statement}; X=../../swiftsync-verify/vectors
 R=$X/mainnet_1_200_engine.hze; TRIE=vectors/engine_200.trie
-ID=$(cat $X/mainnet_1_200_engine.image_id); K="--image $ID --vk $X/mainnet_1_200_engine.vk"; V="$Z $K"
+ID=$(cat $X/mainnet_1_200_engine.image_id); K="--image $ID --vk $X/mainnet_1_200_engine.vk --vk-sha256 $(pin $X/mainnet_1_200_engine.vk)"; V="$Z $K"
 TIP=200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 P2PK9=410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
@@ -87,8 +90,10 @@ run 1 $V $A --now 1700000000 --now 1700000000 $C $R $T/s.json
 # 9. the image id and key (no engine core image is published yet): none given, another id, a key that is not the
 #    image's; and a proof with one bit flipped
 run 1 $Z $A $C $R $T/s.json
-run 1 $Z --image $(printf 'ab%.0s' $(seq 32)) --vk $X/mainnet_1_200_engine.vk $A $C $R $T/s.json
-run 1 $Z --image $ID --vk $X/mainnet_1_200_engine_key_flipped.vk $A $C $R $T/s.json
+run 1 $Z --image "$(printf 'ab%.0s' $(seq 32))" --vk $X/mainnet_1_200_engine.vk --vk-sha256 "$(pin $X/mainnet_1_200_engine.vk)" $A $C $R $T/s.json
+run 1 $Z --image $ID --vk $X/mainnet_1_200_engine_key_flipped.vk --vk-sha256 "$(pin $X/mainnet_1_200_engine_key_flipped.vk)" $A $C $R $T/s.json
+run 1 $Z --image $ID --vk $X/mainnet_1_200_engine.vk $A $C $R $T/s.json
+run 1 $Z --image $ID --vk $X/mainnet_1_200_engine.vk --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 $A $C $R $T/s.json
 run 1 $V $A $C $X/mainnet_1_200_engine_proof_flipped.hze $T/s.json
 # 10. the producer refuses to file a signature that does not verify
 echo "== zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)"

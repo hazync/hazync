@@ -6,12 +6,15 @@
 # them with the caller's expectations. Bound to the whole chain (above Core's minimum work) the verdict is OK (exit 0);
 # otherwise at best DEMO (exit 2). No engine image is published yet: every call gives the image ids and keys. Usage: test_deposit.sh
 # [<zapp-deposit>] (default: cli/target/release). Prints every verdict line and exit code.
+# the key pin a reader gives with every key (review R1-6 #1: a key is never pinned to itself); here the fixture key's own
+# SHA-256 stands for "your own build's vk.sha256"
+pin() { sha256sum "$1" | cut -c1-64; }
 Z=$(realpath "${1:-$(dirname "$0")/cli/target/release/zapp-deposit}")
 cd "$(dirname "$0")/../.." || exit 1
 B=$(dirname "$Z"); D=experimental/libzync-bench/deposit; X=swiftsync-verify/vectors; H=zapps/headers/tests/data/engine4031
 CORE=$X/mainnet_1_200_engine.hze; HIST=swiftsync-verify/tests/data/engine200/history.bin
-K="--image $(cat $X/mainnet_1_200_engine.image_id) --vk $X/mainnet_1_200_engine.vk"
-HK="--headers-image $(cat $H/image_id) --headers-vk $H/vk.bin"
+K="--image $(cat $X/mainnet_1_200_engine.image_id) --vk $X/mainnet_1_200_engine.vk --vk-sha256 $(pin $X/mainnet_1_200_engine.vk)"
+HK="--headers-image $(cat $H/image_id) --headers-vk $H/vk.bin --headers-vk-sha256 $(pin $H/vk.bin)"
 T=f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
 CB=b1fea52486ce0c62bb442b530a3f0132b826c74e473d1f2c220bfa78111c5082 # block 170's coinbase
 TIP=4031:00000000f037ad09d0b05ee66b8c1da83030abaf909d2b1bf519c3c7d2cd3fdf
@@ -44,9 +47,12 @@ run 1 $V --txid $T --expect 199:${TIP#*:} $W/core.json
 run 1 $V $HK --txid $T --max-tip-age 60 $W/tip.json
 # the image ids and keys (no engine image is published yet)
 run 1 $Z --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $Z --image "$(printf 'ab%.0s' $(seq 32))" --vk $X/mainnet_1_200_engine.vk --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $Z --image "$(cat $X/mainnet_1_200_engine.image_id)" --vk $X/mainnet_1_200_engine_key_flipped.vk --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $V --headers-image "$(printf 'ab%.0s' $(seq 32))" --headers-vk $H/vk.bin --txid $T --allow-demo --no-require-identity $W/tip.json
+run 1 $Z --image "$(printf 'ab%.0s' $(seq 32))" --vk $X/mainnet_1_200_engine.vk --vk-sha256 "$(pin $X/mainnet_1_200_engine.vk)" --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $Z --image "$(cat $X/mainnet_1_200_engine.image_id)" --vk $X/mainnet_1_200_engine_key_flipped.vk --vk-sha256 "$(pin $X/mainnet_1_200_engine_key_flipped.vk)" --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $Z --image "$(cat $X/mainnet_1_200_engine.image_id)" --vk $X/mainnet_1_200_engine.vk --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $Z --image "$(cat $X/mainnet_1_200_engine.image_id)" --vk $X/mainnet_1_200_engine.vk --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $V --headers-image "$(cat $H/image_id)" --headers-vk $H/vk.bin --txid $T --allow-demo --no-require-identity $W/tip.json
+run 1 $V --headers-image "$(printf 'ab%.0s' $(seq 32))" --headers-vk $H/vk.bin --headers-vk-sha256 "$(pin $H/vk.bin)" --txid $T --allow-demo --no-require-identity $W/tip.json
 run 1 $V --txid $T --network signet $W/core.json
 run 1 $V $W/core.json
 run 1 $V --txid $T /nonexistent.json
@@ -65,7 +71,7 @@ head -c 500 /dev/urandom > $W/junk.json; run 1 $V --txid $T $W/junk.json
 # minimum work, so OK with the tip from a source the caller trusts; asking past the burial, another tip, the 4,031
 # chain's key for this proof, or the 4,031 chain's path: FAIL; --no-require-identity (the caller compares the tip
 # itself): OK, as documented
-G=zapps/headers/tests/data/engine975278; GK="--headers-image $(cat $G/image_id) --headers-vk $G/vk.bin"
+G=zapps/headers/tests/data/engine975278; GK="--headers-image $(cat $G/image_id) --headers-vk $G/vk.bin --headers-vk-sha256 $(pin $G/vk.bin)"
 GTIP=975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
 run 0 $MK $GK --txid $T --headers $G/proof.hze --tip-path $G/mmr_path_200_tip975278.txt -o $W/whole.json
 run 0 $V $GK --txid $T --vout 0 --amount 1000000000 --min-depth 975109 --min-validated-depth 31 --expect $GTIP $W/whole.json

@@ -3,11 +3,14 @@
 # proof of mainnet 1..200 (the core's swiftsync-verify/vectors, under its image id and key; the proofs in engine/), and
 # its producer (zapp-liveness prove) on that run's history (node format 2).
 # usage: run.sh <zapp-liveness>     exit codes: 2 DEMO (honest: below minimum work), 1 FAIL
+# the key pin a reader gives with every key (review R1-6 #1: a key is never pinned to itself); here the fixture key's own
+# SHA-256 stands for "your own build's vk.sha256"
+pin() { sha256sum "$1" | cut -c1-64; }
 set -u
 V=${1:?zapp-liveness}
 D=$(cd "$(dirname "$0")/engine" && pwd); C=$D/../../../../swiftsync-verify/vectors; R=$C/mainnet_1_200_engine.hze
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine.vk"
+IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine.vk --vk-sha256 $(pin $C/mainnet_1_200_engine.vk)"
 T9=0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9
 T170=f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16
 pass=0; fail=0
@@ -55,10 +58,14 @@ case_ "a byte appended"                               1 --liveness "$T/trailing.
 # the image id and key (no engine core image is published yet): none, another id, a key that is not the image's
 IMG0=$IMG; IMG=""
 case_ "no --image / --vk"                              1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
-IMG="--image $(printf 'ab%.0s' $(seq 32)) --vk $C/mainnet_1_200_engine.vk"
+IMG="--image $(printf 'ab%.0s' $(seq 32)) --vk $C/mainnet_1_200_engine.vk --vk-sha256 $(pin $C/mainnet_1_200_engine.vk)"
 case_ "another core image id"                          1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
-IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine_key_flipped.vk"
+IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine_key_flipped.vk --vk-sha256 $(pin $C/mainnet_1_200_engine_key_flipped.vk)"
 case_ "a key that is not the image's"                  1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
+IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine.vk"
+case_ "the key without --vk-sha256 (review R1-6 #1)"   1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
+IMG="--image $(cat $C/mainnet_1_200_engine.image_id) --vk $C/mainnet_1_200_engine.vk --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000"
+case_ "the key with another pin"                       1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$R"
 IMG=$IMG0
 case_ "a proof with one bit flipped"                   1 --liveness "$D/b170_0_at200.hex" "$T170:0@200" "$C/mainnet_1_200_engine_proof_flipped.hze"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that agrees (hash and

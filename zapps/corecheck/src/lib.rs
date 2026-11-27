@@ -95,9 +95,9 @@ fn image_for_uncached(network: &str, image_hex: &str, coinlog: bool, product: bo
     Ok(image)
 }
 
-/// `image` with its engine verifying key `vk` (engine/VERIFIER.md): the key is accepted only as exactly the bytes `pin`
-/// names when a pin is given (a published pin the caller holds); with `pin` None the key is the caller's own build's
-/// and is pinned as given. Cached, as [`image_for`]: one leaked Image per distinct (image, key).
+/// `image` with its engine verifying key `vk` (engine/VERIFIER.md): accepted only as exactly the bytes `pin` names. A
+/// reader always gives the pin (published, or its own build's vk.sha256; every CLI requires it: review R1-6 #1); `None`
+/// pins the key to itself, which binds nothing: tests only. Cached, as [`image_for`]: one Image per (image, key).
 pub fn with_key(image: &'static Image, vk: &[u8], pin: Option<&[u8; 32]>) -> Result<&'static Image, String> {
     use sha2::Digest as _;
     use std::collections::HashMap;
