@@ -23,6 +23,13 @@ itself); the pod image carries hzengine and its keys (keys from B2, pinned by SH
 the engine image id, and verify-any run with the engine env. Tests: the existing coordinator suite (mocked host), and
 a real CPU run of a small range (blocks 1..4: two leaves, a fold, verify-any on each, the board's chain check).
 
+**Gate 3, the board half: done on a small range (27.11.2026, results/board_dryrun).** The real coordinator and worker
+on hazync-coord's CPU, mainnet 1..8, configured for the engine by environment only (no coordinator code change): 8
+leaves claimed, proved and re-verified by the board (414-432 s each), 7 folds (271 s each), the spine to [1..8]
+genesis-anchored, check-proofs 15/15; a tampered journal, a tampered proof, another image's proof and a misplaced
+range refused, the real proof accepted. Found and fixed: a forged proof was reported as another build (99c0572c).
+Left: GPUs and the board's scale (pod image, 3.3's data), an engine-to-engine handover on the board.
+
 ## 3.1 Tip pipeline, 3.3 prep, 3.4 services
 
 - 3.3 first: prep's leaf bundles, trie store and history regenerated from genesis in node format 2 (the engine's), on

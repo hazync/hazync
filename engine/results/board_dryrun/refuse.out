@@ -1,0 +1,17 @@
+== tampered journal byte (range 1): rc=1 in 275 ms
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✗ submit rejected: {'ok': False, 'range': '1', 'receipt_sha': '8946341d689b5317aa7c8976553dd6d582ca3724015b76b97c5b80736fa5a7c8', 'signature': 'valid', 'note': "receipt rejected — not a valid proof (forged/tampered/corrupt): image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (forged, tampered or corrupt): the proof's public values are not SHA-256 of this journal\n"}
+== tampered proof byte (range 1): rc=1 in 234 ms
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✗ submit rejected: {'ok': False, 'range': '1', 'receipt_sha': '685dc62c76ec721aed4649785e6df6b139836ecefebfc6149a4c45a5b7bf9bdc', 'signature': 'valid', 'note': "receipt rejected — not a valid proof (forged/tampered/corrupt):  engine image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (forged, tampered or corrupt): the STARK does not verify against the image's key\n"}
+== another image's proof (headers 0..4,031) (range 1): rc=1 in 320 ms
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✗ submit rejected: {'ok': False, 'range': '1', 'receipt_sha': '963647209994d040287d7aa4d1e8301dd60cedd1885ab7b3aed70dba446f12d4', 'signature': 'valid', 'note': "receipt rejected — not a valid proof (forged/tampered/corrupt):  engine image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (forged, tampered or corrupt): the STARK does not verify against the image's key\n"}
+== block 2's proof as range 1 (range 1): rc=1 in 279 ms
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✗ submit rejected: {'ok': False, 'range': '1', 'receipt_sha': 'a81541e8f971c4e2698bb6380bc9b161ccc6911527f38082f26b0ee74d27017b', 'signature': 'valid', 'note': "receipt rejected — not anchored on the state before (the board's chain may have moved under it: a reorg?): chor_id 381465338333249e485db98721f3b84e4a1f588b64378eace82947785c2b7406, that state's digest 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61
+== control: block 1's real proof (range 1): rc=0 in 260 ms
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 1: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+{"method_id": "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9", "frontier": 1, "libzync": true, "handover": null, "reproduce": "reproduce/METHOD_ID", "source_sha256": "9eda13add206a7022b3e329f8b583fb53dde4a85296b5b331a2cc1808708df74", "reorg": null, "reorg_alert": null, "tip_run": null}
+GD_REFUSE_DONE

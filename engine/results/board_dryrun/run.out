@@ -1,0 +1,65 @@
+GENESIS_TIP=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+== /api/meta
+{"method_id": "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9", "frontier": 0, "libzync": true, "handover": null, "reproduce": "reproduce/METHOD_ID", "source_sha256": "9eda13add206a7022b3e329f8b583fb53dde4a85296b5b331a2cc1808708df74", "reorg": null, "reorg_alert": null, "tip_run": null}
+handle : ghost:95a610
+pubkey : 95a610ff219ae477c420acd0515b8c7c866fc1b3f9ac8b257d6bc2d32b6d81b0
+coord  : http://127.0.0.1:8911
+(set a handle:  hazync id <name>)
+== leaves: hazync run, one block each
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 1: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=430 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 2: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=432 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 3: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=424 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 4: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=426 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 5: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=414 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 6: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=421 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 7: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=417 :: nice python3 /root/gd/src/coordinator/hazync run
+  (crediting 'ghost:95a610' — no handle set; `hazync id <yourname>` to change it)
+✓ range 8: the coordinator re-verified your proof and put it on the board as 'ghost:95a610'.
+STEP rc=0 secs=414 :: nice python3 /root/gd/src/coordinator/hazync run
+== state after the leaves
+{"method_id": "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9", "frontier": 8, "libzync": true, "handover": null, "reproduce": "reproduce/METHOD_ID", "source_sha256": "9eda13add206a7022b3e329f8b583fb53dde4a85296b5b331a2cc1808708df74", "reorg": null, "reorg_alert": null, "tip_run": null}
+== folds
+✓ 5-8: folded and verified on the board as 'ghost:95a610'.
+folding 1-2 + 3-4 -> 1-4 …
+✓ 1-4: folded and verified on the board as 'ghost:95a610'.
+folding 1-4 + 5-8 -> 1-8 …
+✓ 1-8: folded and verified on the board as 'ghost:95a610'.
+nothing to fold — every adjacent pair on the board is already folded.
+folded 7 pair(s).
+STEP rc=0 secs=1894 :: nice python3 /root/gd/src/coordinator/hazync fold 8
+== spine
+✓ spine now [1..2] — genesis-anchored, 274463 bytes, as 'ghost:95a610'.
+absorbing [3..4] into [1..2] — one fold, no re-proving…
+✓ spine now [1..4] — genesis-anchored, 274479 bytes, as 'ghost:95a610'.
+absorbing [5..8] into [1..4] — one fold, no re-proving…
+✓ spine now [1..8] — genesis-anchored, 274503 bytes, as 'ghost:95a610'.
+  block 9 is not proven yet (no retained receipt) — the spine is up to date at [1..8].
+absorbed 8 block(s) into the spine in 4 step(s).
+STEP rc=0 secs=801 :: nice python3 /root/gd/src/coordinator/hazync spine
+{"lo": 1, "hi": 8, "out_tip": "c22fc56afadb7aca2024bcf31f0e1fb8ac3ec4c1b7dcfa764814058012995573", "out_leaves": 8, "range_work": "0", "sha256": "40cbe5078deb6021a5f65570472ec76ce9699b7de2de1b1ff50b44dac0f5d6ce", "bytes": 274503, "handle": "ghost:95a610", "pubkey": "95a610ff219ae477c420acd0515b8c7c866fc1b3f9ac8b257d6bc2d32b6d81b0", "ts": 1795798646.2144914, "out_bhash": "c60ddef1b7618ca2348a46e868afc26e3efc68226c78aa47f8488c4000000000"}
+{"method_id": "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9", "frontier": 8, "libzync": true, "handover": null, "reproduce": "reproduce/METHOD_ID", "source_sha256": "9eda13add206a7022b3e329f8b583fb53dde4a85296b5b331a2cc1808708df74", "reorg": null, "reorg_alert": null, "tip_run": null}
+== check-proofs
+checking 15 stored proofs with 4 worker(s)
+  checked              : 15 in 0 s (111.4 per second)
+  hold                 : 15
+  with problems        : 0
+  verified with no file: 0 (not a failure; per-block ones are the G1 check's)
+
+Every one of the 15 stored proofs still hashes and verifies to its record.
+STEP rc=0 secs=0 :: env COORD_DB=/root/gd/coord/coordinator.db COORD_PROOFS=/root/gd/coord/proofs HAZYNC_HOST=/root/gd/src/prover/target/release/host HAZYNC_LIBZYNC=1 HAZYNC_BRIDGE_OUT=/root/gd/run/bundles HAZYNC_LZ_STATE_DIR=/root/gd/run/prep HAZYNC_ENGINE_VK=/root/gd/run/key.bin HAZYNC_ENGINE_VK_PIN=b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a CHECK_PROOFS_MIN_AGE=0 python3 check-proofs.py
+server pid 2857181 (left running for the refusal step)
+GD_RUN_DONE

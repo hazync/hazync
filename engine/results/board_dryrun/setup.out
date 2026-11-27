@@ -1,0 +1,16 @@
+b1fd6b26 Stage 3.2: CPU run of blocks 1..4 on the engine board command
+== build
+STEP rc=0 secs=42 :: bash -c cd /root/gd/src/engine/host && nice cargo build --release -q > /root/gd/hz_build.log 2>&1
+STEP rc=0 secs=2513 :: bash -c cd /root/gd/src/prover && RISC0_SKIP_BUILD=1 HAZYNC_BASE=/root/product-base6 HAZYNC_LIBZYNC=1 nice cargo build --release -q -p host > /root/gd/host_build.log 2>&1
+== the board's key
+pack: /root/gd/run/b200.hze (275183 bytes: proof 273107, journal 2068), verified as the readers verify it
+image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+key_pin b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a (/root/gd/run/key.bin, 96425 bytes)
+STEP rc=0 secs=1 :: /root/gd/src/engine/host/target/release/hzengine pack --dir /root/engine/keys-ch --proof /root/engine/core200/block_200.ovm --out /root/gd/run/b200.hze --key /root/gd/run/key.bin
+== prep 1..8 with leaf bundles
+leaf_1.bin leaf_2.bin leaf_3.bin leaf_4.bin leaf_5.bin leaf_6.bin leaf_7.bin leaf_8.bin LOCK 
+== genesis tip, method-id (board env)
+852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+METHOD_ID c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+  engine (OpenVM) image id: sha256(exe || vm)
+GD_SETUP_DONE
