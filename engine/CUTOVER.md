@@ -47,3 +47,7 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
   lib 22 passed + test.sh rc 0, liveness test.sh rc 0 (wasm 30/30), the core wasm rebuilt: still 1f6ebed9 (the helper
   sat at the end of lib.rs). Also 27.11: prover/host's RISC Zero receipt tests read tests/data/risc0_vectors (101
   passed); zyncapp builds against the engine-only verifiers.
+- 27.11.2026 the core page (swiftsync-verify-wasm/index.html, module 1f6ebed9) checked in headless Chromium: block
+  200's engine proof with its image id, key and pin gives DEMO (every check ok; below the minimum work and the
+  checkpoint), a wrong pin FAIL ("the verifying key is not the image's pinned key"); 390 px wide at phone width, no
+  console errors or warnings.
