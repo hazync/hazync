@@ -127,8 +127,10 @@ jobs:
         run: ./scripts/test-wasm-build-cwd.sh && ./scripts/test-wasm-build-cwd.sh --control
       - name: The WASM build scripts take the published build image by digest, else build it locally and say so (mock docker)
         run: ./scripts/test-wasm-image-pull.sh
-      - name: swiftsync-verify-wasm (its unit tests, run natively)
-        run: cargo test --manifest-path swiftsync-verify-wasm/Cargo.toml --release
+      - name: swiftsync-verify-wasm (its unit tests, run natively, against its engine-graph lock)
+        run: |
+          . scripts/zapp-checks.sh
+          wasm_crate_test swiftsync-verify-wasm
       - name: Release gate - the shipped verifiers accept a real libzync proof and refuse tampered ones
         # scripts/release.sh runs this on the staged assets before publishing (CLI, the wasm through its
         # JavaScript glue); run here on every push so the gate is known to pass before a release needs it.

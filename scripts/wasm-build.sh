@@ -29,8 +29,8 @@ for c in engine/verify-core engine/journal; do case " $* " in *" $c "*) ;; *) EX
 set -- "$@" $EXTRA
 STAGED="$CRATE $* prover/methods/guest/src/handover_pin.rs $OVM_FILES"
 HOST_META=(--locked); [ -z "${HAZYNC_WASM_WRITE_LOCK:-}" ] || HOST_META=()
-if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
-    [ -n "${HAZYNC_WASM_DRY_RUN:-}" ] || ovm_make_tree
+if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ] && [ -z "${HAZYNC_WASM_DRY_RUN:-}" ]; then
+    ovm_make_tree
     ovm_cfg "$REPO/$OVM_TREE"
 fi
 # ⛔ THE BYTES DEPEND ON THE COMPILER. Same source, same paths: Rust 1.99.0 gives the published 446fdaeb…,
@@ -38,8 +38,9 @@ fi
 # a new pin means a new published sha (README, the site, deploy.sh).
 # The tests-only regtest image (zapps/corecheck's and zapps/common's `regtest-test` feature, scripts/zapp-regtest) is never
 # in a WASM module: refused here, on the host, before the container (the feature's compile_error! refuses any build
-# without debug assertions as well). zapps/common/test.sh holds the control.
-if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
+# without debug assertions as well). zapps/common/test.sh holds the control. Not in a dry run (it builds nothing, and has
+# no OpenVM tree to resolve the graph against).
+if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ] && [ -z "${HAZYNC_WASM_DRY_RUN:-}" ]; then
     # --locked: never rewrite the crate's Cargo.lock; a crate without one is refused here, with cargo's own message
     META=$(cargo metadata "${HOST_META[@]}" --format-version 1 --filter-platform wasm32-unknown-unknown "${OVM_CFG[@]}" --manifest-path "$REPO/$CRATE/Cargo.toml") \
         || { echo "$0: cargo metadata --locked failed for $CRATE (above): its Cargo.lock is missing or not up to date" >&2; exit 1; }

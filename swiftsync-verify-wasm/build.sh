@@ -20,8 +20,8 @@ CRATE=swiftsync-verify-wasm
 . "$REPO/engine/scripts/wasm_ovm.sh"
 STAGED="swiftsync-verify-wasm swiftsync-verify libzync engine/verify-core engine/journal prover/methods/guest/src/handover_pin.rs $OVM_FILES"
 HOST_META=(--locked); [ -z "${HAZYNC_WASM_WRITE_LOCK:-}" ] || HOST_META=()
-if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
-    [ -n "${HAZYNC_WASM_DRY_RUN:-}" ] || ovm_make_tree
+if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ] && [ -z "${HAZYNC_WASM_DRY_RUN:-}" ]; then
+    ovm_make_tree
     ovm_cfg "$REPO/$OVM_TREE"
 fi
 # The stage path is FIXED: it reaches the bytes (reproduce/wasm.Dockerfile). SWIFTSYNC_WASM_STAGE is gone (a build at

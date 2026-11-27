@@ -13,7 +13,7 @@ cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-headers
 bash test_headers_verify.sh "$T/release/zapp-headers"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 4,031 as
 # the proof does (DEMO: valid, below minimum work), one that gives no chainwork, one that names another block (FAIL)
-D=tests/data/engine4031; K=(--image "$(cat $D/image_id)" --vk $D/vk.bin)
+D=tests/data/engine4031; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin")
 TIP=00000000f037ad09d0b05ee66b8c1da83030abaf909d2b1bf519c3c7d2cd3fdf
 # (block 4,031's chainwork: 4,032 blocks of difficulty 1, 0x100010001 each)
 printf '#!/bin/sh\ncase "$1" in getblockhash) echo %s;; getblockheader) echo '"'"'{"chainwork": "%064x"}'"'"';; esac\n' $TIP $((4032 * 0x100010001)) > "$T/node"; chmod +x "$T/node"

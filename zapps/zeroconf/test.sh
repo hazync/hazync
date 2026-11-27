@@ -17,7 +17,7 @@ want() { # want <exit> <what> <args...>
     set +e; "$Z" "$@" > "$W/out" 2>&1; e=$?; set -e
     if [ "$e" = "$w" ]; then n=$((n+1)); echo "ok   $what (exit $e)"; else cat "$W/out"; echo "::error::$what: exit $e, want $w"; exit 1; fi
 }
-B=($D/proof.hze --vk $D/vk.bin --image $ZC --core-image $CORE --network regtest --anchor $D/anchor_state_109.json)
+B=("$D/proof.hze" --vk "$D/vk.bin" --image "$ZC" --core-image "$CORE" --network regtest --anchor "$D/anchor_state_109.json")
 want 2 "T, the tip compared (DEMO: a given anchor)"             "${B[@]}" --txid $TXID --expect $TIP
 want 2 "T, no tip given (DEMO)"                                  "${B[@]}" --txid $TXID
 want 1 "another txid"                                            "${B[@]}" --txid "${TXID/6/7}" --expect $TIP

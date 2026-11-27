@@ -4,10 +4,14 @@
 # on the HOST by engine/scripts/openvm_src.sh from the pinned commits (the container has no git) into one tree shared by
 # the modules ($OVM_TREE, under the checkout's ignored target/), and used only with the tree digest below, which the
 # CONTAINER recomputes before staging it (engine/scripts/tree_digest.sh).
+# shellcheck disable=SC2034 # these are for the scripts that source this one
 OVM_PATCHES="engine/wasm-verify/openvm-abi-stable.patch engine/handover/openvm-verify-nozstd.patch engine/handover/stark-sdk-nologging.patch"
+# shellcheck disable=SC2034
 OVM_DIGEST=38eccd0935910175840b4644340fb1b788b5c13a0818c57f46b2503b0547fa6e
+# shellcheck disable=SC2034
 OVM_TREE=target/wasm-openvm-src
 # the files this one names, for a caller's STAGED list (its clean-checkout check)
+# shellcheck disable=SC2034
 OVM_FILES="engine/scripts/wasm_ovm.sh engine/scripts/openvm_src.sh engine/scripts/tree_digest.sh $OVM_PATCHES"
 
 # ovm_make_tree: on the host, make (or re-check) the tree; refuse any other digest.

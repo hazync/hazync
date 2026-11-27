@@ -12,7 +12,7 @@ FT=${CARGO_TARGET_DIR:-$PWD/ffi/target}
 H200=000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 CORE=c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
 V=$PWD/tests/data/engine
-K=(--image "$(cat $V/image_id)" --vk $V/vk.bin --core-image $CORE)
+K=(--image "$(cat "$V/image_id")" --vk "$V/vk.bin" --core-image "$CORE")
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 cargo test --release --manifest-path ./Cargo.toml
 wasm_crate_test ./wasm
@@ -26,7 +26,7 @@ want() { # want <exit> <what> <command...>: the command's exit code is <exit>
 want 2 "the proven hints file (DEMO)" "$Z" "${K[@]}" --expect 200:$H200 --undo $V/mainnet-200.undo $V/proof.hze $V/mainnet-200.hints
 printf 'UTXO\0\377\377\377\377' > "$W/tiny"
 want 1 "a 9-byte file claiming H = 2^32 - 1" "$Z" "${K[@]}" --expect 200:$H200 $V/proof.hze "$W/tiny"
-want 1 "H = T = 200, a wrong --expect-tip (compared also when T = H)" "$Z" "${K[@]}" --expect 200:$H200 --expect-tip 200:$(printf '%064d' 1) $V/proof.hze $V/mainnet-200.hints
+want 1 "H = T = 200, a wrong --expect-tip (compared also when T = H)" "$Z" "${K[@]}" --expect 200:$H200 --expect-tip "200:$(printf '%064d' 1)" $V/proof.hze $V/mainnet-200.hints
 want 1 "no --core-image (no engine image is published yet)" "$Z" --image "$(cat $V/image_id)" --vk $V/vk.bin $V/proof.hze $V/mainnet-200.hints
 want 1 "another core image" "$Z" --image "$(cat $V/image_id)" --vk $V/vk.bin --core-image "$(cat $V/image_id)" $V/proof.hze $V/mainnet-200.hints
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers getblockhash

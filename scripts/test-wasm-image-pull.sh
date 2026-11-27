@@ -10,6 +10,12 @@ W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 R=$W/repo; mkdir -p "$R/swiftsync-verify-wasm" "$R/reproduce" "$W/bin" "$W/state"
 cp "$REPO/swiftsync-verify-wasm/build.sh" "$R/swiftsync-verify-wasm/"
 cp "$REPO/reproduce/wasm.Dockerfile" "$REPO/reproduce/wasm-image-tag.sh" "$R/reproduce/"
+# the OpenVM tree (engine/scripts/wasm_ovm.sh) is not what this tests: a stand-in that makes, checks and patches nothing
+mkdir -p "$R/engine/scripts"
+cat > "$R/engine/scripts/wasm_ovm.sh" <<'O'
+OVM_FILES=""; OVM_TREE=target/none; OVM_CFG=()
+ovm_make_tree() { :; }; ovm_cfg() { OVM_CFG=(); }; ovm_stage() { :; }; ovm_build_or_lock() { :; }
+O
 # cargo metadata: a graph with no C (WITH_C=0)
 printf '#!/bin/sh\necho %s\n' "'{\"packages\": [], \"resolve\": {\"nodes\": []}}'" > "$W/bin/cargo"
 # docker: logs every call; `image inspect` answers from $W/state/image (absent: no such image; its content: RepoDigests)
