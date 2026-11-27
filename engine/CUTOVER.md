@@ -17,7 +17,7 @@ Each step is one commit (or a few), with every suite and `test.sh` passing at it
 | C5 | WASM modules engine only (`build.sh` without `--engine`), sizes measured, pins renewed (two-machine check as before) | the pins in each README |
 | C6 | Host and engine renames (AUDIT.md item 1): `r0.rs`, "a RISC Zero input stream", `--self-id` | hzengine and host tests |
 | C7 | Format 1 goes: `--node-format`, `take_node_format_flag`, `set_node_format(1)` callers (only the RISC Zero chain's history used it) | liveness and path tests on format 2 |
-| C8 | The RISC Zero prover: prover/methods, prover/zyncapps guests and hosts, vendor/risc0-*, history/verifier*. Decided per directory once C1-C7 are in: what the engine still builds from (shared guest sources) stays | a build of everything left |
+| C8 | The RISC Zero prover. Surveyed 27.11: the engine guest is ASSEMBLED from prover/methods/guest, libzync and coinbase-smt sources (engine/guest/assemble.sh), the zAPP engine guests likewise from prover/zyncapps/methods/*, so those sources stay; their RISC Zero manifests and build glue go. prover/host (13,855 lines, risc0 in 11 of its files) is also the engine's driver (prep, `engine-export`, engine_backend.rs): its RISC Zero backend goes with Stage 3 (board and tip controller on the engine), not as a deletion here. vendor/risc0-*, history/verifier* (the RISC Zero chain's readers; v0.27.1 keeps them released) go once nothing builds against them | a build of everything left |
 
 Not here: the site (its wasm and text change with the release, 6.2/6.3, wording approved by the user), the
 board's services (6.4), image records for the engine chain (Stage 4 freeze).
