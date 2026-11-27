@@ -8,7 +8,7 @@ core's; glue: `zapp-deposit.js` (`loadDeposit`, `verifyDeposit`).
 
 ```sh
 ./build.sh                                                       # byte-reproducible: the core's flags (../../../scripts/wasm-build.sh), Rust 1.99.0, stage /tmp/zapp-deposit-wasm-build
-node test-deposit.mjs ../target/release/zapp-deposit             # 24 cases on bundles `zapp-deposit build` makes from the real receipts
+node test-deposit.mjs ../target/release/zapp-deposit             # 28 cases on bundles `zapp-deposit build` makes from the engine proofs (DEMO at best: below minimum work)
 ```
 
 | | |

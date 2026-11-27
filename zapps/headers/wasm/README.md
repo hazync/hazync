@@ -4,11 +4,11 @@ The header-chain check of `zapp-headers` (one library, `zapps/headers`), compile
 proof of the mainnet header chain from genesis, and that a block (by its MMR path) and a transaction in it (by its
 merkle branch) are on that chain, on the device; nothing is uploaded. A module of its own (docs/libzync/ZYNCAPPS.md
 §9), NOT part of the core verifier's `hazync-verify.wasm` (until 15.11.2026 `verifyHeaders` was the core's). Raw ABI,
-no wasm-bindgen, as the core's; glue: `zapp-headers.js` (`loadHeaders`, `verifyHeaders`, `headersImageId`).
+no wasm-bindgen, as the core's; glue: `zapp-headers.js` (`loadHeaders`, `verifyHeaders`; `headersImageId` returns "" until an engine headers image is published).
 
 ```sh
 ./build.sh               # byte-reproducible: the core's flags (../../../scripts/wasm-build.sh), Rust 1.99.0, stage /tmp/zapp-headers-wasm-build
-node test-headers.mjs    # the real chained receipts and MMR / transaction inclusion cases (experimental/libzync-bench/headers)
+node test-headers.mjs    # 40 cases: the engine proof of headers 0..4,031 (../tests/data/engine4031), MMR paths to its tip, block 170's transactions
 ```
 
 | | |

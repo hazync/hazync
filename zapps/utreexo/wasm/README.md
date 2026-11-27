@@ -1,11 +1,11 @@
 # `zapps/utreexo/wasm`: the Utreexo roots zAPP checker in a browser
 
 The same checks as `zapp-utreexo verify` (one library, `zapp_utreexo::verify_utreexo`), compiled to WebAssembly with a
-raw ABI and hand-written glue (`zapp-utreexo.js`), as `swiftsync-verify-wasm`. The receipt is checked on the device.
+raw ABI and hand-written glue (`zapp-utreexo.js`), as `swiftsync-verify-wasm`. The engine proof is checked on the device.
 
 ```sh
 ./build.sh          # byte-reproducible: scripts/wasm-build.sh, in the pinned container reproduce/wasm.Dockerfile
-node test.mjs       # the real receipts of ../vectors through the WASM: 23 cases (9 on a tip receipt, 1 a nested composite)
+node test.mjs ../tests/data/engine   # the engine proofs (base after block 100, tip step 100 -> 150) through the WASM: 23 cases
 ```
 
 | | |

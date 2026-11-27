@@ -31,25 +31,25 @@ no record. 81 files of the 145.
 | README.md | 16 | ☐ |
 | docs/libzync/UNDO.md | 14 | ☐ |
 | docs/libzync/SWIFTSYNC_PROOFS.md | 14 | ☐ |
-| swiftsync-verify/README.md | 11 | ☐ |
+| swiftsync-verify/README.md | 11 | ✅ |
 | docs/EXTERNAL_REVIEW.md | 8 | ☐ |
 | docs/libzync/PROOF_BUNDLE.md | 7 | ☐ |
 | docs/EXPLAINER.md | 7 | ☐ |
 | docs/libzync/ZAPP_FOLLOWER.md | 6 | ☐ |
 | docs/libzync/CONSENSUS_RULES.md | 6 | ☐ |
-| swiftsync-verify-wasm/README.md | 5 | ☐ |
+| swiftsync-verify-wasm/README.md | 5 | ✅ |
 | .claude/skills/benchmark-infographic/SKILL.md | 4 | ☐ |
-| zapps/utreexo/wasm/README.md | 3 | ☐ |
-| zapps/utreexo/README.md | 3 | ☐ |
-| zapps/statement/wasm/README.md | 3 | ☐ |
-| zapps/liveness/wasm/README.md | 3 | ☐ |
-| swiftsync-verify/vectors/README.md | 3 | ☐ |
+| zapps/utreexo/wasm/README.md | 3 | ✅ |
+| zapps/utreexo/README.md | 3 | ✅ |
+| zapps/statement/wasm/README.md | 3 | ✅ |
+| zapps/liveness/wasm/README.md | 3 | ✅ |
+| swiftsync-verify/vectors/README.md | 3 | ✅ |
 | docs/libzync/COINLOG.md | 3 | ☐ |
-| zapps/hints/wasm/README.md | 2 | ☐ |
-| zapps/headers/wasm/README.md | 2 | ☐ |
-| zapps/deposit/wasm/README.md | 2 | ☐ |
-| zapps/assume/wasm/README.md | 1 | ☐ |
-| swiftsync-verify-ffi/README.md | 1 | ☐ |
+| zapps/hints/wasm/README.md | 2 | ✅ |
+| zapps/headers/wasm/README.md | 2 | ✅ |
+| zapps/deposit/wasm/README.md | 2 | ✅ |
+| zapps/assume/wasm/README.md | 1 | ✅ |
+| swiftsync-verify-ffi/README.md | 1 | ✅ |
 | docs/libzync/PREP_MEMORY.md | 1 | ☐ |
 
 ## B. Operations: board, coordinator, build, release, prover (after Stage 3, which changes what they describe)

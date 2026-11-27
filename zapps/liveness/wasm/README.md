@@ -1,14 +1,14 @@
 # `zapp-liveness-wasm`: the coin-liveness zyncAPP in a browser
 
 The liveness check of `zapp-liveness` (one library, `zapps/liveness`), compiled to WebAssembly: a page verifies a core
-receipt and one outpoint's state after a height against the question it asks, on the device; nothing is uploaded. A
+engine proof and one outpoint's state after a height against the question it asks, on the device; nothing is uploaded. A
 module of its own (docs/libzync/ZYNCAPPS.md §9), NOT part of the core verifier's `hazync-verify.wasm`, which it does
 not change (until 15.11.2026 this was the `"liveness"` key of the core's `verifyFacts`). Raw ABI, no wasm-bindgen, as
 the core's; glue: `zapp-liveness.js` (`loadLiveness`, `verifyLiveness`).
 
 ```sh
 ./build.sh                 # byte-reproducible: the core's flags (../../../scripts/wasm-build.sh), Rust 1.99.0, stage /tmp/zapp-liveness-wasm-build
-node test-liveness.mjs     # 32 cases on the real mainnet 1..200 proof (v0.25.0) and ../vectors
+node test-liveness.mjs     # 30 cases on the engine chain's proof of mainnet 1..200 and ../vectors/engine
 ```
 
 | | |

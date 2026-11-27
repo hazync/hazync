@@ -3,11 +3,11 @@
 The hints check of `zapp-hints` (one library, `zapps/hints`), compiled to WebAssembly: a page checks a downloaded
 hints file against its proof on the device; nothing is uploaded. A module of its own (docs/libzync/ZYNCAPPS.md §9),
 NOT part of the core verifier's `hazync-verify.wasm`, which it does not change. Raw ABI, no wasm-bindgen, as the
-core's; glue: `zapp-hints.js` (`loadHints`, `verifyHints`, `hintsImageId`).
+core's; glue: `zapp-hints.js` (`loadHints`, `verifyHints`; `hintsImageId` returns "" until an engine hints image is published).
 
 ```sh
 ./build.sh                                                          # byte-reproducible: the core's flags (../../../scripts/wasm-build.sh), Rust 1.99.0, stage /tmp/zapp-hints-wasm-build
-node test-hints.mjs ../vectors 0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449   # 6 cases on the real H = 3 receipt
+node test-hints.mjs ../tests/data/engine <hash of block 200> <core image id>   # 10 cases on the engine hints proof for H = 200 (as ../test.sh)
 ```
 
 | | |
