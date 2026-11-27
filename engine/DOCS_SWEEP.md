@@ -83,6 +83,13 @@ no record. 81 files of the 145.
 
 ## C. hazync.org (hazync-web): 21 pages + 404
 
+**State 27.11.2026: ◐ DRAFTED, not approved, not deployed.** hazync-web branch `web/engine-draft` (623a7b6, from the
+live banner branch): 14 pages changed (index, how-it-works with a new "The move to OpenVM" section, contribute, donate,
+devs, explorer, headers, partners, and the six zAPP pages' commands and measurements). WORDING.md at the branch root
+lists every before/after sentence, the 23 kinds of `[[ENGINE: ...]]` placeholders (release tag, image ids and key
+fingerprints, board rate and per-block cost, browser check time, follower) and the screenshots. Waits for: the user's
+wording approval, then the release (ids, wasm, deploy.sh).
+
 Public text: drafted on a branch, wording approved by the user, deployed with the release (6.2/6.3). Pages with the
 most RISC Zero / receipt mentions: zapps/utreexo 6, how-it-works 5, contribute 5, zapps/liveness 4, zapps/deposit 4,
 devs 4. Beyond the words: every number (proof times, sizes, chain progress) and the verify page's module and inputs
