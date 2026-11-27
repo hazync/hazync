@@ -27,6 +27,10 @@ fn eq32(a: &[u8; 32], b: &[u8; 32]) -> bool {
     true
 }
 
+/// The OpenVM version a carried key is of (keys::KEYS' third field): its proofs go to THAT version's verifier.
+pub const V2_1_0: u8 = 0;
+pub const V2_0_2: u8 = 1;
+
 /// Is a predecessor with this key pin carried by this image? (main.rs asserts it at compile time for its lineage.)
 pub const fn carried(v: &[u8; 32]) -> bool {
     let mut k = 0;
@@ -55,18 +59,29 @@ pub mod accel {
 
 /// The predecessor's proof (`words`) of `journal` by image `image`, under the carried key whose pin is `verifier`.
 pub fn verify(verifier: &[u8; 32], image: [u32; 8], journal: &[u8], words: &[u32], _suite: &()) -> Result<(), &'static str> {
-    let (pin, key) = keys::KEYS.iter().find(|k| eq32(k.0, verifier)).ok_or("the predecessor's key is not carried by this image")?;
+    let (pin, key, version) = keys::KEYS.iter().find(|k| eq32(k.0, verifier)).ok_or("the predecessor's key is not carried by this image")?;
     let n = *words.first().ok_or("no predecessor proof given")? as usize;
     let bytes: alloc::vec::Vec<u8> = words[1..].iter().flat_map(|w| w.to_le_bytes()).collect();
     if n == 0 || n > bytes.len() || bytes.len() - n >= 4 {
         return Err("the predecessor proof's length does not match its words");
     }
     let id: alloc::vec::Vec<u8> = image.iter().flat_map(|w| w.to_le_bytes()).collect();
-    hazync_engine_verify::verify_full_bytes(key, *pin, &bytes[..n], journal, &id).map_err(|e| match e {
-        hazync_engine_verify::Refusal::VkPin => "the carried key is not its pin's",
-        hazync_engine_verify::Refusal::Image => "the predecessor proof's key is not the pinned image's",
-        hazync_engine_verify::Refusal::Journal => "the predecessor proof is not of this journal",
-        hazync_engine_verify::Refusal::Decode => "the predecessor proof does not decode",
-        _ => "the predecessor proof does not verify",
-    })
+    // the predecessor's OWN verifier: a key file is that version's struct, its proof that version's encoding
+    macro_rules! check {
+        ($v:ident) => {
+            $v::verify_full_bytes(key, *pin, &bytes[..n], journal, &id).map_err(|e| match e {
+                $v::Refusal::VkPin => "the carried key is not its pin's",
+                $v::Refusal::Image => "the predecessor proof's key is not the pinned image's",
+                $v::Refusal::Journal => "the predecessor proof is not of this journal",
+                $v::Refusal::Decode => "the predecessor proof does not decode",
+                _ => "the predecessor proof does not verify",
+            })
+        };
+    }
+    match *version {
+        V2_1_0 => check!(hazync_engine_verify),
+        #[cfg(feature = "ovm-xver-v2_0_2")]
+        V2_0_2 => check!(hazync_engine_verify_v2_0_2),
+        _ => Err("the predecessor's OpenVM version is not built into this image"),
+    }
 }
