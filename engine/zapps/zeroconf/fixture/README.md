@@ -53,5 +53,6 @@ The speculative chunk is all_valid in all three cases: it checks the scripts, an
 row is a deliberate difference from Core: an unconfirmed parent's coin is not in the coin log, so the zAPP cannot
 prove it unspent, and refuses it (the guest's own doc comment). A merchant who needs it waits for T to confirm.
 
-Left: the zeroconf verifier side (`zyncapp verify-zeroconf` on an engine proof: the statement's checks against a
-verified core state).
+The verifier side (27.11.2026): zapps/zeroconf, the module `zapp_zeroconf`. It checks the real proof above under the
+production image's pinned key, with keys-rtch as the trusted core and the state at 109 as the anchor: DEMO (a given
+anchor), T's txid, fee, weight and sigops; 13 refusals (tests/engine.rs).

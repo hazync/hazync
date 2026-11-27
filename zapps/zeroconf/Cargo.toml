@@ -1,0 +1,34 @@
+[package]
+name = "zapp-zeroconf"
+version = "0.1.0"
+edition = "2021"
+description = "The zero-confirmation zyncAPP: check a proof that a transaction is valid for the next block of a proven tip, every coin it spends unspent there"
+license = "MIT"
+publish = false
+
+# A zAPP module (docs/libzync/ZYNCAPPS.md §9), NOT part of the core verifier: it uses swiftsync-verify as a library
+# (the engine proof check, the core policy's pieces) and adds the zeroconf statement's checks. Engine proofs only (new
+# with the engine, engine/VERIFIER.md). The guest is prover/zyncapps/methods/zeroconf; its fixture and refusal cases
+# engine/zapps/zeroconf. Own workspace, as the other zAPP modules.
+
+[lib]
+name = "zapp_zeroconf"
+path = "src/lib.rs"
+
+[dependencies]
+swiftsync-verify = { path = "../../swiftsync-verify", features = ["engine"] }
+# the journal's serde decoding (risc0's word encoding, which the engine guests keep); disable-dev-mode as every verifier
+risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]
