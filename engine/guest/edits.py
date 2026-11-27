@@ -11,11 +11,9 @@ def rep(old, new):
 #    predecessor. With the engine feature `ovm-xver` (an image that pins an engine predecessor of ANOTHER OpenVM
 #    version, engine/HANDOVER.md step 2) xver is the engine's own (xver_ovm.rs: the predecessor's proof checked by
 #    OpenVM's verifier under its pinned key). Without it, the stub: the path is unreachable, `carried` says no.
-rep("mod xver;", """#[cfg(feature = "ovm-xver")]
-#[path = "xver_ovm.rs"]
-mod xver;
-#[cfg(not(feature = "ovm-xver"))]
-mod xver {   // ENGINE: no cross-version predecessor in this image; the path is unreachable
+#    ⛔ The switch is on ONE line and lines 2-5 are the old stub's, byte for byte: a panic's location (file, line,
+#    column) is in the image, so any line added here would move every later line of main.rs and every default image id.
+rep("mod xver;", """#[cfg(feature = "ovm-xver")] #[path = "xver_ovm.rs"] mod xver; #[cfg(not(feature = "ovm-xver"))] mod xver {   // ENGINE: no RISC Zero predecessor; cross-version handover is unreachable
     pub const fn carried(_v: &[u8; 32]) -> bool { false }
     pub mod accel { pub fn suite() {} }
     pub fn verify<A, B, C, D, E>(_: A, _: B, _: C, _: D, _: E) -> Result<(), &'static str> { panic!("engine: no cross-version handover") }
