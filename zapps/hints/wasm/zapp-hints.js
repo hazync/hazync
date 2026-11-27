@@ -4,7 +4,9 @@
 //
 //   import { loadHints } from './zapp-hints.js';
 //   const z = await loadHints(fetch('./zapp-hints.wasm'));
-//   const s = z.verifyHints({ receipt, file, undo, expect: '<H>:<hash from YOUR header chain>' });
+//   const s = z.verifyHints({ receipt, file, undo, imageHex, coreImageHex, vk, pin, expect: '<H>:<hash from YOUR header chain>' });
+// Engine proofs only (27.11.2026): no engine image is published yet, so imageHex, coreImageHex, vk (the hints image's key
+// file) and pin (its 32-byte SHA-256, a constant the page is published with) are all required.
 //   s.verdict, s.height, s.hash, s.format, s.unspent
 
 function readString(memory, ptr) {
@@ -24,10 +26,10 @@ export async function loadHints(source) {
     /** `file` is the hints file the receipt proves for block H; `undo` (optional) the undo-hash file; `expect`
      *  ('<H>:<hash>') block H from YOUR node's header chain; `expectTip` the core tip when it is above H. The file is
      *  checked here, on the device. `now` defaults to this device's clock. */
-    verifyHints({ receipt, file, undo, now, imageHex, coreImageHex, expect, expectTip }) {
+    verifyHints({ receipt, file, undo, now, imageHex, coreImageHex, expect, expectTip, vk, pin }) {
       const enc = new TextEncoder();
       const parts = [receipt, file, undo || new Uint8Array(0), enc.encode(imageHex || ''), enc.encode(coreImageHex || ''),
-        enc.encode(expect || ''), enc.encode(expectTip || '')];
+        enc.encode(expect || ''), enc.encode(expectTip || ''), vk || new Uint8Array(0), pin || new Uint8Array(0)];
       const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);
       view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);

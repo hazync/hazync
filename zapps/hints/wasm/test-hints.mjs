@@ -1,19 +1,24 @@
-// node test-hints.mjs <dir with mainnet-3.{receipt,hints,undo} and mainnet-2.hints> <hash of block 3>: the WASM hints
-// verifier on a real receipt: the proven file is DEMO (a 3-block chain is below minimum work), tampered inputs FAIL.
+// node test-hints.mjs <tests/data/engine> <hash of block 200> <core image id>: the WASM hints verifier on the engine's
+// real hints proof for H = 200 (over the engine chain's core proof of mainnet 1..200): the proven file is DEMO (a
+// 200-block chain is below minimum work), tampered inputs FAIL. Engine proofs only since the cutover (27.11.2026).
 import fs from 'node:fs';
 import { loadHints } from './zapp-hints.js';
-const [d, h3] = process.argv.slice(2);
+const [d, h, core] = process.argv.slice(2);
 const v = await loadHints(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/zapp_hints_wasm.wasm', import.meta.url)));
 const rd = (f) => new Uint8Array(fs.readFileSync(`${d}/${f}`));
-const receipt = rd('mainnet-3.receipt'), file = rd('mainnet-3.hints'), undo = rd('mainnet-3.undo');
+const receipt = rd('proof.hze'), file = rd('mainnet-200.hints'), undo = rd('mainnet-200.undo');
+const imageHex = fs.readFileSync(`${d}/image_id`, 'utf8').trim(), vk = rd('vk.bin');
+const pin = new Uint8Array(Buffer.from(fs.readFileSync(`${d}/vk.sha256`, 'utf8').trim(), 'hex'));
+const id = { imageHex, coreImageHex: core, vk, pin };
 const flip = file.slice(); flip[flip.length - 1] ^= 1;
 const cases = [
-  ['the proven file', { receipt, file, undo, expect: `3:${h3}` }, 'demo'],
-  ['a flipped bit', { receipt, file: flip, expect: `3:${h3}` }, 'fail'],
-  ['the file for H = 2', { receipt, file: rd('mainnet-2.hints'), expect: `3:${h3}` }, 'fail'],
-  ['another hash at H', { receipt, file, expect: `3:${'0'.repeat(63)}1` }, 'fail'],
-  ['a 9-byte file claiming H = 2^32 - 1', { receipt, file: new Uint8Array([0x55, 0x54, 0x58, 0x4f, 0, 0xff, 0xff, 0xff, 0xff]), expect: `3:${h3}` }, 'fail'],
-  ['a receipt of another image', { receipt, file, imageHex: 'ab'.repeat(32) }, 'fail'],
+  ['the proven file', { ...id, receipt, file, undo, expect: `200:${h}` }, 'demo'],
+  ['a flipped bit', { ...id, receipt, file: flip, expect: `200:${h}` }, 'fail'],
+  ['another hash at H', { ...id, receipt, file, expect: `200:${'0'.repeat(63)}1` }, 'fail'],
+  ['a 9-byte file claiming H = 2^32 - 1', { ...id, receipt, file: new Uint8Array([0x55, 0x54, 0x58, 0x4f, 0, 0xff, 0xff, 0xff, 0xff]), expect: `200:${h}` }, 'fail'],
+  ['a proof of another image', { ...id, receipt, file, imageHex: 'ab'.repeat(32) }, 'fail'],
+  ['a key that is not the pinned one', { ...id, receipt, file, vk: (() => { const k = vk.slice(); k[100] ^= 1; return k; })() }, 'fail'],
+  ['no key (no engine image is published yet)', { receipt, file, imageHex, coreImageHex: core }, 'fail'],
 ];
 let bad = 0;
 for (const [n, a, want] of cases) {
@@ -32,7 +37,7 @@ const raw = (bytes) => {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
 };
 const enc = new TextEncoder();
-const parts = [receipt, file, undo, new Uint8Array(0), new Uint8Array(0), enc.encode(`3:${h3}`), new Uint8Array(0)];
+const parts = [receipt, file, undo, enc.encode(imageHex), enc.encode(core), enc.encode(`200:${h}`), new Uint8Array(0), vk, pin];
 const frame = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
 new DataView(frame.buffer).setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
 let o = 8;
@@ -47,5 +52,5 @@ for (const [n, bytes, want, why] of [['the frame as the glue writes it', frame, 
   cases.push([n]);
   console.log(`${ok ? 'PASS' : 'WRONG'} ${n}: ${r.verdict}${why ? ' (' + (r.checks.find((c) => !c.ok) || {}).what + ')' : ''}`);
 }
-console.log(`HINTS_WASM ${cases.length - bad}/${cases.length} (image ${v.hintsImageId()})`);
+console.log(`HINTS_WASM ${cases.length - bad}/${cases.length}`);
 process.exit(bad ? 1 : 0);

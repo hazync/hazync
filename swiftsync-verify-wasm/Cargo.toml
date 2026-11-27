@@ -16,12 +16,9 @@ serde_json = "1"
 sha2 = "0.10"
 # The wasm32 build needs OpenVM's abi-stable patch, stark-backend's nologging patch (every stark-backend crate from that
 # one copy) and RUSTFLAGS --cfg getrandom_backend="custom"; see engine/VERIFIER.md step 5. Engine proofs are the only
-# kind (engine/CUTOVER.md); the `engine` feature now only adds the refusing random source for that wasm32 build.
-getrandom02 = { package = "getrandom", version = "0.2", features = ["custom"], optional = true }
-getrandom03 = { package = "getrandom", version = "0.3", optional = true }
-
-[features]
-engine = ["dep:getrandom02", "dep:getrandom03"]
+# kind (engine/CUTOVER.md): the getrandom crates below are the refusing random source (src/lib.rs no_rng).
+getrandom02 = { package = "getrandom", version = "0.2", features = ["custom"] }
+getrandom03 = { package = "getrandom", version = "0.3" }
 
 [profile.release]
 opt-level = "z"

@@ -4,7 +4,9 @@
 //
 //   import { loadHeaders } from './zapp-headers.js';
 //   const v = await loadHeaders(fetch('./zapp-headers.wasm'));
-//   const h = v.verifyHeaders({ receipts: [rcpt], expect: '<height>:<hash>' });
+//   const h = v.verifyHeaders({ receipts: [proof], imageHex, vk, pin, expect: '<height>:<hash>' });
+// Engine proofs only (27.11.2026): no engine image is published yet, so imageHex, vk (the header image's key file) and
+// pin (its 32-byte SHA-256, a constant the page is published with) are required.
 //   h.verdict, h.height, h.hash, h.chainwork, h.mmr_root
 //   v.verifyHeaders({ receipts, include: { height, hash, path } })   // and block <hash> is at <height> on that chain
 //   (path: the lines `zyncapp headers-mmr-path` prints, or the path service's /path answer)
@@ -43,10 +45,10 @@ export async function loadHeaders(source) {
      *  about, by the /tx answer tx) is on the proven chain. included is true only for verdict 'ok'; included_demo
      *  for 'demo'; inclusion names what was shown: asking about a transaction, check inclusion.txid is the txid asked
      *  about. txid / tx null are refused (leave both out for the block alone). */
-    verifyHeaders({ receipts, now, imageHex, expect, include }) {
+    verifyHeaders({ receipts, now, imageHex, vk, pin, expect, include }) {
       const enc = new TextEncoder();
-      const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || ''),
-                     enc.encode(include ? JSON.stringify(include) : '')];
+      const parts = [...receipts, enc.encode(imageHex || ''), enc.encode(expect || ''), vk || new Uint8Array(0),
+                     pin || new Uint8Array(0), enc.encode(include ? JSON.stringify(include) : '')];
       const bytes = new Uint8Array(12 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);
       view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);

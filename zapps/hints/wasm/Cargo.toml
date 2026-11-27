@@ -15,6 +15,10 @@ zapp-hints = { path = ".." }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"
 
+# the refusing random source (src/lib.rs no_rng): OpenVM's graph names getrandom
+getrandom02 = { package = "getrandom", version = "0.2", features = ["custom"] }
+getrandom03 = { package = "getrandom", version = "0.3" }
+
 [profile.release]
 opt-level = "z"
 lto = true

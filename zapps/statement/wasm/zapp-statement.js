@@ -14,9 +14,11 @@ function readString(memory, ptr) {
   return new TextDecoder().decode(new Uint8Array(memory.buffer, ptr + 4, len));
 }
 
-function frame({ network, now, receipt, imageHex, statement, expect, purpose, nonce, maxAge, tipHeight }) {
+// Engine proofs only (27.11.2026): no engine image is published yet, so imageHex, vk (the core image's key file) and pin
+// (its 32-byte SHA-256, a constant the page is published with) are required.
+function frame({ network, now, receipt, imageHex, vk, pin, statement, expect, purpose, nonce, maxAge, tipHeight }) {
   const enc = new TextEncoder();
-  const parts = [receipt, enc.encode(imageHex || ''),
+  const parts = [receipt, enc.encode(imageHex || ''), vk || new Uint8Array(0), pin || new Uint8Array(0),
     enc.encode(typeof statement === 'string' ? statement : JSON.stringify(statement)),
     enc.encode(expect || ''), enc.encode(purpose || ''), enc.encode(nonce || ''),
     enc.encode(maxAge == null ? '' : String(maxAge)), enc.encode(tipHeight == null ? '' : String(tipHeight))];

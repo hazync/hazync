@@ -18,7 +18,21 @@ SELF_ABS=$(realpath "${BASH_SOURCE[0]}")
 REPO=$(cd "$(dirname "$SELF_ABS")/.." && pwd)
 CRATE=$1 STAGE=$2 WASM=$3
 shift 3
-STAGED="$CRATE $* prover/methods/guest/src/handover_pin.rs"
+# Engine proofs only (engine/CUTOVER.md C5): every module links engine/verify-core through swiftsync-verify, so OpenVM's
+# patched tree is made and staged for every build (engine/scripts/wasm_ovm.sh), and engine/verify-core and engine/journal
+# are staged whether or not the caller names them. HAZYNC_WASM_WRITE_LOCK=1 writes the graph's resolved Cargo.lock to
+# the output dir instead of building.
+# shellcheck source=../engine/scripts/wasm_ovm.sh
+. "$REPO/engine/scripts/wasm_ovm.sh"
+EXTRA=""
+for c in engine/verify-core engine/journal; do case " $* " in *" $c "*) ;; *) EXTRA="$EXTRA $c" ;; esac; done
+set -- "$@" $EXTRA
+STAGED="$CRATE $* prover/methods/guest/src/handover_pin.rs $OVM_FILES"
+HOST_META=(--locked); [ -z "${HAZYNC_WASM_WRITE_LOCK:-}" ] || HOST_META=()
+if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
+    [ -n "${HAZYNC_WASM_DRY_RUN:-}" ] || ovm_make_tree
+    ovm_cfg "$REPO/$OVM_TREE"
+fi
 # ⛔ THE BYTES DEPEND ON THE COMPILER. Same source, same paths: Rust 1.99.0 gives the published 446fdaeb…,
 # 1.97.1 gives a3a85b7f… (measured 2026-11-12, on the release box). So the toolchain is pinned (the block below);
 # a new pin means a new published sha (README, the site, deploy.sh).
@@ -27,7 +41,7 @@ STAGED="$CRATE $* prover/methods/guest/src/handover_pin.rs"
 # without debug assertions as well). zapps/common/test.sh holds the control.
 if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
     # --locked: never rewrite the crate's Cargo.lock; a crate without one is refused here, with cargo's own message
-    META=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown --manifest-path "$REPO/$CRATE/Cargo.toml") \
+    META=$(cargo metadata "${HOST_META[@]}" --format-version 1 --filter-platform wasm32-unknown-unknown "${OVM_CFG[@]}" --manifest-path "$REPO/$CRATE/Cargo.toml") \
         || { echo "$0: cargo metadata --locked failed for $CRATE (above): its Cargo.lock is missing or not up to date" >&2; exit 1; }
     RT=$(printf '%s' "$META" | python3 -c 'import json, sys
 m = json.load(sys.stdin)
@@ -83,7 +97,7 @@ if [ -z "${HAZYNC_WASM_IN_CONTAINER:-}" ]; then
     fi
     # a crate in the wasm32 graph that declares `links` (a native library) or has cc / cmake as a dependency compiles C:
     # then the image carries the pinned clang. --locked: never rewrite the checkout's Cargo.lock.
-    C_CRATES=$(cargo metadata --locked --format-version 1 --filter-platform wasm32-unknown-unknown --manifest-path "$REPO/$CRATE/Cargo.toml" \
+    C_CRATES=$(cargo metadata "${HOST_META[@]}" --format-version 1 --filter-platform wasm32-unknown-unknown "${OVM_CFG[@]}" --manifest-path "$REPO/$CRATE/Cargo.toml" \
         | python3 -c '
 import json, sys
 m = json.load(sys.stdin)
@@ -117,7 +131,7 @@ print(" ".join(sorted({pk[n["id"]]["name"] for n in m["resolve"]["nodes"]
     fi
     echo "building $CRATE in $ORIGIN${C_CRATES:+ (it compiles C: $C_CRATES)}" >&2
     mkdir -p "$OUT"
-    exec docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp -e HAZYNC_WASM_TOOLCHAIN="$TOOLCHAIN" \
+    exec docker run --rm --platform linux/amd64 --user "$(id -u):$(id -g)" -e HOME=/tmp -e HAZYNC_WASM_TOOLCHAIN="$TOOLCHAIN" -e HAZYNC_WASM_WRITE_LOCK="${HAZYNC_WASM_WRITE_LOCK:-}" \
         --mount "type=bind,src=$REPO,dst=/hazync-src,readonly" --mount "type=bind,src=$OUT,dst=/hazync-out" \
         -w /hazync-src "$IMG" bash "$SELF" "${ARGS[@]}"
 fi
@@ -149,7 +163,8 @@ export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$SYSROOT=/rust-sysroot --re
 # The target dir is the staged crate's own: a build script's OUT_DIR path is the target dir's.
 unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR
 # --locked: the staged Cargo.lock is the checkout's, used as it is (never re-resolved)
-(cd "$STAGE/$CRATE" && cargo build --locked --release --target wasm32-unknown-unknown)
+ovm_stage
+ovm_build_or_lock "$STAGE/$CRATE"
 cp "$STAGE/$CRATE/target/wasm32-unknown-unknown/release/$WASM" "$OUT/"
 printf 'built %s\n  raw     %8d bytes\n  gzipped %8d bytes\n  sha256  %s\n' "$CRATE/target/wasm32-unknown-unknown/release/$WASM" \
     "$(stat -c%s "$OUT/$WASM")" "$(gzip -9 -c "$OUT/$WASM" | wc -c)" "$(sha256sum "$OUT/$WASM" | cut -d' ' -f1)"

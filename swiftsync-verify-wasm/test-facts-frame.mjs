@@ -1,14 +1,17 @@
 // node test-facts-frame.mjs: verify_facts' frame (regression, 15.11.2026). From f713e3a6 the optional lineage chunk was
 // read straight after the image id in verify_facts too, so the facts JSON was taken for a lineage: every verifyFacts
-// call with facts failed, and so did verify with an expected tip (it goes through verify_facts). Real receipt
-// mainnet 1..200 (image 8888d59c) and the real block-9 balance trie fact. Exit 1 on any wrong answer.
+// call with facts failed, and so did verify with an expected tip (it goes through verify_facts). Since the cutover
+// (27.11.2026): the engine chain's proof of mainnet 1..200 (../swiftsync-verify/tests/data/engine200) and its block-9 balance
+// trie fact. Exit 1 on any wrong answer.
 import fs from 'node:fs';
 import { loadVerifier } from './swiftsync-verify.js';
 const v = await loadVerifier(fs.readFileSync(new URL('./target/wasm32-unknown-unknown/release/swiftsync_verify_wasm.wasm', import.meta.url)));
-const rcpt = fs.readFileSync(new URL('../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt', import.meta.url));
-const fact = JSON.parse(fs.readFileSync(new URL('../experimental/libzync-bench/zapp/fact_balance_block9_200.json', import.meta.url), 'utf8'));
+const D = (f) => fs.readFileSync(new URL(`../swiftsync-verify/tests/data/engine200/${f}`, import.meta.url));
+const rcpt = D('proof.hze');
+const fact = JSON.parse(D('trie_balance_hal.json').toString());
 const TIP = '200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';
-const base = { network: 'mainnet', image: 'product', receipt: rcpt };
+const base = { network: 'mainnet', image: 'product', receipt: rcpt, imageHex: D('image_id').toString().trim(), vk: D('vk.bin'),
+  pin: Buffer.from(D('vk.sha256').toString().trim(), 'hex') };
 let bad = 0;
 const check = (name, ok, got) => { bad += !ok; console.log(`${ok ? 'ok  ' : 'FAIL'} ${name}  ${got}`); };
 

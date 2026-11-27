@@ -24,12 +24,14 @@ export async function loadLiveness(source) {
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
   const { alloc, verify_liveness, memory } = instance.exports;
   return {
-    /** Verify a core receipt (or .sspf bundle) and each liveness proof against it. `image`: 'product', 'coinlog' or
+    /** Verify a core engine proof (or .sspf bundle) and each liveness proof against it. Engine proofs only (27.11.2026):
+     *  no engine image is published yet, so imageHex, vk (the core image's key file) and pin (its 32-byte SHA-256, a
+     *  constant the page is published with) are required. `image`: 'product', 'coinlog' or
      *  the built-in profile; `now` defaults to this device's clock. */
-    verifyLiveness({ network, image, now, receipt, anchorJson, imageHex, liveness, expect }) {
+    verifyLiveness({ network, image, now, receipt, anchorJson, imageHex, vk, pin, liveness, expect }) {
       const enc = new TextEncoder();
       const parts = [receipt, enc.encode(anchorJson || ''), enc.encode(imageHex || ''),
-        enc.encode(JSON.stringify({ liveness: liveness || [] })), enc.encode(expect || '')];
+        enc.encode(JSON.stringify({ liveness: liveness || [] })), enc.encode(expect || ''), vk || new Uint8Array(0), pin || new Uint8Array(0)];
       const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(out.buffer);
       out[0] = (network === 'signet' ? 1 : network === 'mainnet' ? 0 : 255)

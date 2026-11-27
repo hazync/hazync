@@ -142,3 +142,16 @@ pub extern "C" fn image_id() -> *const u8 {
 pub extern "C" fn tip_image_id() -> *const u8 {
     ret(zapp_utreexo::UTREEXO_TIP_IMAGE_ID.to_string())
 }
+
+/// No randomness in verification: OpenVM's graph (engine/verify-core, through swiftsync-verify) names getrandom; built
+/// with --cfg getrandom_backend="custom" (engine/scripts/wasm_ovm.sh), every call is refused.
+mod no_rng {
+    fn refuse(_: &mut [u8]) -> Result<(), getrandom02::Error> {
+        Err(getrandom02::Error::UNSUPPORTED)
+    }
+    getrandom02::register_custom_getrandom!(refuse);
+    #[no_mangle]
+    unsafe extern "Rust" fn __getrandom_v03_custom(_dest: *mut u8, _len: usize) -> Result<(), getrandom03::Error> {
+        Err(getrandom03::Error::UNSUPPORTED)
+    }
+}

@@ -321,7 +321,7 @@ mod frame_tests {
 
 /// No random source in this module (OpenVM's VM crate links rand; verification never draws from it: its challenges
 /// are Fiat-Shamir hashes). Any call is refused, so randomness can never be silently predictable here.
-#[cfg(feature = "engine")]
+/// No randomness in verification: OpenVM's graph names getrandom; every call is refused (engine/scripts/wasm_ovm.sh).
 mod no_rng {
     fn refuse(_: &mut [u8]) -> Result<(), getrandom02::Error> {
         Err(getrandom02::Error::UNSUPPORTED)

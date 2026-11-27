@@ -4,7 +4,10 @@
 //
 //   import { loadDeposit } from './zapp-deposit.js';
 //   const z = await loadDeposit(fetch('./zapp-deposit.wasm'));
-//   const r = z.verifyDeposit({ bundle, ask: { txid, vout, amount, min_depth, expect } });
+//   const r = z.verifyDeposit({ bundle, ask: { txid, vout, amount, min_depth, expect }, coreImageHex, coreVk, corePin,
+//                               headersImageHex, headersVk, headersPin });   // the header ones for a bundle with header runs
+// Engine proofs only (27.11.2026): no engine image is published yet, so the image ids, the key files and their pins (each
+// 32-byte SHA-256 a constant the page is published with) are required.
 //   r.accepted // THE field to gate on: verdict 'ok' and the tip compared with expect (require_identity, on by default)
 //   r.verdict  // 'ok' | 'demo' | 'fail'; r.statement (null unless 'ok', or 'demo' with ask.allow_demo)
 
@@ -28,9 +31,11 @@ export async function loadDeposit(source) {
      *  allow_demo? (default false), network? }. Gate on `accepted` only. statement is null unless the verdict is 'ok',
      *  or 'demo' with allow_demo (a DEMO chain is cheap to forge). Leave an option out for its default: an unknown key,
      *  or one that is null (as NaN and Infinity become in JSON), is refused. `now` defaults to this device's clock. */
-    verifyDeposit({ bundle, ask, now }) {
+    verifyDeposit({ bundle, ask, now, coreImageHex, coreVk, corePin, headersImageHex, headersVk, headersPin }) {
       const enc = new TextEncoder();
-      const parts = [enc.encode(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), enc.encode(JSON.stringify(ask))];
+      const z = new Uint8Array(0);
+      const parts = [enc.encode(typeof bundle === 'string' ? bundle : JSON.stringify(bundle)), enc.encode(JSON.stringify(ask)),
+        enc.encode(coreImageHex || ''), coreVk || z, corePin || z, enc.encode(headersImageHex || ''), headersVk || z, headersPin || z];
       const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);
       view.setBigUint64(0, BigInt(Math.floor(now ?? Date.now() / 1000)), true);

@@ -36,14 +36,20 @@
     <label>Network
       <select id="network"><option value="signet">signet</option><option value="mainnet">mainnet</option></select>
     </label>
-    <label>Proof <span>a receipt (.rcpt) or proof bundle (.sspf)</span>
+    <label>Proof <span>an engine proof file (.hze) or proof bundle (.sspf)</span>
       <input type="file" id="receipt" required>
     </label>
     <label>Image
       <select id="img"><option value="product">product (coin log, counting trie, live-coin hash)</option><option value="coinlog">coin log only</option></select>
     </label>
-    <label>Image id <span>optional: the id you rebuilt yourself; empty uses the built-in one shown below</span>
-      <input type="text" id="image" placeholder="64 hex digits" spellcheck="false">
+    <label>Image id <span>the image the proof is of (no engine image is published yet: the id of the build you trust)</span>
+      <input type="text" id="image" placeholder="64 hex digits" spellcheck="false" required>
+    </label>
+    <label>Verifying key <span>that image's key file</span>
+      <input type="file" id="vk" required>
+    </label>
+    <label>Key pin <span>the key file's SHA-256, from the same source as the image id (never computed from the file above)</span>
+      <input type="text" id="pin" placeholder="64 hex digits" spellcheck="false" required>
     </label>
     <label>Anchor state <span>optional: a trusted mid-chain state (JSON); the verdict is then at most DEMO</span>
       <input type="file" id="anchor">
@@ -57,16 +63,18 @@
 import { loadVerifier } from './swiftsync-verify.js';
 const v = await loadVerifier(fetch('./swiftsync_verify_wasm.wasm'));
 const $ = (id) => document.getElementById(id);
-const showBuiltin = () => { $('builtin').textContent = `Built-in ${$('network').value} image: ${v.imageId($('network').value)}`; };
-$('network').addEventListener('change', showBuiltin); showBuiltin();
+$('builtin').textContent = 'Engine proofs only: no engine image is published yet, so the image id, its key and the pin are all needed.';
+const hex32 = (h) => /^[0-9a-f]{64}$/i.test(h) ? new Uint8Array(h.match(/../g).map((x) => parseInt(x, 16))) : null;
 const bytes = async (input) => input.files[0] ? new Uint8Array(await input.files[0].arrayBuffer()) : null;
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 $('f').addEventListener('submit', async (e) => {
   e.preventDefault();
   $('out').textContent = 'Checking…';
   const anchor = await bytes($('anchor'));
+  const pin = hex32($('pin').value.trim());
+  if (!pin) { $('out').textContent = 'The key pin is 64 hex digits.'; return; }
   const r = v.verify({ network: $('network').value, image: $('img').value, receipt: await bytes($('receipt')),
-    imageHex: $('image').value.trim(), anchorJson: anchor ? new TextDecoder().decode(anchor) : '' });
+    imageHex: $('image').value.trim(), vk: await bytes($('vk')), pin, anchorJson: anchor ? new TextDecoder().decode(anchor) : '' });
   const words = { ok: 'OK: the chain below and its coin log are proven', demo: 'DEMO: a valid chain, but from the given anchor or below the minimum work: not shown to be the network\'s', fail: 'FAIL' };
   let html = `<div class="verdict v-${r.verdict}">${esc(words[r.verdict])}</div><ul class="checks">`;
   for (const c of r.checks) html += `<li class="${c.ok ? 'ok' : 'fail'}">[${c.ok ? 'ok' : 'FAIL'}] ${esc(c.what)}</li>`;

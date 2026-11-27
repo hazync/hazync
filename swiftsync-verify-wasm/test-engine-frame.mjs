@@ -1,4 +1,4 @@
-// node test-engine-frame.mjs <wasm built with --features engine> <swiftsync-verify/tests/data/engine200>: the engine
+// node test-engine-frame.mjs <swiftsync_verify_wasm.wasm> <swiftsync-verify/tests/data/engine200>: the engine
 // proof of block 200 through verify_frame (network bit 0x40), and four refusals (engine/VERIFIER.md step 5)
 import fs from 'fs';
 const [wasm, dir] = process.argv.slice(2);

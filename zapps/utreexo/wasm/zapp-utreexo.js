@@ -23,11 +23,14 @@ export async function loadUtreexo(source) {
       : await WebAssembly.instantiate(resolved instanceof Uint8Array ? resolved : new Uint8Array(resolved), {});
   const { alloc, verify_utreexo, image_id, tip_image_id, memory } = instance.exports;
   return {
-    /** Verify the final run's receipt for `network` (default 'mainnet'). `now` defaults to this device's clock. */
-    verify({ receipt, now, imageHex, expectAt, expectTip, network, baseImageHex }) {
+    /** Verify the final run's engine proof for `network` (default 'mainnet'). Engine proofs only (27.11.2026): no engine
+     *  image is published yet, so imageHex, coreImageHex, vk (the image's key file) and pin (its 32-byte SHA-256, a
+     *  constant the page is published with) are required, and baseImageHex for a tip proof. `now` defaults to this
+     *  device's clock. */
+    verify({ receipt, now, imageHex, expectAt, expectTip, network, coreImageHex, vk, pin, baseImageHex }) {
       const enc = new TextEncoder();
       const parts = [receipt, enc.encode(imageHex || ''), enc.encode(expectAt || ''), enc.encode(expectTip || ''),
-                     enc.encode(network || 'mainnet')];
+                     enc.encode(network || 'mainnet'), enc.encode(coreImageHex || ''), vk || new Uint8Array(0), pin || new Uint8Array(0)];
       if (baseImageHex) parts.push(enc.encode(baseImageHex));
       const bytes = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(bytes.buffer);

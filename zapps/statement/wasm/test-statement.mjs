@@ -1,5 +1,6 @@
 // node test-statement.mjs <zapp-statement.wasm> <statement.json> <purpose> <nonce>: the balance
-// statement through the zAPP's WASM module, against the real mainnet 1..200 proof (8888d59c), with the right and wrong challenge.
+// statement through the zAPP's WASM module, against the engine chain's proof of mainnet 1..200 (swiftsync-verify/vectors,
+// engine proofs only since 27.11.2026), with the right and wrong challenge.
 // The statement comes from ../test_statement.sh's flow (zync-statement draft + sign). Exit 1 on any
 // unexpected verdict. 1..200 is below the minimum work, so the best verdict is demo.
 import fs from 'node:fs';
@@ -7,10 +8,13 @@ import { loadStatementVerifier } from './zapp-statement.js';
 const [wasm, stFile, purpose, nonce] = process.argv.slice(2);
 const v = await loadStatementVerifier(fs.readFileSync(wasm));
 const dir = new URL('../../../swiftsync-verify/vectors/', import.meta.url).pathname;
-const receipt = fs.readFileSync(dir + 'mainnet_1_200_8888d59c.rcpt');
+const receipt = fs.readFileSync(dir + 'mainnet_1_200_engine.hze');
 const statement = JSON.parse(fs.readFileSync(stFile, 'utf8'));
 const expect = '200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320';
-const base = { network: 'mainnet', imageHex: '8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4', receipt, expect };
+const E = new URL('../../../swiftsync-verify/tests/data/engine200/', import.meta.url).pathname;
+const vk = new Uint8Array(fs.readFileSync(dir + 'mainnet_1_200_engine.vk'));
+const pin = new Uint8Array(Buffer.from(fs.readFileSync(E + 'vk.sha256', 'utf8').trim(), 'hex'));
+const base = { network: 'mainnet', imageHex: fs.readFileSync(dir + 'mainnet_1_200_engine.image_id', 'utf8').trim(), vk, pin, receipt, expect };
 const cases = [
   ['holds (demo: below minimum work)', { statement, purpose, nonce }, 'demo', /^statement: .* script\(s\).*age is NOT checked/],
   ['another purpose', { statement, purpose: 'other', nonce }, 'fail', /purpose .* is not the one asked for/],
@@ -22,10 +26,8 @@ const cases = [
   ['too old (7 behind, 6 allowed)', { statement, purpose, nonce, maxAge: 6, tipHeight: 207 }, 'fail', /7 blocks behind/],
   ['max age without a tip', { statement, purpose, nonce, maxAge: 6 }, 'fail', /without the network's tip/],
   ['a purpose with a trailing space', { statement: { ...statement, purpose: statement.purpose + ' ' }, purpose: purpose + ' ', nonce }, 'fail', /leading or trailing/],
-  // review 11-16: an image id given is the only image the receipt may verify against (the current mainnet id refuses
-  // this 8888d59c receipt); none given, the earlier built-in image it names verifies it
-  ['image pinned: the current id', { statement, purpose, nonce, imageHex: '46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c' }, 'fail', /the receipt did not verify/],
-  ['no image id: the image it names', { statement, purpose, nonce, imageHex: '' }, 'demo', /^statement: /],
+  ['another image id', { statement, purpose, nonce, imageHex: 'ab'.repeat(32) }, 'fail', /the receipt did not verify|did not verify/],
+  ['a key not the pinned one', { statement, purpose, nonce, vk: new Uint8Array(fs.readFileSync(dir + 'mainnet_1_200_engine_key_flipped.vk')) }, 'fail', /pinned key/],
   ['swapped signatures', { statement: { ...statement, entries: statement.entries.map((e, i, a) => ({ ...e, signature: a[(i + 1) % a.length].signature })) }, purpose, nonce }, 'fail', /BIP-322|P2PK/],
 ];
 let bad = 0;
@@ -35,15 +37,13 @@ for (const [name, args, want, why] of cases) {
   bad += !ok;
   console.log(`${ok ? 'PASS' : 'WRONG'}  ${name.padEnd(34)} ${r.verdict} (want ${want}): ${r.statement?.what ?? r.checks?.[0]?.what}`);
 }
-const fake = v.verifyStatement({ ...base, receipt: fs.readFileSync(dir + 'fake_block_2501.rcpt'), statement, purpose, nonce });
-bad += fake.verdict !== 'fail';
-console.log(`${fake.verdict === 'fail' ? 'PASS' : 'WRONG'}  ${'dev-mode FakeReceipt'.padEnd(34)} ${fake.verdict} (want fail)`);
-// review 11-18: the result names the image that verified the receipt (CoreCheck.image), not the one asked for: no image
-// id given, this receipt verifies as the earlier built-in 8888d59c, and the JSON says so
-const used = v.verifyStatement({ ...base, statement, purpose, nonce, imageHex: '' });
+const flipped = v.verifyStatement({ ...base, receipt: fs.readFileSync(dir + 'mainnet_1_200_engine_proof_flipped.hze'), statement, purpose, nonce });
+bad += flipped.verdict !== 'fail';
+console.log(`${flipped.verdict === 'fail' ? 'PASS' : 'WRONG'}  ${'a proof with a bit flipped'.padEnd(34)} ${flipped.verdict} (want fail)`);
+const used = v.verifyStatement({ ...base, statement, purpose, nonce });
 const usedOk = used.image === base.imageHex;
 bad += !usedOk;
-console.log(`${usedOk ? 'PASS' : 'WRONG'}  ${'no image id: reports 8888d59c'.padEnd(34)} ${used.image}`);
+console.log(`${usedOk ? 'PASS' : 'WRONG'}  ${'reports the image it verified'.padEnd(34)} ${used.image}`);
 // The frame itself, by hand (the raw exports, not the glue): the glue's bytes pass, a byte past the end and a frame
 // cut short are refused before anything is verified.
 const ex = (await WebAssembly.instantiate(fs.readFileSync(wasm), {})).instance.exports;
@@ -55,7 +55,7 @@ const raw = (bytes) => {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
 };
 const enc = new TextEncoder();
-const parts = [receipt, enc.encode(base.imageHex), enc.encode(JSON.stringify(statement)), enc.encode(expect), enc.encode(purpose),
+const parts = [receipt, enc.encode(base.imageHex), vk, pin, enc.encode(JSON.stringify(statement)), enc.encode(expect), enc.encode(purpose),
   enc.encode(nonce), enc.encode(''), enc.encode('')];
 const fr = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
 const dv = new DataView(fr.buffer);

@@ -3,7 +3,7 @@
 //
 //   import { loadVerifier } from './swiftsync-verify.js';
 //   const v = await loadVerifier(fetch('./swiftsync_verify_wasm.wasm'));
-//   const r = v.verify({ network: 'signet', image: 'product', receipt });   // Uint8Array; optional anchorJson, imageHex
+//   const r = v.verify({ network: 'mainnet', image: 'product', receipt, imageHex, vk, pin });   // Uint8Arrays; optional anchorJson
 //   const f = v.verifyFacts({ ...same, facts: { tries: [trieFact] }, expect: '<height>:<hash>' });
 //   (expect: the network's block at the proof's height from a source YOU trust, never from the fact server)
 //   r.verdict  // 'ok' | 'demo' | 'fail'
@@ -16,14 +16,17 @@ function readString(memory, ptr) {
 }
 
 // image: 'product' (coin log + counting trie + live-coin hash), 'coinlog', or the built-in profile.
-function frame({ network, image, now, receipt, anchorJson, imageHex, facts, expect }) {
+// Engine proofs (the only kind since 27.11.2026): imageHex, vk (the key file's bytes) and pin (32 bytes: the SHA-256 the
+// page is published with, never computed from the fetched key). No engine image is published yet, so all three are needed.
+function frame({ network, image, now, receipt, anchorJson, imageHex, vk, pin, facts, expect }) {
   const enc = new TextEncoder();
   const parts = [receipt, enc.encode(anchorJson || ''), enc.encode(imageHex || '')];
+  if (vk !== undefined) parts.push(vk, pin);
   if (facts !== undefined) parts.push(enc.encode(JSON.stringify(facts)), enc.encode(expect || ''));
   const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
   const view = new DataView(out.buffer);
   out[0] = (network === 'signet' ? 1 : network === 'mainnet' ? 0 : 255)
-    | (image === 'product' ? 0x20 : image === 'coinlog' ? 0x10 : 0);
+    | (image === 'product' ? 0x20 : image === 'coinlog' ? 0x10 : 0) | (vk !== undefined ? 0x40 : 0);
   view.setBigUint64(1, BigInt(Math.floor(now ?? Date.now() / 1000)), true);
   let o = 9;
   for (const p of parts) {
@@ -56,7 +59,7 @@ export async function loadVerifier(source) {
     /** As verify, plus facts ({coins, journeys, tries}) checked against the verified state; `expect` ('<height>:<hash>')
      *  is the tip from a source you trust, passed beside the facts, never inside them. */
     verifyFacts(args) { return call(verify_facts, { ...args, facts: args.facts ?? {} }); },
-    /** The built-in image id for 'mainnet' or 'signet'. */
+    /** The published engine image id for 'mainnet' or 'signet': empty until one is (Stage 4). */
     imageId(network) {
       return readString(memory, image_id(network === 'signet' ? 1 : 0));
     },

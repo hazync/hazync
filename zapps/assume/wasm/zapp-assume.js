@@ -4,7 +4,9 @@
 //
 //   import { loadAssume } from './zapp-assume.js';
 //   const z = await loadAssume(fetch('./zapp-assume.wasm'));
-//   const a = z.verifyAssume({ network: 'mainnet', receipt, assumevalid: 'tip', headers, snapshot, tracked, expect });
+//   const a = z.verifyAssume({ network: 'mainnet', receipt, imageHex, vk, pin, assumevalid: 'tip', headers, snapshot, tracked, expect });
+// Engine proofs only (27.11.2026): no engine image is published yet, so imageHex, vk (the core image's key file) and pin
+// (its 32-byte SHA-256, a constant the page is published with) are required.
 //   a.verdict, a.assume.assumeutxo.hash_serialized_3
 
 function readString(memory, ptr) {
@@ -25,9 +27,9 @@ export async function loadAssume(source) {
      *  genesis for a snapshot); snapshot = a Core dumptxoutset file (Uint8Array); tracked = the BIP30-tracked list text;
      *  expect ('<height>:<hash>') the tip from a source you trust (OK needs it). `image`: 'product', 'coinlog' or the
      *  built-in profile; `now` defaults to this device's clock. */
-    verifyAssume({ network, image, now, receipt, imageHex, expect, assumevalid, headers, snapshot, tracked }) {
+    verifyAssume({ network, image, now, receipt, imageHex, vk, pin, expect, assumevalid, headers, snapshot, tracked }) {
       const enc = new TextEncoder();
-      const parts = [receipt, enc.encode(imageHex || ''), enc.encode(expect || ''), enc.encode(assumevalid || ''),
+      const parts = [receipt, enc.encode(imageHex || ''), vk || new Uint8Array(0), pin || new Uint8Array(0), enc.encode(expect || ''), enc.encode(assumevalid || ''),
         headers || new Uint8Array(0), snapshot || new Uint8Array(0), enc.encode(tracked || '')];
       const out = new Uint8Array(1 + 8 + parts.reduce((n, p) => n + 4 + p.length, 0));
       const view = new DataView(out.buffer);
