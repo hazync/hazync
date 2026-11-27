@@ -10,13 +10,13 @@ commands (prover/host/src/lz_coord.rs): `prove-range-bridge <h>`, `fold-range <l
 [--check-end]`, plus `libzync-genesis-tip` and `method-id`. A host that answers them for the engine leaves the board,
 claims, folds and the frontier unchanged. Surveyed 27.11:
 
-| command | today with HAZYNC_ENGINE set | to do |
-|---|---|---|
-| `prove-range-bridge <h>` | `lz_prove_range_cmd` already proves on the engine (2.2: 1..200 through the product host) | write the result as ONE file, HZE1 (what readers take), not `block_<h>.rcpt` |
-| `fold-range <l> <r> <out>` | `lz_join_cmd` joins on the engine (mode 18), inputs as P.proof.json + P.journal pairs | take and write HZE1: hzengine serve accepts an HZE1 child, and writes HZE1 |
-| `verify-any` | RISC Zero only (receipt decode, FakeReceipt, METHOD_ID) | under HAZYNC_ENGINE: verify-core `verify_full_bytes` with the pinned key, image id from the keys, then the same RANGE-OK checks (anchor = state before lo, end=board) on the decoded ChainState |
-| `libzync-genesis-tip` | link digest of the genesis state | unchanged (the state layout is the same) |
-| `method-id` | the RISC Zero METHOD_ID | the engine image id (HAZYNC_ENGINE_KEYS) |
+| command | today with HAZYNC_ENGINE set | to do | state |
+|---|---|---|---|
+| `prove-range-bridge <h>` | `lz_prove_range_cmd` already proves on the engine (2.2: 1..200 through the product host) | write the result as ONE file, HZE1 (what readers take), not `block_<h>.rcpt` | ✅ real CPU run 1..4 (results/board_engine) |
+| `fold-range <l> <r> <out>` | `lz_join_cmd` joins on the engine (mode 18), inputs as P.proof.json + P.journal pairs | take and write HZE1: hzengine serve accepts an HZE1 child, and writes HZE1 | ✅ real CPU run 1..4 (results/board_engine) |
+| `verify-any` | RISC Zero only (receipt decode, FakeReceipt, METHOD_ID) | under HAZYNC_ENGINE: verify-core `verify_full_bytes` with the pinned key, image id from the keys, then the same RANGE-OK checks (anchor = state before lo, end=board) on the decoded ChainState | ✅ tests + real CPU run (results/board_engine) |
+| `libzync-genesis-tip` | link digest of the genesis state | unchanged (the state layout is the same) | unchanged |
+| `method-id` | the RISC Zero METHOD_ID | the engine image id (HAZYNC_ENGINE_KEYS) | ✅ real CPU run 1..4 (results/board_engine) |
 
 Then the worker: its image check uses `method-id`; the seg-po2 retry ladder is RISC Zero's (the engine sizes chunks
 itself); the pod image carries hzengine and its keys (keys from B2, pinned by SHA-256). The coordinator's config:
