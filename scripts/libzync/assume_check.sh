@@ -1,5 +1,6 @@
 #!/bin/bash
-# assume_check.sh <H> <receipt> <zapp-assume binary (zapps/assume)> [<bitcoin-cli of your node>]
+# assume_check.sh <H> <proof.hze> <zapp-assume binary (zapps/assume)> [<bitcoin-cli of your node>]
+# with IMAGE=<the core image id, 64 hex> VK=<its key file> (engine proofs: no image is built in until the Stage 4 freeze)
 #
 # The assumeutxo and assumevalid checks (docs/libzync/ASSUME_ZAPPS.md) end to end against a REAL Core `dumptxoutset`:
 # a throwaway node syncs blocks 0..H from your node over P2P (127.0.0.1:8333), goes offline, dumps its UTXO set at H
@@ -7,12 +8,13 @@
 # 0..H and the BIP30-tracked list derived from the same node. Your node is only a P2P peer and the identity check
 # (`--bitcoin-cli`): it is never rolled back (`rollback` on a node at the tip would disconnect every block above H).
 #
-# Env: WORK (default $HOME/assume-check), PORT (your node's P2P port, 8333), RPCPORT (the throwaway node's, 28342),
+# Env: IMAGE and VK (required), WORK (default $HOME/assume-check), PORT (your node's P2P port, 8333), RPCPORT (the throwaway node's, 28342),
 # KEEP=1 keeps the throwaway node.
 # Needs bitcoind / bitcoin-cli >= 28 on PATH (rollback=), python3. Cost: the sync to H (H=200: seconds) plus
 # assume_inputs.py (the headers, and a scan of every block 1..H for the BIP30-tracked list).
 set -euo pipefail
 H=$1; RCPT=$(realpath "$2"); V=$(realpath "$3"); MAIN=${4:-bitcoin-cli}
+IMAGE=${IMAGE:?IMAGE=<core image id> is required}; VK=$(realpath "${VK:?VK=<key file> is required}")
 HERE=$(dirname "$(realpath "$0")")
 WORK=${WORK:-$HOME/assume-check}; PORT=${PORT:-8333}; RPCPORT=${RPCPORT:-28342}
 D=$WORK/node; mkdir -p "$D"
@@ -47,13 +49,13 @@ echo "tracked coins unspent at $H: $(grep -vc '^#' "$WORK/tracked_$H.txt" || tru
 
 set +e
 echo "== assumeutxo"
-"$V" assumeutxo --bitcoin-cli "$MAIN" --headers "$WORK/headers_0_$H.bin" --tracked "$WORK/tracked_$H.txt" "$RCPT" "$WORK/utxo_$H.dat"
+"$V" assumeutxo --image "$IMAGE" --vk "$VK" --bitcoin-cli "$MAIN" --headers "$WORK/headers_0_$H.bin" --tracked "$WORK/tracked_$H.txt" "$RCPT" "$WORK/utxo_$H.dat"
 echo "exit=$?"
 echo "== assumevalid, the tip and block $((H / 2))"
-"$V" assumevalid --bitcoin-cli "$MAIN" "$RCPT" | grep -a 'assumevalid\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"
-"$V" assumevalid --bitcoin-cli "$MAIN" --block "$B" --headers "$WORK/headers_0_$H.bin" "$RCPT" | grep -a 'assumevalid\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"
+"$V" assumevalid --image "$IMAGE" --vk "$VK" --bitcoin-cli "$MAIN" "$RCPT" | grep -a 'assumevalid\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"
+"$V" assumevalid --image "$IMAGE" --vk "$VK" --bitcoin-cli "$MAIN" --block "$B" --headers "$WORK/headers_0_$H.bin" "$RCPT" | grep -a 'assumevalid\|VERIFY_'; echo "exit=${PIPESTATUS[0]}"
 echo "== independent reference (scripts/libzync/assume_ref.py)"
 python3 -I "$HERE/assume_ref.py" "$WORK/utxo_$H.dat" "$WORK/headers_0_$H.bin" "$WORK/tracked_$H.txt"
 echo "== refused: the snapshot at $((H - 1)) against the proof at $H"
 $C -rpcclienttimeout=0 -named dumptxoutset "$WORK/utxo_$((H - 1)).dat" rollback=$((H - 1)) >/dev/null
-"$V" assumeutxo --headers "$WORK/headers_0_$H.bin" "$RCPT" "$WORK/utxo_$((H - 1)).dat" | grep -a 'assumeutxo\|VERIFY_'; echo "exit=${PIPESTATUS[0]} (want 1)"
+"$V" assumeutxo --image "$IMAGE" --vk "$VK" --headers "$WORK/headers_0_$H.bin" "$RCPT" "$WORK/utxo_$((H - 1)).dat" | grep -a 'assumeutxo\|VERIFY_'; echo "exit=${PIPESTATUS[0]} (want 1)"

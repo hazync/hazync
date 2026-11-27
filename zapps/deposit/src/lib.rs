@@ -35,7 +35,7 @@ pub struct DepositBundle {
     pub kind: String,
     pub version: u32,
     pub network: String,
-    /// The core chain proof (a succinct receipt, bincode, hex).
+    /// The core chain proof (an engine proof file, HZE1, hex).
     pub core_receipt: String,
     /// The header-chain proof, as one receipt or a chain of runs from genesis (hex each). Empty: no burial beyond the
     /// core tip.
