@@ -1,0 +1,32 @@
+[Unit]
+Description=Hazync engine prep (engine/STAGE3.md 3.3): the chain state before every block in node format 2, from genesis, beside the RISC Zero run's (untouched)
+After=bitcoind.service hazync-engine-fetch.service
+Wants=hazync-engine-fetch.service
+OnFailure=hazync-alert@%n.service
+
+[Service]
+Type=simple
+# LZ_ROOT on /srv/bulk (blocks/, leaves/, bin/); its cl/ trie/ out/ are symlinks to /var/lib/hazync-engine-prep on vda:
+# the write-hot stores (/srv/bulk writes flat at ~40 MB/s, gotcha_hazync_proof_bulk_volume_write_cap)
+Environment=LZ_ROOT=/srv/bulk/hazync-engine-prep
+Environment=LZ_HI=977800
+# node format 2 is libzync's thread default and the host's expected profile (bit 7): no flag
+Environment=HAZYNC_PREP_SAVE_EVERY=1000 HAZYNC_PREP_REPORT_EVERY=1000 HAZYNC_PREP_MIN_FREE_GB=200
+Environment=HAZYNC_TRIE_CACHE_MB=12288 HAZYNC_PREP_HISTORY=1 HAZYNC_REORG_ACK=0
+# leaf bundles only at the paper's sample heights (as libzync-prep); the board's every-block bundles are a separate
+# pass paced by the engine board (HAZYNC_PREP_LEAF_WINDOW), once it runs
+Environment=HAZYNC_PREP_LEAF_AT=170,1000,100000,200000,270000,280000,290000,300000,400000,481824,500000,550000,600000,650000,700000,709632,800000,900000,962000,967600,970000,972000,974000
+ExecStart=/bin/sh -c 'exec "$LZ_ROOT/bin/libzync-prep-run.sh"'
+# exit 3 = the free-space floor or a refusal to clear stores; 4 = a reorg: a person decides (the unit fails and alerts)
+Restart=on-failure
+RestartPreventExitStatus=3 4
+RestartSec=30
+# yields to bitcoind, the read-only services and the headers follower
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=infinity
+MemoryMax=infinity
+OOMScoreAdjust=500
+
+[Install]
+WantedBy=multi-user.target
