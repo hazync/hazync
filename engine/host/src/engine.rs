@@ -528,7 +528,7 @@ pub fn pack(dir: &Path, proof_path: &Path, out: &Path, key_out: Option<&Path>) -
     if let Ok(have) = Engine::image(dir) {
         ensure!(have == img, "image.json {have:?} is not the baseline's {img:?}");
     }
-    let id = crate::r0::image_id(&img);
+    let id = crate::stream::image_id(&img);
     let key = bitcode::serialize(&VmStarkVerifyingKey { mvk: mvk.as_ref().clone(), baseline })?;
     let pin: [u8; 32] = Sha256::digest(&key).into();
     let file = hazync_engine_verify::pack(&enc, &journal);

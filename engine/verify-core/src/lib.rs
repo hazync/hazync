@@ -156,7 +156,7 @@ pub fn image_of(vk: &VmStarkVerifyingKey) -> (Vec<u8>, Vec<u8>) {
     (le_bytes(&exe), le_bytes(&vm))
 }
 
-/// The image id Hazync publishes: SHA-256(exe || vm) (engine/host/src/r0.rs `image_id`).
+/// The image id Hazync publishes: SHA-256(exe || vm) (engine/host/src/stream.rs `image_id`).
 pub fn image_id_of(vk: &VmStarkVerifyingKey) -> [u8; 32] {
     let (exe, vm) = image_of(vk);
     let mut h = Sha256::new();

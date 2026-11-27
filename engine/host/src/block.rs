@@ -9,7 +9,7 @@ use openvm_sdk::{Sdk, StdIn};
 use sha2::{Digest, Sha256};
 
 use crate::engine::{record_image, write_proof, Engine};
-use crate::r0::image_id;
+use crate::stream::image_id;
 
 fn control(emit: bool, commits: &[[u8; 32]]) -> Vec<u8> {
     let mut c = Vec::new();

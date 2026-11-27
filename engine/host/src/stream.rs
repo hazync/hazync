@@ -1,4 +1,5 @@
-//! Proving Hazync's guest (the product guest built for the engine, engine/guest) from a RISC Zero input stream.
+//! Proving Hazync's guest (the product guest built for the engine, engine/guest) from an input stream: the guests' word
+//! encoding (engine/journal, risc0's serde format, which the guests keep).
 //!
 //! stdin chunk 0 = control (emit, n, the deferral input commitment of each child proof, in the order the guest's
 //! env::verify calls consume them); chunk 1 = the stream. See engine/platform/risc0-zkvm.
@@ -33,7 +34,7 @@ fn control_flags(flags: u32, commits: &[[u8; 32]]) -> Vec<u8> {
     c
 }
 
-/// Where the product host's streams carry their own image id (a mode word, then METHOD_ID).
+/// Where the core streams carry their own image id, self_id (a mode word, then the id).
 pub const SELF_ID_AT: usize = 4;
 
 /// This image's id into `stream` at byte `at` (32 bytes, the id's 8 words little-endian, as the guest reads them).

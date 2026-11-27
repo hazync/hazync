@@ -13,9 +13,11 @@ What the product host relies on: `hzengine serve` (engine/host/src/serve.rs) and
 
 ## Open: for the user, or for the cutover
 
-1. **RISC Zero-shaped names.** `r0.rs`, "a RISC Zero input stream" in `prove`'s help text, `--self-id` meaning "the product host's
-   METHOD_ID bytes". The streams really are risc0's serde words, which the engine guests keep, so the names are not wrong
-   today. They read as legacy once RISC Zero is removed: rename them at the cutover, in one change.
+1. ✅ **Done 27.11 (cutover C6): RISC Zero-shaped names.** `r0.rs` is `stream.rs`; `prove`'s help says "an input stream (the
+   guests' word encoding)", and `--self-id`'s help names the core streams' `self_id` field instead of the product host's
+   METHOD_ID. The flag and serve's `self_id` field keep their names: `self_id` is the journal field the engine keeps, and
+   the scripts in results/ that reproduce each run use the flag. Before: `r0.rs`, "a RISC Zero input stream" in
+   `prove`'s help text, `--self-id` meaning "the product host's METHOD_ID bytes".
 2. ✅ **Done 27.11: `hzengine pack --dir --proof --out file.hze [--key key.bin]`.** It needs only agg.vk and baseline.json (0.17 s, against ~25 s for wasm-inputs, which loads sdk.pk). It checks the file with the readers' own verifier (verify-core) and writes nothing that fails; it prints the image id and the key's pin. Checked on the box: zeroconf's and hints' files and key byte-identical to wasm-inputs'; a changed journal and another image's keys refused, no file written. Before: Its help still says "FEASIBILITY Q11 ... proof.zst". It writes
    proof.hze (HZE1), the file every verifier takes, plus vk.bin and vk.sha256. A product needs a plainly named command for
    this (e.g. `hzengine pack`). That is a CLI decision: scripts and docs call `wasm-inputs` today.

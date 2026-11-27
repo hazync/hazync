@@ -14,7 +14,7 @@
 mod block;
 mod capture;
 mod engine;
-mod r0;
+mod stream;
 mod segpar;
 mod selftest;
 mod serve;
@@ -76,7 +76,7 @@ enum Cmd {
         #[arg(long)]
         tamper: String,
     },
-    /// Prove Hazync's guest from a RISC Zero input stream; `--child` proofs are verified in-guest, in env::verify order.
+    /// Prove Hazync's guest from an input stream (the guests' word encoding); `--child` proofs are verified in-guest, in env::verify order.
     Prove {
         #[arg(long)]
         dir: PathBuf,
@@ -84,7 +84,7 @@ enum Cmd {
         input: PathBuf,
         #[arg(long)]
         child: Vec<PathBuf>,
-        /// Put this image's id at bytes 4..36 of the stream (where the product host writes its METHOD_ID).
+        /// Put this image's id at bytes 4..36 of the stream (the core and join streams' self_id: a mode word, then the id).
         #[arg(long)]
         self_id: bool,
         /// Put this image's id at this byte of the stream instead (a zAPP stream's own layout, e.g. utreexo: 0).
@@ -194,8 +194,8 @@ fn run(cli: Cli) -> Result<()> {
         Cmd::SelftestLeaf { dir, value, out } => selftest::leaf(&dir, value, &out),
         Cmd::SelftestNode { dir, left, right, out } => selftest::node(&dir, &left, &right, &out),
         Cmd::SelftestNegative { dir, left, right, tamper } => selftest::negative(&dir, &left, &right, &tamper),
-        Cmd::Prove { dir, input, child, self_id, self_id_at, out } => r0::prove(&dir, &input, &child, self_at(self_id, self_id_at), &out),
-        Cmd::Execute { dir, input, child, self_id, self_id_at, dry, journal, log } => r0::execute(&dir, &input, &child, self_at(self_id, self_id_at), dry, journal.as_deref(), log.as_deref()),
+        Cmd::Prove { dir, input, child, self_id, self_id_at, out } => stream::prove(&dir, &input, &child, self_at(self_id, self_id_at), &out),
+        Cmd::Execute { dir, input, child, self_id, self_id_at, dry, journal, log } => stream::execute(&dir, &input, &child, self_at(self_id, self_id_at), dry, journal.as_deref(), log.as_deref()),
         Cmd::ProveBlock { dir, export, out, verify_each, workers } => block::prove_block(&dir, &export, &out, verify_each, workers.unwrap_or_else(|| engine::gpu_count() * engine::default_gpu_share())),
         Cmd::Serve { dir } => serve::serve(&dir),
         Cmd::GpuShare => {
@@ -220,7 +220,7 @@ fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// --self-id (the product host's layout) or --self-id-at <byte>.
+/// --self-id (the core streams' layout) or --self-id-at <byte>.
 fn self_at(self_id: bool, at: Option<usize>) -> Option<usize> {
-    at.or(self_id.then_some(r0::SELF_ID_AT))
+    at.or(self_id.then_some(stream::SELF_ID_AT))
 }
