@@ -90,3 +90,4 @@ verifier checking), with the old system untouched.
 | 6.3 | Cutover: board, path services, web, docs point at the engine chain |
 | 6.4 | The RISC Zero chain's services retired (its proofs stay verifiable with its released verifiers) |
 | 6.5 | Delving / paper updates (the user's plan) |
+| 6.6 | **User 27.11: update ALL docs, the paper and the web pages for the engine.** Every README, docs/, CLAUDE.md-level docs, module docs, the paper (private, ~/libzync-gpu/paper, never in the repo), hazync.org pages (public text: wording approved by the user before deploy). Inventory in engine/DOCS_SWEEP.md; drafts can start now, published with the release |
