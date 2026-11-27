@@ -3,11 +3,14 @@
 //!
 //! ```text
 //!   zapp-zeroconf <proof.hze> --vk <key file> --vk-sha256 <hex> --image <hex> --core-image <hex> --txid <txid>
-//!                 [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>]
+//!                 [--wtxid <wtxid>] [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>]
 //!                 [--expect <tip height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"] [--json]
 //! ```
-//! Checks that the proof says YOUR transaction (`--txid`, as explorers print it) is valid for the block after the proven
-//! tip, with every coin it spends unspent there. The proof is an engine (OpenVM) proof file of the zeroconf image
+//! Checks that the proof says YOUR transaction (`--txid`, as explorers print it; `--wtxid` also fixes the witness of
+//! the bytes you hold) is CONSENSUS-valid for the block after the proven tip, with every coin it spends unspent there
+//! and within one block's weight and sigop-cost limits. Not relay policy: a consensus-valid T can still fail to
+//! propagate (non-standard, below the minimum fee). Give your CURRENT tip (`--expect` / `--bitcoin-cli` / `--mempool`):
+//! OK is about the tip you give, and a proof against an older block misses every spend since. The proof is an engine (OpenVM) proof file of the zeroconf image
 //! `--image`, verified under the key file `--vk` from your own build of that image (its SHA-256 is the pin). The core
 //! chain it rests on must be `--core-image`'s (an engine build). `--anchor`: a trusted state the core chain was proved
 //! from instead of genesis (then at most DEMO). `--expect`, `--mempool`, `--bitcoin-cli` name the tip from your own
@@ -19,7 +22,7 @@ use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("ZAPP_ZEROCONF_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-zeroconf <proof.hze> --vk <key file> --vk-sha256 <hex> --image <hex> --core-image <hex> --txid <txid> [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} [--json]");
+    eprintln!("usage: zapp-zeroconf <proof.hze> --vk <key file> --vk-sha256 <hex> --image <hex> --core-image <hex> --txid <txid> [--wtxid <wtxid>] [--network mainnet|signet] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} [--json]");
     exit(1);
 }
 
@@ -44,6 +47,7 @@ fn main() {
     let (mut network, mut vk, mut image, mut core, mut txid, mut anchor, mut now, mut json, mut id, mut files) =
         ("mainnet".to_string(), None, None, None, None, None, None, false, Identity::default(), Vec::new());
     let mut vk_pin: Option<String> = None;
+    let mut wtxid: Option<String> = None;
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         let mut val = |f: &str| it.next().unwrap_or_else(|| fail(&format!("{f} needs a value")));
@@ -54,6 +58,7 @@ fn main() {
             "--image" => image = Some(val("--image")),
             "--core-image" => core = Some(val("--core-image")),
             "--txid" => txid = Some(val("--txid")),
+            "--wtxid" => wtxid = Some(val("--wtxid")),
             "--anchor" => anchor = Some(val("--anchor")),
             "--now" => now = Some(val("--now").parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
             "--json" => json = true,
@@ -76,7 +81,8 @@ fn main() {
     // the trusted core image: the network's record re-pointed at --core-image (an engine build: node format 2)
     let img = zapp_corecheck::image_for(&network, &core, true, true).unwrap_or_else(|e| fail(&e));
     let anchor: Option<ChainState> = anchor.map(|p| serde_json::from_slice(&rd(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p)))));
-    let run = |tip: Option<(u32, &str)>| zapp_zeroconf::verify_zeroconf(&file, &image, &key, img, anchor.as_ref(), now, &txid, tip);
+    let run = |tip: Option<(u32, &str)>| zapp_zeroconf::verify_zeroconf_asked(&file, &image, &key, img, anchor.as_ref(), now,
+                                                                      zapp_zeroconf::Asked { txid: &txid, wtxid: wtxid.as_deref() }, tip);
     // chain identity (zapp-common): the sources are asked about the tip height the proof has SHOWN (it verified first)
     let (expect, extra) = if id.needs_lookup() {
         match run(None).statement {
@@ -95,7 +101,7 @@ fn main() {
     let code = match (&r.verdict, &r.statement) {
         (Verdict::Fail, _) | (_, None) => { say(&format!("ZAPP_ZEROCONF_FAIL: {} check(s) failed", r.checks.iter().filter(|c| !c.0).count())); 1 }
         (v, Some(z)) => {
-            let what = format!("tx {} is valid for block {} on tip {} and spends only coins unspent there (fee {} sat, weight {}, sigops {})",
+            let what = format!("tx {} is consensus-valid for block {} on tip {} and spends only coins unspent there (fee {} sat, weight {}, sigops {})",
                                z.txid_hex(), z.tip_height + 1, z.tip_hex(), z.fee, z.weight, z.sigops);
             let ok = *v == Verdict::Ok;
             if json {
@@ -107,7 +113,7 @@ fn main() {
             } else {
                 say(&format!("ZAPP_ZEROCONF_DEMO: {what} -- but the core chain is not shown to be the network's (a given anchor, below minimum work or the checkpoint, or the tip not compared with your own header chain)"));
             }
-            say("  ⚠ valid now, not final: a conflicting transaction can still confirm first");
+            say("  ⚠ consensus-valid now, not final and not relay policy: a conflicting transaction can still confirm first");
             if ok { 0 } else { 2 }
         }
     };

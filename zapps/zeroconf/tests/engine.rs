@@ -107,3 +107,42 @@ fn engine_zeroconf_t_at_110() {
     // not an engine proof at all
     refused(run(&rd("T.json"), ZC_ID, &key, core(), Some(&anchor), TXID, None), "not an engine proof file");
 }
+
+/// Review R2-6: the statement's own limits and the wtxid, on the REAL proof's statement with one field changed
+/// (a real proof of a T above a block's weight or sigop-cost limit is impractical: the guest proves any T the block
+/// rules would only refuse at the block level, so the reader is where the bound belongs). Before the fix the reader
+/// read neither weight nor sigops (zapps/zeroconf/src/lib.rs at 0382bb3f): every case below passed it.
+#[test]
+fn statement_limits_and_wtxid() {
+    let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
+    let pin = hex32(String::from_utf8(rd("vk.sha256")).unwrap().trim()).unwrap();
+    let key = EngineKey { bytes: &vk, pin };
+    let anchor: ChainState = serde_json::from_slice(&rd("anchor_state_109.json")).unwrap();
+    let t: serde_json::Value = serde_json::from_slice(&rd("T.json")).unwrap();
+    let wtxid = t["wtxid"].as_str().unwrap();
+    let z = verify_zeroconf(&file, ZC_ID, &key, core(), Some(&anchor), NOW, TXID, Some((110, TIP))).statement.unwrap();
+    let empty = || ZeroconfReport { checks: Vec::new(), verdict: Verdict::Fail, statement: None, tip_checked: false };
+    let run = |z: &ZeroconfStatement, w: Option<&str>| {
+        check_statement(empty(), z.clone(), core(), Some(&anchor), NOW, Asked { txid: TXID, wtxid: w }, Some((110, TIP)))
+    };
+    // the real statement: DEMO (given anchor), with and without its wtxid
+    assert_eq!(run(&z, None).verdict, Verdict::Demo);
+    assert_eq!(run(&z, Some(wtxid)).verdict, Verdict::Demo);
+    // the proof through verify_zeroconf_asked: the same
+    let r = verify_zeroconf_asked(&file, ZC_ID, &key, core(), Some(&anchor), NOW, Asked { txid: TXID, wtxid: Some(wtxid) }, Some((110, TIP)));
+    assert_eq!(r.verdict, Verdict::Demo);
+    // another wtxid: FAIL
+    let r = run(&z, Some(&wtxid.replace('a', "b")));
+    assert_eq!(r.verdict, Verdict::Fail);
+    assert!(r.checks.iter().any(|(ok, s)| !ok && s.contains("wtxid")));
+    // at each limit: still fine; one above: FAIL
+    for (w, s, ok) in [(MAX_BLOCK_WEIGHT, 1, true), (MAX_BLOCK_WEIGHT + 1, 1, false), (1_031, MAX_BLOCK_SIGOPS_COST, true),
+                       (1_031, MAX_BLOCK_SIGOPS_COST + 1, false), (-1, 1, false), (1_031, -1, false)] {
+        let r = run(&ZeroconfStatement { weight: w, sigops: s, ..z.clone() }, None);
+        assert_eq!(r.verdict != Verdict::Fail, ok, "weight {w} sigops {s}: {:?}", r.checks);
+    }
+    // above the RELAY limits but inside a block's: reported, not refused
+    let r = run(&ZeroconfStatement { weight: MAX_STANDARD_TX_WEIGHT + 1, ..z.clone() }, None);
+    assert_eq!(r.verdict, Verdict::Demo);
+    assert!(r.checks.iter().any(|(ok, s)| *ok && s.contains("will not relay")));
+}

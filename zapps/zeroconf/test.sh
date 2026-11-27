@@ -34,6 +34,9 @@ want 1 "the key without --vk-sha256 (review R1-6 #1)"            $D/proof.hze --
 want 1 "the key with another pin"                                $D/proof.hze --vk $D/vk.bin --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 --image $ZC --core-image $CORE --network regtest --anchor $D/anchor_state_109.json --txid $TXID
 want 1 "mainnet asked of a regtest proof"                        $D/proof.hze --vk $D/vk.bin --vk-sha256 "$(pin $D/vk.bin)" --image $ZC --core-image $CORE --network mainnet --anchor $D/anchor_state_109.json --txid $TXID
 want 1 "no --txid"                                               "${B[@]}"
+WTXID=$(python3 -c "import json;print(json.load(open('$D/T.json'))['wtxid'])")
+want 2 "T with its wtxid (review R2-6 #3)"                       "${B[@]}" --txid $TXID --wtxid $WTXID --expect $TIP
+want 1 "T with another wtxid"                                    "${B[@]}" --txid $TXID --wtxid "${WTXID/a/b}" --expect $TIP
 set +e; "$Z" "${B[@]}" --txid $TXID --expect $TIP --json 2> /dev/null > "$W/j"; set -e
 python3 -c "import json,sys;j=json.load(open('$W/j'));assert j['verdict']=='DEMO' and j['txid']=='$TXID' and j['next_block']==111, j" && { n=$((n+1)); echo "ok   --json: verdict, txid, next block"; }
 echo "ZAPP_ZEROCONF_CLI: $n cases as expected"

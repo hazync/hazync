@@ -7,8 +7,12 @@
 //! verifier's policy (trusted core image and profile, lineage, genesis anchor, time-too-new, minimum work), plus the whole profile (as the hints zAPP, review
 //! H5). Engine proofs only: this module is new with the engine (engine/VERIFIER.md).
 //!
-//! ⚠ Valid NOW, not final: a conflicting transaction can still confirm first. The statement says nothing about the
-//! mempool, and nothing about a T whose inputs come from unconfirmed parents (the guest refuses such a T).
+//! What OK means: T is CONSENSUS-valid for the block after the proven tip (Core's transaction rules, scripts, coins
+//! unspent at that tip, and within one block's weight and sigop-cost limits), at the tip the caller passed. It is NOT
+//! relay policy (standardness, minimum fee, dust, RBF: a T can be consensus-valid and still not propagate), and NOT
+//! final: a conflicting transaction can still confirm first. Pass your CURRENT tip (`expect_tip`): a proof against an
+//! older block of your own chain is about that block, and misses every spend since. Nothing about a T whose inputs
+//! come from unconfirmed parents (the guest refuses such a T).
 
 use serde::{Deserialize, Serialize};
 use swiftsync_verify::{anchor_id, hex, hex32, identity_matches, lineage_of, work_at_least, words, ChainState, EngineKey, Image,
@@ -84,6 +88,13 @@ fn disp(b: &[u8; 32]) -> String {
 #[allow(clippy::too_many_arguments)]
 pub fn verify_zeroconf(file: &[u8], image_hex: &str, key: &EngineKey, core: &Image, anchor: Option<&ChainState>, now: u64,
                        txid: &str, expect_tip: Option<(u32, &str)>) -> ZeroconfReport {
+    verify_zeroconf_asked(file, image_hex, key, core, anchor, now, Asked { txid, wtxid: None }, expect_tip)
+}
+
+/// [`verify_zeroconf`] with the wtxid of the caller's bytes too (`asked.wtxid`).
+#[allow(clippy::too_many_arguments)]
+pub fn verify_zeroconf_asked(file: &[u8], image_hex: &str, key: &EngineKey, core: &Image, anchor: Option<&ChainState>,
+                             now: u64, asked: Asked, expect_tip: Option<(u32, &str)>) -> ZeroconfReport {
     let mut rep = ZeroconfReport { checks: Vec::new(), verdict: Verdict::Fail, statement: None, tip_checked: false };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the zeroconf image id is 32 bytes of hex ({image_hex})"));
@@ -112,10 +123,50 @@ pub fn verify_zeroconf(file: &[u8], image_hex: &str, key: &EngineKey, core: &Ima
         }
     };
     rep.check(journal.bytes.len() == 4 * 210, format!("the journal is exactly one statement ({} bytes, 840 expected)", journal.bytes.len()));
+    check_statement(rep, z, core, anchor, now, asked, expect_tip)
+}
+
+/// Core's consensus limits for one block (consensus/consensus.h): a transaction above either can never be included,
+/// so it is never "valid for the next block" (review R2-6 #1: the guest commits T's weight and sigop cost, Core's
+/// GetTransactionWeight and GetTransactionSigOpCost, which only the BLOCK rules bound).
+pub const MAX_BLOCK_WEIGHT: i64 = 4_000_000;
+pub const MAX_BLOCK_SIGOPS_COST: i64 = 80_000;
+/// Core's relay policy limits (policy/policy.h), reported, not enforced: a T above them is valid but will not relay.
+pub const MAX_STANDARD_TX_WEIGHT: i64 = 400_000;
+pub const MAX_STANDARD_TX_SIGOPS_COST: i64 = 16_000;
+
+/// What the caller asks about: the txid, as explorers print it, and optionally the wtxid of the bytes the caller holds
+/// (review R2-6 #3: the txid alone fixes T but not its witness).
+#[derive(Clone, Copy, Debug)]
+pub struct Asked<'a> {
+    pub txid: &'a str,
+    pub wtxid: Option<&'a str>,
+}
+
+/// The statement's own checks, on a statement whose proof `rep` already holds the checks of: the kind, the caller's
+/// T, T's weight and sigop cost against one block's limits, and the core chain it rests on (the core verifier's
+/// policy). Public so the policy can be tested on a statement without a proof.
+#[allow(clippy::too_many_arguments)]
+pub fn check_statement(mut rep: ZeroconfReport, z: ZeroconfStatement, core: &Image, anchor: Option<&ChainState>, now: u64,
+                       asked: Asked, expect_tip: Option<(u32, &str)>) -> ZeroconfReport {
     rep.check(z.kind == KIND_ZEROCONF, format!("a zeroconf statement (kind {:#x})", z.kind));
     // the caller's question: THIS transaction
-    let asked = txid.trim().to_lowercase();
-    rep.check(z.txid_hex() == asked, format!("the proven transaction is {} (you asked about {asked})", z.txid_hex()));
+    let want = asked.txid.trim().to_lowercase();
+    rep.check(z.txid_hex() == want, format!("the proven transaction is {} (you asked about {want})", z.txid_hex()));
+    if let Some(w) = asked.wtxid {
+        let w = w.trim().to_lowercase();
+        rep.check(z.wtxid_hex() == w, format!("the proven transaction's wtxid is {} (your bytes' wtxid {w})", z.wtxid_hex()));
+    }
+    rep.check((0..=MAX_BLOCK_WEIGHT).contains(&z.weight),
+              format!("T's weight {} fits one block (Core's MAX_BLOCK_WEIGHT {MAX_BLOCK_WEIGHT})", z.weight));
+    rep.check((0..=MAX_BLOCK_SIGOPS_COST).contains(&z.sigops),
+              format!("T's sigop cost {} fits one block (Core's MAX_BLOCK_SIGOPS_COST {MAX_BLOCK_SIGOPS_COST})", z.sigops));
+    let standard = z.weight <= MAX_STANDARD_TX_WEIGHT && z.sigops <= MAX_STANDARD_TX_SIGOPS_COST;
+    rep.checks.push((true, if standard {
+        format!("within Core's relay limits for size and sigops (weight <= {MAX_STANDARD_TX_WEIGHT}, sigop cost <= {MAX_STANDARD_TX_SIGOPS_COST}); relay policy is not otherwise checked")
+    } else {
+        format!("ABOVE Core's relay limits (weight <= {MAX_STANDARD_TX_WEIGHT}, sigop cost <= {MAX_STANDARD_TX_SIGOPS_COST}): consensus-valid, but nodes will not relay it")
+    }));
     // the core chain it rests on: the core verifier's policy
     let net = core.network;
     rep.check(words(&core.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", core.method_id_hex));
