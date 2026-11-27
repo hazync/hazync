@@ -30,10 +30,12 @@ harvest(){ mkdir harvest.lock 2>/dev/null || { say "harvest already running"; re
   for t in 1 2 3 4 5 6; do
     # the essentials only (reports, timings, verify logs, setup, the tail of each big log): the full logs took 8+ min
     # at ~1 MB/min from a 4x PRO 6000 pod (25.11) while it billed. HARVEST_FULL=1: everything but the proofs, as before.
+    # HARVEST_PROOFS=1: also out/*.proof.json and out/*.journal (a proof kept as a test fixture; `hzengine pack` makes the
+    # reader's HZE1 file from it afterwards).
     if [ "${HARVEST_FULL:-0}" = 1 ]; then
       timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && tar czf out.tgz --exclude="*.proof.json" out setup.out build.log; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
     else
-      timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && rm -rf tails && mkdir -p tails && for f in out/*.log; do [ -f "$f" ] && tail -n 400 "$f" > "tails/$(basename "$f")"; done; tar czf out.tgz --ignore-failed-read out/*/REPORT.txt out/*.tsv out/*.txt out/RUN_DONE out/*_verify.log setup.out tails 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
+      timeout 300 ssh $K -p $CP root@$CIP 'cd /workspace && rm -rf tails && mkdir -p tails && for f in out/*.log; do [ -f "$f" ] && tail -n 400 "$f" > "tails/$(basename "$f")"; done; P=""; [ "'"${HARVEST_PROOFS:-0}"'" = 1 ] && P="out/*.proof.json out/*.journal"; tar czf out.tgz --ignore-failed-read out/*/REPORT.txt out/*.tsv out/*.txt out/RUN_DONE out/*_verify.log setup.out tails $P 2>/dev/null; sha256sum out.tgz | cut -c1-64 > out.tgz.sha256'
     fi
     R=$(timeout 60 ssh $K -p $CP root@$CIP 'cat /workspace/out.tgz.sha256')
     timeout 300 scp -q $KS -P $CP root@$CIP:/workspace/out.tgz out.tgz && [ -n "$R" ] && [ "$(sha256sum out.tgz | cut -c1-64)" = "$R" ] \
