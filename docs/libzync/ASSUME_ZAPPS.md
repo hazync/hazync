@@ -1,7 +1,8 @@
 # zyncAPP checkers: assumevalid and assumeutxo from the chain proof (#721)
 
 Status: built 15.11.2026, independently reviewed the same day (no soundness break found) and released in v0.27.0
-(#740, 20.11.2026). No new guest and no change to any image:
+(#740, 20.11.2026) on RISC Zero; engine (OpenVM) proofs only since 27.11.2026 (no engine image is published yet, so
+each check names the core image and its key). No new guest and no change to any image:
 both are checks a verifier makes on a core chain proof it has already verified. Normative source:
 `zapps/assume/src/lib.rs`, the zAPPs' own module (`zapps/assume`, ZYNCAPPS.md §9), on the core verifier as a library. `scripts/libzync/assume_ref.py` is an independent implementation of §3 written
 from this document and Core's snapshot format.
@@ -16,11 +17,11 @@ fallback.
 ## 1. Commands
 
 ```sh
-zapp-assume assumevalid [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <receipt>
-zapp-assume assumeutxo --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <receipt> <snapshot>
+zapp-assume assumevalid --image <core id> --vk core.vk [--block <hash>] [--headers <file>] [--expect <h>:<hash> | --bitcoin-cli "<cmd>" | --mempool] <proof.hze>
+zapp-assume assumeutxo --image <core id> --vk core.vk --headers <file> [--tracked <file>] [--expect … | --bitcoin-cli … | --mempool] <proof.hze> <snapshot>
 ```
 
-Both run the full receipt verification first (SWIFTSYNC_PROOFS.md §5) and check nothing against a receipt that
+Both run the full core proof verification first (SWIFTSYNC_PROOFS.md §5) and check nothing against a proof that
 fails it. They print the usual verdict line; the exit codes are the verifier's (0 OK, 2 DEMO, 1 FAIL). As for every
 fact, OK needs the chain identity checked (`--expect`, `--bitcoin-cli` or `--mempool`) and the proof at or past
 Core's minimum chain work and the pinned checkpoint; a proof below that is at best DEMO. On success they print:
@@ -46,14 +47,14 @@ take hours on a page, and there is no proof at a mainnet snapshot height yet (§
 
 ## 2. assumevalid
 
-**What the proof says.** A receipt of a libzync image with profile bit 1 clear (scripts checked; every published
+**What the proof says.** A proof by a libzync image with profile bit 1 clear (scripts checked; every published
 image) says every block from genesis to `tip_hash` passed Core v28's script and signature rules, as compiled into
 the image: Core's interpreter, sighash and libsecp256k1 (CONSENSUS_RULES.md). Core's `-assumevalid=X` skips script
 checks for X and its ancestors only. So any X in the proven chain at a height h ≤ H is covered by the proof.
 
 **The check.** `assume_valid(cs, headers, block)`:
 
-1. `cs` is the state of a receipt that verified; `cs.profile` has bit 0 (libzync) and NOT bit 1. An image that
+1. `cs` is the state of a proof that verified; `cs.profile` has bit 0 (libzync) and NOT bit 1. An image that
    skipped scripts (bit 1, the assumevalid build) is refused: it proves nothing here.
 2. No `--block`, or `--block` = the tip: X = `tip_hash`, h = H. This is the value a node needs: `-assumevalid=tip`
    covers every block the proof covers.
@@ -142,7 +143,7 @@ anyway; the tracked list is free, and can only refuse.
 
 ### 3.3 The check
 
-`check_snapshot(cs, snapshot, headers, tracked)`, against the state of a receipt that verified:
+`check_snapshot(cs, snapshot, headers, tracked)`, against the state of a proof that verified:
 
 1. `cs.profile` has bit 0 (libzync) and bit 6 (the live-coin hash), and NOT bit 1: an image that skipped scripts and
    signatures proves no coin set a node may load, as for assumevalid (§2). The headers run from genesis to the proven
@@ -180,8 +181,8 @@ or a reader comparing with the one compiled into a release, can use it without t
 
 | | |
 |---|---|
-| proven by the receipt | the chain 0..H is valid under Core v28's rules as compiled into image M, scripts and signatures included; the `ChainState` at H, including `live_set`, `live_hash`, `utxo_value`, `tip_hash` (the live hash is bound to the coin log, below) |
-| checked by the verifier | the receipt (SWIFTSYNC_PROOFS.md §5); the headers link to `tip_hash`; the block named is among them; the snapshot's coins hash to the proven ECMH and sum to the proven value; base block and network |
+| proven by the core proof | the chain 0..H is valid under Core v28's rules as compiled into image M, scripts and signatures included; the `ChainState` at H, including `live_set`, `live_hash`, `utxo_value`, `tip_hash` (the live hash is bound to the coin log, below) |
+| checked by the verifier | the proof (SWIFTSYNC_PROOFS.md §5); the headers link to `tip_hash`; the block named is among them; the snapshot's coins hash to the proven ECMH and sum to the proven value; base block and network |
 | trusted | the image id M (rebuild it: `reproduce/`), RISC Zero's soundness, SHA-256 and SHA-256d collision resistance, the ECMH's collision resistance, the verifier's code, and the source used for the chain identity (`--expect`, your node, mempool.space) |
 | not trusted | the snapshot, the headers file and the tracked list: each is checked or can only cause a refusal |
 | not proven | that the proven chain is the network's (the identity check is the user's); anything above H |
@@ -198,7 +199,12 @@ From the genesis identity on, `live_hash` is therefore the ECMH of the coin log'
 retired design B, where the sum stood alone; it is stale, but it is guest source, so changing it would move the image
 id, and I have left it.
 
-## 5. Measured (15.11.2026)
+## 5. Measured (15.11.2026, on the RISC Zero chain's proof; a dated record)
+
+On the engine (27.11.2026, `zapps/assume/tests/engine.rs`): the engine chain's proof of mainnet 1..200 (profile 0xf1)
+verified, then the same Core v31.1.0 snapshot at 200 checked against its live-coin hash (the snapshot and the ECMH do
+not depend on the prover or the node format), and assumevalid on its tip; `test-assume.sh` 36/36, `wasm/test-assume.mjs`
+18/18. The best verdict is DEMO: 200 blocks are below Core's minimum work.
 
 Real data only: the GPU proof of mainnet 1..200 under `8888d59c` (`swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`,
 profile `0x71`) and Core v31.1.0 `dumptxoutset` files from hazync-coord's node (a throwaway node synced from it over
@@ -212,9 +218,9 @@ P2P, §6). Laptop: WSL2, release build.
 | BIP30-tracked live coins at 200 | 0 (`assume_inputs.py`); the match with an empty list agrees |
 | assumeutxo check at 200, laptop | 0.01 s (the CLI's own timer) |
 | throwaway node to 200 on hazync-coord | sync 28-31 s, `dumptxoutset rollback=200` 14-15 s |
-| WASM build | the zAPP's own module `zapps/assume/wasm` (no longer part of the core's `hazync-verify.wasm`): 1,165,792 bytes raw, 331,972 gzipped, sha256 `582dc8fa…` (before it `5be95c43…`) (`zapps/assume/wasm/build.sh`: Rust 1.99.0 in the pinned container `reproduce/wasm.Dockerfile`, its published image; laptop and hazync-coord, 18.11.2026; on main's strict receipt decoder #758; before it `09704efb…`) |
+| WASM build | the zAPP's own module `zapps/assume/wasm`: its size and sha256 are in `zapps/assume/wasm/README.md` (engine only since 27.11.2026) |
 
-**Beyond 200: against a prover run's state, not a proof.** No receipt in the repo reaches past 200, so the encoding
+**Beyond 200: against a prover run's state, not a proof.** No proof in the repo reaches past 200, so the encoding
 was also checked against hazync-coord's `libzync-prep` run of 07.11.2026 (`state_<h>.json`, the host's native
 `ChainState`, profile 113 = `0x71`; its `state_200.json` has the proof's `live_hash` at 200) with
 `cargo run --release --example assume_state` (testing only; it proves nothing about the chain). Snapshots by Core
@@ -249,19 +255,22 @@ cases with 3 identity cases and a permuted file, `test-assume.out`), the C ABI's
 without chainwork is a FAIL). Run on hazync-coord, 15.11.2026: all pass. Every refusal case of the issue: a tampered
 snapshot (txid, amount, height, coinbase flag, vout, script, a coin dropped, duplicated, split, or added), a wrong
 height (199, 1003; the 199 coins relabelled as 200), a wrong chain (another network magic, another base block,
-another tip in `--expect`, a flipped receipt), wrong side inputs (headers short, one timestamp changed, not from
+another tip in `--expect`, a flipped proof), wrong side inputs (headers short, one timestamp changed, not from
 genesis; a false tracked bit), and bad framing (count, trailing byte, truncation, version, magic).
 
 ## 6. Reproduce against a real node
 
 ```sh
-scripts/libzync/assume_check.sh <H> <receipt> <swiftsync-verify> "bitcoin-cli -datadir=<your node>"
+scripts/libzync/assume_check.sh <H> <proof.hze> <zapp-assume> "bitcoin-cli -datadir=<your node>"
 ```
+
+⚠ The script does not pass `--image` / `--vk` yet, so on the engine-only checker it fails until it does (docs sweep
+finding, 27.11.2026). The run below is the RISC Zero one of 15.11.2026.
 
 On a box with Core ≥ 28 and an unpruned node: a throwaway node (its own datadir under `$WORK`) syncs blocks 0..H from
 your node over P2P (`-connect=127.0.0.1:8333 -stopatheight=H+1`), restarts offline, and dumps its UTXO set with
 `dumptxoutset … rollback=H`. Then the headers and the tracked list (`assume_inputs.py`), both checks against the
-receipt with `--bitcoin-cli` of your node for the identity, the independent reference, and a refusal (the snapshot at
+proof with `--bitcoin-cli` of your node for the identity, the independent reference, and a refusal (the snapshot at
 H−1). Your node is never rolled back: `rollback` on a node at the tip disconnects every block above H and back,
 which for H = 200 on hazync-coord's node (at 975,954 on 15.11.2026) is 975,754 blocks each way. Output at H = 200 on hazync-coord:
 `scripts/libzync/assume_check_200.out`.

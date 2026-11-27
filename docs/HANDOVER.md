@@ -4,6 +4,10 @@ The format (what a handover is, the lineage digest, what a verifier checks) is i
 [libzync/HANDOVER.md](libzync/HANDOVER.md). This page is how to move the live board from image **O** to image **N** at
 block **H**, so every proof O made stays in the chain.
 
+> **27.11.2026:** written for the RISC Zero board (§2-§5 use its `host` commands and receipts). The engine's handover
+> across OpenVM versions is engine/HANDOVER.md (rehearsed v2.0.2 -> v2.1.0 on block 200); this runbook is rewritten
+> for it when the board moves to the engine (engine/ROADMAP.md 3.2). §1's rule holds for both.
+
 ## 1. The rule: only non-soundness upgrades
 
 A handover takes O's proofs of blocks 1..H-1 on trust. The chain is then exactly as sound as O was.

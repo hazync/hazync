@@ -12,25 +12,25 @@ no record. 81 files of the 145.
 | file | lines | state |
 |---|---|---|
 | docs/libzync/UTREEXO_ZAPP.md | 88 | ◐ verifier parts done; the prover and follower sections (§5 zyncapp, §10.5-10.6) wait for Stage 3; measured sections are dated RISC Zero records |
-| docs/libzync/ROADMAP.md | 52 | ☐ |
-| docs/libzync/LIBZYNC.md | 45 | ☐ |
+| docs/libzync/ROADMAP.md | 52 | ✅ (superseded by engine/ROADMAP.md; kept as a record) |
+| docs/libzync/LIBZYNC.md | 45 | ◐ status, §1, §7, §8 on the engine; §4-§6 are RISC Zero records (the engine's numbers are in engine/results); a full rewrite with the paper |
 | docs/libzync/DEPOSIT_ZAPP.md | 42 | ✅ (§7 is a dated RISC Zero record; on-chain path: not built for the engine) |
-| docs/libzync/ZAPP_TESTING.md | 40 | ☐ |
-| docs/libzync/REORG.md | 32 | ☐ |
+| docs/libzync/ZAPP_TESTING.md | 40 | ✅ (a dated plan; engine note added: what carried over, what went) |
+| docs/libzync/REORG.md | 32 | ◐ board design: note added; rewritten when the board moves to the engine (Stage 3) |
 | docs/libzync/LIVENESS_ZAPP.md | 26 | ✅ (proof sizes from the engine vectors; check times and §8 are RISC Zero records) |
 | docs/SOUNDNESS.md | 25 | ☐ |
 | docs/libzync/STATEMENT_ZAPP.md | 23 | ✅ (§8 shape B is a RISC Zero record) |
 | docs/libzync/HINTS_ZAPP.md | 22 | ✅ (cycle and proving measurements are RISC Zero records) |
-| docs/libzync/HANDOVER.md | 21 | ☐ |
-| docs/libzync/ZYNCAPPS.md | 18 | ☐ |
+| docs/libzync/HANDOVER.md | 21 | ✅ (format unchanged; the RISC Zero cross-version path and §8 are records; engine: engine/HANDOVER.md) |
+| docs/libzync/ZYNCAPPS.md | 18 | ✅ |
 | docs/README.md | 18 | ☐ |
 | SECURITY.md | 18 | ☐ |
-| docs/libzync/ASSUME_ZAPPS.md | 16 | ☐ |
-| docs/HANDOVER.md | 16 | ☐ |
+| docs/libzync/ASSUME_ZAPPS.md | 16 | ✅ (§5 a dated RISC Zero record; finding: scripts/libzync/assume_check.sh passes no --image/--vk) |
+| docs/HANDOVER.md | 16 | ◐ the board runbook: note added; rewritten for the engine with Stage 3 |
 | THIRD_PARTY_NOTICES.md | 16 | ☐ |
 | README.md | 16 | ☐ |
-| docs/libzync/UNDO.md | 14 | ☐ |
-| docs/libzync/SWIFTSYNC_PROOFS.md | 14 | ☐ |
+| docs/libzync/UNDO.md | 14 | ✅ |
+| docs/libzync/SWIFTSYNC_PROOFS.md | 14 | ✅ |
 | swiftsync-verify/README.md | 11 | ✅ |
 | docs/EXTERNAL_REVIEW.md | 8 | ☐ |
 | docs/libzync/PROOF_BUNDLE.md | 7 | ☐ |

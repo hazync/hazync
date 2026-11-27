@@ -1,7 +1,9 @@
 # libzync proof statement and verifier procedure
 
 What a libzync chain proof commits (§3) and every check a verifier makes on it (§5). Normative sources:
-`swiftsync-verify/src/lib.rs` (`ChainState`, `verify`, `genesis_anchor`) and `host libzync-verify`.
+`swiftsync-verify/src/lib.rs` (`ChainState`, `verify`, `genesis_anchor`) and `engine/verify-core` (the engine proof
+check, engine/VERIFIER.md). Since 27.11.2026 the proofs are engine (OpenVM v2.1.0) proofs; the RISC Zero chain's
+receipts are checked with v0.27.1's verifier.
 
 The file name is historical: it began as a proposal for proven SwiftSync hints files (design B), retired in E2
 (2026-11-05). Section and step numbers are kept because code cites them (the frozen guest cites step 3b). Design B's
@@ -9,17 +11,18 @@ proposal, measurements and questions are in the full original, `history/experime
 
 ## 2. What is proven
 
-A receipt of a libzync image says: every block from genesis to `tip_hash` is valid under Bitcoin Core's consensus
+A proof by a libzync image says: every block from genesis to `tip_hash` is valid under Bitcoin Core's consensus
 rules as compiled into the image (`CONSENSUS_RULES.md`), and `ChainState` (§3) is the state after the last one: the
 coin log (`COINLOG.md`), the counting trie's root, the live-coin hash, the block forest (`HANDOVER.md` §3), work and
-time. It holds only for a receipt anchored at the network's genesis state (§5 step 3), and it rests on the soundness
-of risc0's recursion. Which chain it is, is a separate check (step 7).
+time. It holds only for a proof anchored at the network's genesis state (§5 step 3), and it rests on the soundness
+of OpenVM's STARK and recursion (deferral) and on the pinned key (§5 step 1). Which chain it is, is a separate check (step 7).
 
 ## 3. Objects
 
 ### The proof's public output: `ChainState`
 
-In field order. Types are exact: risc0's serde writes a u32 as one word, a u64 as two (low first), every byte of
+In field order. Types are exact: the journal's word encoding (risc0's serde format, which the guests keep;
+`engine/journal`) writes a u32 as one word, a u64 as two (low first), every byte of
 `[u8; 32]` as its own word (32 words), `[u32; 8]` as 8 words, a `Vec` as its length then its elements, an `Option` as
 0/1 then the value. A wrong width changes `anchor_id`.
 
@@ -36,13 +39,13 @@ In field order. Types are exact: risc0's serde writes a u32 as one word, a u64 a
 | `prev_nbits`, `prev_time`, `epoch_start` | u32 each | difficulty and time context, so the chain can be extended |
 | `recent_times` | Vec<u32> | timestamps of the last ≤ 11 blocks |
 | `anchor_id` | [u8; 32] | the link digest of the state the chain started from: double-SHA-256 of that state's journal with ITS `anchor_id` zeroed (genesis for a full proof, whose `anchor_id` is zero; pinned per network) |
-| `self_id` | [u32; 8] | the image id every step since the last handover ran (risc0's digest words) |
+| `self_id` | [u32; 8] | the image id every step since the last handover ran (its 32 bytes as 8 little-endian words) |
 | `live_set` | u32 | profile bit 6: the multiset hash of the LIVE coins is the identity iff 0 (instant IBD: a downloaded UTXO set is checked against it). 0 without bit 6 |
 | `live_hash` | [u32; 16] | profile bit 6: that hash's point. Zero without bit 6 |
 | `trie_root` | [u8; 32] | profile bit 5: the counting trie's root (absence, history and balance facts, `ZYNCAPPS.md`). Zero without bit 5 |
 | `smt_root` | [u8; 32] | root of the BIP30 tree (coinbase txids and tracked transactions) after the tip |
 | `max_time` | u32 | the largest block timestamp in the chain (for `time-too-new`, §5 step 11) |
-| `profile` | u32 | what the image checked, set from its compiled code, never carried from input: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet, bit 3 regtest, bit 4 coin log, bit 5 counting trie, bit 6 live-coin hash. The product images are `0x71` (mainnet), `0x75` (signet) |
+| `profile` | u32 | what the image checked, set from its compiled code, never carried from input: bit 0 libzync, bit 1 scripts and signatures **skipped** (assumevalid), bit 2 signet, bit 3 regtest, bit 4 coin log, bit 5 counting trie, bit 6 live-coin hash, bit 7 node format 2 (the coin log and trie node hashes, COINLOG.md §2). The engine product images are `0xf1` (mainnet), `0xf5` (signet); the RISC Zero ones were `0x71`, `0x75` |
 | `block_roots` | Vec<Option<[u8; 32]>> | the block forest: one leaf per block, genesis first, each leaf committing the block hash, height and the coin state after it (HANDOVER.md §3) |
 | `block_leaves` | u64 | `height + 1` |
 | `lineage` | [u8; 32] | 32 zero bytes for a chain proved by one image since genesis; otherwise the digest of the images it was handed over from (HANDOVER.md §5) |
@@ -52,18 +55,18 @@ read a JSON written before E2.
 
 ## 5. Verifier procedure: all of it
 
-Given a receipt R and the network. Both verifiers (`swiftsync-verify`, `host libzync-verify`) make every check
-below; step 7 needs a source you name (without one they print the tip hash to compare).
+Given a proof file P (`HZE1`: the proof, then the journal), the network, the image id M and M's verifying key K.
+`swiftsync-verify` (and its C ABI and WASM build) makes every check below; step 7 needs a source you name (without
+one it prints the tip hash to compare).
 
-1. `R.verify(M)`, where M is the published libzync image id for that network (`reproduce/LIBZYNC_IDS`; v0.26.0,
-   risc0 3.1.0: mainnet `46666b6f…`, signet `01a80f17…`). The built-in table (`IMAGES` in `swiftsync-verify/src/lib.rs`,
-   the C ABI's and the WASM build's) holds these as each network's current image, after the earlier images they
-   continue or replace (v0.24.0's `8888d59c…` / `d4210dae…`), which stay verifiable by id. Receipts of withdrawn images (v0.23.0's `863c9ce3…`, risc0
-   3.0.5) are refused: 3.1.0's verifier parameters differ. Another image needs `--image <hex>` (with `--product` for
-   profile bits 4-6, the coin log, trie and live-coin hash). `host libzync-verify` checks against the image it was
-   built with.
+1. P verifies against M under K: K's SHA-256 equals the pin you hold for M (OpenVM's verifier trusts the key it is
+   given, and the image id does not bind every key field, so the key is pinned; engine/VERIFIER.md), M =
+   SHA-256(exe ‖ vm) is recomputed from K, the STARK verifies, and the proof's public values are SHA-256 of P's
+   journal. No engine image is published yet (the Stage 4 freeze): the built-in table (`IMAGES` in
+   `swiftsync-verify/src/lib.rs`) holds each network's parameters but no image, so a reader gives M and K
+   (`--image`, `--vk`) from an image they rebuilt or trust.
 2. Decode the journal as `ChainState` J and check `J.kind == 0xC4A10012`, `J.version >= 2` and `J.self_id == M`. M is
-   the **newest** image: after a handover the receipt verifies against the image that continued the chain.
+   the **newest** image: after a handover the proof verifies against the image that continued the chain.
 3. `J.anchor_id == dsha256(genesis ChainState journal for the network)` (the genesis state's own `anchor_id` is zero, so
    this equals its link digest; for a supplied anchor, zero the anchor's `anchor_id` before hashing).
    **This is essential:** the base step of the recursion is not verified, so a proof anchored anywhere else proves
@@ -80,9 +83,10 @@ below; step 7 needs a source you name (without one they print the tip hash to co
      `block_roots` = one entry, `Some(SHA-256(0x02 ‖ genesis hash, internal byte order ‖ 0u32 LE ‖
      SHA-256(0x04 ‖ 0u64 LE ‖ 0u64 LE)))` (HANDOVER.md §3: the empty coin state); `block_leaves = 1` (u64);
      `lineage` = 32 zero bytes.
-   - The journal is risc0's serde word encoding (risc0-zkvm 3.1.0 `serde::to_vec`, unchanged from 3.0.5, each word little-endian), as in §3.
-   - `host libzync-verify` computes this itself; `scripts/libzync/genesis_anchor_id.py` computes it from this text
-     alone. The values are PINNED (a chain keeps its anchor through every handover, HANDOVER.md §4): mainnet
+   - The journal is the word encoding of §3 (risc0-zkvm 3.1.0's `serde::to_vec`, byte for byte: `engine/journal`, its
+     `compat/` check), each word little-endian.
+   - `swiftsync-verify` computes this itself (`genesis_anchor`); `scripts/libzync/genesis_anchor_id.py` computes it
+     from this text alone. The values are PINNED (a chain keeps its anchor through every handover, HANDOVER.md §4): mainnet
      `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`, signet
      `3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827` (`swiftsync-verify` unit tests pin both).
 3a. **Minimum work.** `J.cum_work` must be at least Bitcoin Core v32.1's `nMinimumChainWork` for the network (mainnet
@@ -105,11 +109,12 @@ below; step 7 needs a source you name (without one they print the tip hash to co
    `/api/block-height/<J.height>`, signet `/signet/api`; `--mempool-url` for another esplora API), or a hash you
    already have (`--expect <height>:<hash>`). A mismatch is FAIL; with no comparison the OK line says the chain
    identity was NOT checked and prints the hash to compare.
-8. The receipt is a real proof: refuse a dev-mode `FakeReceipt`, and never verify with `RISC0_DEV_MODE` set.
+8. (Retired with RISC Zero: the dev-mode `FakeReceipt` refusal. An engine proof has no dev mode; step 1 is the whole
+   proof check.)
 9. `J.profile` equals the profile of the image you accept (bit 1 set means scripts and signatures were **not**
-   checked). M still has to be the image you trust: rebuild it from the published source commit with
-   `reproduce/libzync.Dockerfile` and compare with the published id. The id depends on absolute build paths, so only
-   a build in that container gives the published id.
+   checked). M still has to be the image you trust: rebuild it from the published source commit and compare with the
+   published id, and take K from that build. The reproducible container build of the engine images is the Stage 4
+   work (engine/ROADMAP.md 4.1).
 10. (Retired: the hints file's canonical encoding, design B.)
 11. `J.max_time <= now + 7200`, with `now` from your own clock (Core's `MAX_FUTURE_BLOCK_TIME`).
 12. `J.block_leaves == J.height + 1`, and `J.block_roots` has a root exactly at each set bit of `J.block_leaves`.
@@ -117,11 +122,11 @@ below; step 7 needs a source you name (without one they print the tip hash to co
     compiled into M. Trusting M then means trusting every image in that list: a handover takes the old image's claims
     on trust (HANDOVER.md §4).
 
-**Verdicts** (`swiftsync-verify` prints `SWIFTSYNC_VERIFY_*`, `host libzync-verify` prints `LIBZYNC_VERIFY_*`):
+**Verdicts** (`swiftsync-verify` prints `SWIFTSYNC_VERIFY_*`):
 - `OK` (exit 0): every check passed on a genesis-anchored proof with enough work, at or past the checkpoint;
 - `DEMO` (exit 2): every check passed, but the proof is checked against a supplied anchor (`--anchor`), or is below
   the minimum work or the checkpoint height;
-- `FAIL` (exit 1): any failed check, including an unreadable or malformed receipt or anchor.
+- `FAIL` (exit 1): any failed check, including an unreadable or malformed proof, key or anchor.
 
 An OK verdict for an assumevalid image says so on the verdict line itself. A coin, trie or transaction fact
 (`--coin`, `--trie`, `--journey`) is checked against the same `ChainState`, so its answer is about the chain as of

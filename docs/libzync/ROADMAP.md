@@ -1,5 +1,9 @@
 # libzync: roadmap to the freeze and beyond (started 11-03, status updated 2026-11-12)
 
+> **Superseded 27.11.2026** by [`engine/ROADMAP.md`](../../engine/ROADMAP.md): the prover moves to OpenVM and the chain
+> is proved again from genesis. This page is the RISC Zero roadmap as it stood, kept as a record; its item ids (E2, H4,
+> I1, K1, N3, ...) are still cited by code and other docs.
+
 libzync is the engine of Hazync v2 (Hazync v1, the original Core design, is in [`docs/history/`](../history/)).
 **Where it stands on 2026-11-12:** v0.24.0 is released on RISC Zero 3.1.0 (images `8888d59c` mainnet, `d4210dae`
 signet, `2db34e12` header chain); v0.26.0's `46666b6f` (signet `01a80f17`; `reproduce/LIBZYNC_IDS`) adds the per-block undo-data commitment

@@ -1,6 +1,7 @@
 # libzync: the per-block undo-data commitment
 
-Status: in the v0.26.0 images (format U0, issue #729). Normative sources: `prover/methods/guest/src/handover_pin.rs`
+Status: in every image since v0.26.0 (format U0, issue #729), the engine images included (their guest is assembled
+from the same sources): the engine chain's proof of mainnet 1..200 commits an undo hash in every block's leaf. Normative sources: `prover/methods/guest/src/handover_pin.rs`
 (`undo_record_head`, `block_leaf_undo_preimage`, `PRE_UNDO_IMAGES`, `leaf_has_undo`) and `agg_lite.rs` (the chunks and
 the aggregate). `scripts/libzync/undo_ref.py` and `scripts/libzync/block_forest_ref.py` are independent
 implementations written from this document; `libzync/src/undo.rs` is the host and verifier side.
@@ -52,8 +53,9 @@ formats differ in tag and length, so no opening in one format can match a leaf o
 - **Block 0** (the genesis anchor, proved by no image) always has the 0x02 leaf. The per-network genesis anchor
   (`852c5c7e…` mainnet, `3b67ead0…` signet) is therefore unchanged.
 - A block proved by an image in `PRE_UNDO_IMAGES` has the 0x02 leaf: v0.23.0-v0.25.0's mainnet `8888d59c` and signet
-  `d4210dae`. Their receipts still verify (the verifier keeps them by id), and no block they proved carries an undo hash.
-- Every other block has the 0x05 leaf. The v0.26.0 images have an empty lineage, so every block from 1 on.
+  `d4210dae` (RISC Zero; their receipts are checked with v0.27.1's verifier). No block they proved carries an undo hash.
+- Every other block has the 0x05 leaf. The v0.26.0 images and the engine images have an empty lineage, so every block
+  from 1 on.
 
 The proving image of block `h` comes from the lineage: the first handover entry with `h < first_height`, else the
 tip proof's own image (`handover_pin::image_at`). A future image that continues a v0.26.0 chain by a handover keeps

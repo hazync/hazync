@@ -3,26 +3,16 @@
 **libzync is the engine of Hazync v2.** Hazync v1 was the original "Core" design (one CORE guest, last released as
 v0.22.1, image `37987b85…`); its documents are kept as a record in [`docs/history/`](../history/).
 
-**On `main` since 2026-11-08 (#670). Released as v0.24.0 (2026-11-12) on RISC Zero 3.1.0**
-([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md)); the current release is v0.27.0 (20.11.2026), core images
-unchanged since v0.26.0. **Published images** (frozen core c14 guest source,
-tag `libzync-c14` = `ce4e1e3`, rebuilt on risc0 3.1.0 at `7dfb05b`; built by `reproduce/libzync.Dockerfile`,
-reproduced by two builds and by CI): mainnet **`46666b6f…`** (v0.26.0; from genesis, with the per-block undo-data commitment,
-[`UNDO.md`](UNDO.md)), signet **`01a80f17…`**, header-chain zyncAPP
-**`de54b94f…`** (v0.27.0, with an MMR of every block hash; `2db34e12…` in v0.24.0 to v0.26.1), and the other zyncAPPs'
-images ([`../../reproduce/LIBZYNC_IDS`](../../reproduce/LIBZYNC_IDS)). v0.23.0 (risc0 3.0.5, mainnet
-`863c9ce3…`, signet `73b62530…`) is **withdrawn**: 3.1.0 fixes soundness bugs in RISC Zero's proof system, and 3.1.0
-verifiers refuse 3.0.x receipts. Laptop builds of the same source give other ids (on 3.0.5, mainnet `bbf82800…`),
-because ids depend on absolute build paths; several results below were measured on those or on 3.0.5 images and say
-so. Every number names what it was measured on and says MEASURED or ESTIMATED. Status of every item, built or
-open: [`ROADMAP.md`](ROADMAP.md). The report this replaces (design B, review rounds 1-8 in full) is
-[`LIBZYNC_2026-10-31.md`](../../history/experimental/libzync-bench/retired-docs/LIBZYNC_2026-10-31.md).
-
-**In service (2026-11-12):** the public board (api.hazync.org) runs Hazync v2 under `8888d59c` since 2026-11-12 (from genesis again under `46666b6f` at v0.26.0),
-restarted from genesis (first run: 1,287 blocks proven on 4× RTX PRO 6000 in 2 h 32 min of proving); the whole header chain is
-proved in one receipt (under `2db34e12`, and again under `de54b94f` with the MMR on 15.11.2026) and followed at the
-tip on CPU; zyncAPP pages are live on hazync.org
-(`/zapps/`, `/headers/`, `/zapp/`); the Windows CUDA host proves natively.
+**The prover is moving to OpenVM (27.11.2026).** libzync was released on RISC Zero 3.1.0 from v0.24.0 to v0.27.1
+([`RELEASE_NOTES_v0.24.0.md`](../RELEASE_NOTES_v0.24.0.md) on); that chain stopped on 26.11.2026 and its proofs are
+checked with v0.27.1's verifiers. The same guest source (Core v28.0's consensus code, libsecp256k1, the coin log, the
+counting trie, the live-coin hash, the block forest) is now proved on OpenVM v2.1.0 (branch `engine/openvm`,
+[`engine/ENGINE.md`](../../engine/ENGINE.md), [`engine/ROADMAP.md`](../../engine/ROADMAP.md)), and every verifier checks
+engine proofs only. Measured: mainnet 1..200 from genesis on one RTX A6000 in 2,866 s (engine/results/zapp_hints);
+block 976,379 in 183 s on one A6000 with three provers (engine/ENGINE.md, Defaults); the whole header chain in one
+proof in 266.2 s on one RTX PRO 6000 (engine/results/zapp_headers; 99.5 min on RISC Zero). No engine image is
+published yet: the images freeze at Stage 4, after review, and the chain is then proved again from genesis. Every
+number names what it was measured on and says MEASURED or ESTIMATED. The RISC Zero results below say so.
 
 ⛔ **Not audited, no proof of the whole mainnet chain's blocks yet** (the header chain is proved). See §7.
 
@@ -30,13 +20,14 @@ tip on CPU; zyncAPP pages are live on hazync.org
 
 ## 1. In one paragraph
 
-libzync, the engine of Hazync v2, is a RISC Zero zkVM guest (risc0-zkvm 3.1.0) and its host, which prove every Bitcoin
-block valid from genesis by running **Bitcoin Core v28.0's own consensus code** (interpreter, sighash, serialisation,
-CheckTransaction, merkle, PoW and retarget) and libsecp256k1 0.5.1, compiled to rv32im. A block is split into
+libzync, the engine of Hazync v2, is a zkVM guest (proved on OpenVM v2.1.0 since 27.11.2026; on RISC Zero 3.1.0
+before) and its host, which prove every Bitcoin block valid from genesis by running **Bitcoin Core v28.0's own
+consensus code** (interpreter, sighash, serialisation, CheckTransaction, merkle, PoW and retarget) and libsecp256k1
+0.5.1, compiled to rv32im. A block is split into
 **chunks** that run Core's `VerifyScript` on the inputs they own, with every signature's group equation checked by one
-batch per chunk; an **aggregate** verifies the chunk receipts and the previous block's chain proof, applies the
+batch per chunk; an **aggregate** verifies the chunk proofs and the previous block's chain proof, applies the
 block-level rules, and commits the new chain state. Coins are kept in an append-only **coin log** that is sound at
-every block; a **counting trie**, updated in its own receipt, answers script-keyed questions (absence, history,
+every block; a **counting trie**, updated in its own proof, answers script-keyed questions (absence, history,
 balances); a **live-coin multiset hash** lets a new node check a downloaded UTXO set. A **block forest** commits every
 block and the coin state after it, a **handover** lets a new image continue a chain, and **joins** fold independently
 proved blocks into one proof. **zyncAPPs** are separate guests that verify a core proof and answer one question with
@@ -133,6 +124,9 @@ core proof, checked in the browser by the WASM verifier). New core facts are app
 `ChainState` only at a handover. Proof bundle format: [`PROOF_BUNDLE.md`](PROOF_BUNDLE.md).
 
 ## 4. Measured
+
+The table is the RISC Zero build's (risc0 3.0.5 and 3.1.0, as each row says), kept as a record. The engine's
+measurements are in `engine/results/` (summary: engine/ENGINE.md and engine/ROADMAP.md).
 
 | what | measured on | result | source |
 |---|---|---|---|
@@ -250,45 +244,29 @@ signedness bug was in Hazync's own transcription.
 
 ## 7. Limits and open work
 
-- **No proof of the whole mainnet chain's blocks yet.** Real receipts from published 3.1.0 images: mainnet 1..200
-  from genesis (`8888d59c`, 3,074 s on one RTX PRO 6000; `experimental/libzync-bench/zapp/`), the whole header chain
-  (`2db34e12`, and `de54b94f` with the MMR), and the public board's proofs from genesis (1,287 blocks in its first run, 11-12). Earlier receipts
-  (3.0.5 image `863c9ce3`, and laptop-built images: block 962,000, the 8-block join tree, 16 leaf proofs on real
-  mainnet state; `experimental/libzync-bench/results/`) are kept as records; 3.1.0 verifiers refuse them. Signet is
-  proved 1..2,600 from genesis in dev mode.
-- **The board proves from genesis; the tip is not followed yet.** The board box's paced prep pass
-  (`libzync-board-prep`) writes one leaf bundle per block (LZLEAF02) under `/srv/bulk/libzync-board/leaves`; the
-  coordinator (`server.py` with `HAZYNC_LIBZYNC=1`) serves them as claims, and adjacent proofs are folded by joins.
-  There is no v2 bridge: following the tip with libzync is not running yet (ROADMAP N). Reorg handling for it (P1 to
-  P6, [`REORG.md`](REORG.md)) is released in v0.27.0, with automatic rewinds off. The separate paper prep run
-  (`libzync-prep`, state before every block toward the tip) is described in ROADMAP, mainnet prep plan.
+- **No proof of the whole mainnet chain's blocks yet.** On the engine: mainnet 1..200 from genesis (engine/results),
+  edge and attack blocks (engine/results/edge_blocks, q7_attack_blocks), the whole header chain in one proof. On RISC
+  Zero (records; v0.27.1's verifiers check them): mainnet 1..200 under `8888d59c`, the whole header chain under
+  `de54b94f`, and the public board's proofs from genesis (stopped 26.11.2026).
+- **The board is paused.** It moves to the engine with Stage 3 (engine/ROADMAP.md 3.1-3.4: tip pipeline, board and
+  coordinator, prep in node format 2, path services); reorg handling (P1 to P6, [`REORG.md`](REORG.md)) carries over.
 - **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money. Fuzzing and a
   wider rig are open (I1).
 - **The batch-signature soundness margin is untested at the edge:** x = r + n is infeasible for real r and effectively
   untested (ROADMAP I1).
-- **Trust in risc0:** one pinned version, 3.1.0 (I3). 3.0.x receipts, including v0.23.0's, are refused.
+- **Trust in OpenVM:** one pinned version, v2.1.0, with every verifying key pinned by its SHA-256 (engine/VERIFIER.md).
+  Its audit coverage for 2.x is an open question for the Stage 4 freeze (engine/ROADMAP.md 1.7).
 - Not consensus: adoption is through the verifiers and, later, Ghost's coinbase (I6). Tip latency and the cost levers
   are in ROADMAP I7 and M.
 
 ## 8. Reproduce
 
-```bash
-scripts/libzync-base.sh ~/lz-base                       # Core v28.0 + libsecp 0.5.1 + patches, pinned
-cd prover && rm -rf target/riscv-guest                  # always build the guest from clean (round 8: stale ELF)
-HAZYNC_BASE=~/lz-base HAZYNC_LIBZYNC=1 cargo build --release -p host     # signet: HAZYNC_NETWORK=signet
-host method-id                                          # a laptop build prints its own id; the published 46666b6f is the container build
-HAZYNC_BLOCK=block.json host libzync-hints out.lzb      # a block's hint bundle
-HAZYNC_BLOCK=block.json HAZYNC_LZ_HINTS=out.lzb host agg-exec-fake      # execute chunks + aggregate, print cycles
-host libzync-prove-range 1 200 <json dir> genesis <out>                 # prove a range from genesis
-host libzync-prep <lo> <hi> <json dir> genesis <out>                    # native states for anchored leaves
-host libzync-join left.rcpt right.rcpt out.rcpt                         # join two adjacent proofs
-host libzync-verify block_H.rcpt --bitcoin-cli "bitcoin-cli"            # §5 of SWIFTSYNC_PROOFS.md
-host core-vectors                                       # Core's script / tx vectors (scripts/libzync/core_vectors.py)
-```
-
-Full test pass: `experimental/libzync-bench/handover/retest_final.sh <tag> <previous tag>` (`SN=100` for the short
-pass). GPU: `experimental/libzync-bench/gpu/run_c14_pod.sh`, `gpu-libzync-multi.sh`, `gpu-join.sh`. A published id
-needs the container build, `reproduce/libzync.Dockerfile` (ids depend on absolute build paths).
+The engine: engine/guest/base.sh and assemble.sh build the guest from this checkout's sources, `hzengine build` makes
+the image and its keys, `hzengine prove-block` / `serve` prove, and `hzengine pack` writes the proof file (`HZE1`) and
+key file a reader takes (engine/ENGINE.md, engine/VERIFIER.md). The reproducible container build of the engine images
+is Stage 4 work (engine/ROADMAP.md 4.1). A reader checks a proof with `swiftsync-verify --image <hex> --vk <key file>
+<proof.hze>` (SWIFTSYNC_PROOFS.md §5). The RISC Zero build's commands (`host libzync-prove-range`, `libzync-join`,
+`libzync-verify`, `reproduce/libzync.Dockerfile`) are in this file's git history and v0.27.1.
 
 Related Hazync docs: [`SECURITY.md`](../../SECURITY.md),
 [`BUILD_AND_RELEASE.md`](../BUILD_AND_RELEASE.md), [`COORDINATOR.md`](../COORDINATOR.md),

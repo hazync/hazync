@@ -1,9 +1,13 @@
 # libzync: image handover and the block forest
 
-Status: in the frozen core c14 and so in every published image. No published image pins a predecessor yet: v0.26.0's
-`lineage/*.rs` lists are all empty (the board re-proves from genesis so that every block carries the undo-data
-commitment, [UNDO.md](UNDO.md)). The machinery is tested in CI on test variants (§8, ../HANDOVER.md §4). The operational runbook, including the cross-RISC-Zero case, is
-[`../HANDOVER.md`](../HANDOVER.md). Normative sources are `prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
+Status (27.11.2026): the format (new fields, block forest, handover step, lineage digest, what a verifier checks:
+§2-§7) is the core's, and the engine guest keeps it unchanged (it is assembled from the same guest sources,
+`handover_pin.rs` and `src/lineage/` included). No image pins a predecessor yet: every lineage list is empty, and the
+engine chain is proved from genesis. Across a prover upgrade the engine's own mechanism is engine/HANDOVER.md (a
+predecessor's proof checked in-guest by the old OpenVM version's verifier; rehearsed v2.0.2 -> v2.1.0 on block 200,
+engine/results/handover_step3). The RISC Zero cross-version path (§4 "Across a RISC Zero upgrade") and the tests of §8
+are RISC Zero's, kept as records. The board's runbook is [`../HANDOVER.md`](../HANDOVER.md). Normative sources are
+`prover/methods/guest/src/handover_pin.rs`, `src/lineage/` and
 `aggregate()` in `prover/methods/guest/src/main.rs`. `scripts/libzync/block_forest_ref.py` is an independent
 implementation written from this document.
 
@@ -34,7 +38,7 @@ Added to `ChainState` after `profile`, in this order:
 satoshis held by the coin forest). From the image freeze on, the layout only grows at the end:
 
 - A field is never reordered, removed or changed in type. A new one is appended, and `version` goes up by one.
-- risc0's serde reads fields in order and ignores trailing words, so a reader built for version n (a verifier, a
+- the journal's word encoding (risc0's serde format, `engine/journal`) reads fields in order and ignores trailing words, so a reader built for version n (a verifier, a
   zyncAPP) decodes the prefix it knows from any later journal. A zyncAPP therefore keeps working across a handover
   that adds fields, and a handover is the window in which a zyncAPP that needs a new core fact gets it.
 - The reverse does not hold: an image of version n+1 cannot decode a version-n journal as its own struct (the new
@@ -132,7 +136,7 @@ an empty list refuses `is_base = 2`.
 
 ⛔ **A new image that changes `ChainState` must decode the predecessor's format at step 2.** The guest marks the line.
 
-### Across a RISC Zero upgrade (2026-11-13)
+### Across a RISC Zero upgrade (2026-11-13; RISC Zero only, a record: the engine's is engine/HANDOVER.md)
 
 `env::verify` checks a receipt with THIS image's recursion circuit. Between RISC Zero 3.0.5 and 3.1.0 that circuit's
 constraints changed (`poly_ext.rs`, the taps and the control root all differ), so a 3.1.0 guest cannot check a 3.0.5

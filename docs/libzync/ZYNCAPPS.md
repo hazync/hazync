@@ -1,25 +1,25 @@
 # zyncAPPs: building on the core proof
 
-Status (release v0.27.0, 20.11.2026): eight zyncAPPs are released (§9). Four have guests of their own in
-`prover/zyncapps`, each image published in `reproduce/LIBZYNC_IDS`: `headers`, `hints`, `utreexo` and `utreexo-tip`;
-`assume`, `liveness`, `statement` and `deposit` are checks on a core proof and have no guest. `headers` (the header chain
-from genesis, ROADMAP K1) is **published and proved**: image `de54b94f…` (risc0 3.1.0; with an MMR of every block hash,
-released in v0.27.0; v0.24.0 to v0.26.1 shipped `2db34e12…`), genesis..975,278 in one receipt (99.5 min on one RTX PRO
-6000, RELEASE_NOTES_v0.27.0), kept at the tip by `hazync-headers-follow`, checked in the browser at hazync.org
-`/headers/`. `coin` (version 2: a coin, given by its fields, which the guest hashes to its leaf and commits,
-unspent or spent at the core tip, the core receipt verified in the zkVM) is built and tested on laptop images
-(`3f503000`, risc0 3.0.5); no `coin` id is published. hazync.org `/zapp/` (Coin check) does not use that guest: it
-checks counting-trie balance and history facts (§2, §8) against the fixed mainnet 1..200 core proof in the browser.
-`zeroconf` (D5) is being built; the rest is design. The core facts in §2 exist in `ChainState` version 2
-(SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is `libzync::facts::check_core_statement`.
+Status (27.11.2026): eight zAPP modules (§9). Five guests of their own are in `prover/zyncapps`: `headers`, `hints`,
+`utreexo`, `utreexo-tip` and `zeroconf`; `assume`, `liveness`, `statement` and `deposit` are checks on a core proof and
+have no guest. Every guest is proved on the engine (OpenVM) and every verifier checks engine proofs only
+(engine/ROADMAP.md 2.3, 2.5). `headers` (the header chain from genesis, ROADMAP K1): the whole chain 0..975,278 in one
+engine proof, 266.2 s on one RTX PRO 6000 Blackwell Workstation Edition (99.5 min on RISC Zero; its MMR root equal to
+RISC Zero's; engine/results/zapp_headers). No engine image is published yet (the Stage 4 freeze), so every check names
+the images and keys. Until 27.11.2026 the zAPPs ran on RISC Zero (released in v0.27.0, images in
+`reproduce/LIBZYNC_IDS`); that chain's proofs are checked with v0.27.1's verifiers. hazync.org `/zapp/` (Coin check)
+checks counting-trie balance and history facts (§2, §8) in the browser. The `coin` guest (version 2) was built and
+tested on RISC Zero laptop images only (`3f503000`); it has no engine build. The core facts in §2 exist in
+`ChainState` version 2 (SWIFTSYNC_PROOFS.md §3, HANDOVER.md §2); the shared check of §4 is
+`libzync::facts::check_core_statement`.
 
 ## 1. Core and zyncAPPs
 
 - **The core** proves one statement: the chain ending at `tip_hash` is valid Bitcoin under Core's rules, from
   genesis to `height`. It is public, free and as small as possible. Its output is `ChainState`.
-- **A zyncAPP** is a separate small guest. It verifies a core receipt inside the zkVM and answers one question with
+- **A zyncAPP** is a separate small guest. It verifies a core proof inside the zkVM and answers one question with
   it: "these coins exist at H and I control them", "this payment is in the chain", "the UTXO set holds X sat".
-  It has its own image id and its own receipt. A zyncAPP never changes the core.
+  It has its own image id and its own proof. A zyncAPP never changes the core.
 
 ## 2. What a zyncAPP can use (ChainState version 2)
 
@@ -34,7 +34,7 @@ checks counting-trie balance and history facts (§2, §8) against the fixed main
 | every block in the chain, and the coin state after it | `block_roots`, `block_leaves` (HANDOVER.md §3) | a block at a height is in this chain; with a Merkle branch, any transaction; with the coin log, any coin's state at that height |
 | what was checked | `profile` | network; scripts and signatures checked or skipped |
 | where it started | `anchor_id` | genesis-anchored (or not) |
-| which images proved it | `self_id`, `lineage` | the image that made the receipt and the handovers behind it |
+| which images proved it | `self_id`, `lineage` | the image that made the proof and the handovers behind it |
 
 **What the counting trie holds** (review round 2, 11-05). Every output Core puts in its coin set, keyed by
 (SHA-256(scriptPubKey), coin key), where the coin key is the txid with the output index XORed, little-endian, into its
@@ -63,7 +63,8 @@ hints file's height H, was retired in E2.)
 - **At the next handover,** if it needs a fact the core does not commit. The fact is appended to `ChainState` and
   `version` goes up by one (HANDOVER.md §2). The handover is the core's release window: zyncAPPs that need new facts
   are queued for it. A soundness fix or a soft fork can force an earlier handover.
-- Appending never breaks an existing zyncAPP: risc0's serde reads fields in order and ignores trailing words, so a
+- Appending never breaks an existing zyncAPP: the journal's word encoding (risc0's serde format, which the guests
+  keep; `engine/journal`) reads fields in order and ignores trailing words, so a
   zyncAPP built for version n decodes the prefix it knows from any later journal.
 
 ## 4. Template
@@ -73,7 +74,7 @@ first handover, when the newest core id changes.
 
 ```
 inputs:  core_id, core_journal, <the question's own inputs>
-1. env::verify(core_id, core_journal)                  the receipt is a real core receipt of core_id
+1. env::verify(core_id, core_journal)                  a core proof of core_id exists and verifies (OpenVM deferral)
 2. J = decode the ChainState prefix this zyncAPP knows (version >= the version it needs)
 3. check_core_statement(J, core_id):                   the same function in every zyncAPP
      J.kind == KIND_CHAIN, J.version >= needed, J.self_id == core_id
@@ -84,16 +85,15 @@ inputs:  core_id, core_journal, <the question's own inputs>
 ```
 
 `check_core_statement` exists because the core image id is not enough on its own: the `is_base` bug (LIBZYNC.md §7)
-was a check the receipt's id could not catch. Every zyncAPP repeats the same checks, from one shared source file.
+was a check the image id could not catch. Every zyncAPP repeats the same checks, from one shared source file.
 
 ### What the zyncAPP's verifier checks
 
-The zyncAPP's receipt verifies against the zyncAPP's own id. From its journal, the verifier then checks what the
+The zyncAPP's proof verifies against the zyncAPP's own id, under that image's pinned key (engine/VERIFIER.md). From its journal, the verifier then checks what the
 zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does for a core proof:
 
 - `core_id` is a published core image, and `lineage` is that image's (§6 of HANDOVER.md). Which core images to trust
   is the verifier's decision, the same one it makes for a core proof.
-- the zyncAPP receipt is a real proof: not a FakeReceipt, and `RISC0_DEV_MODE` not set in the verifier.
 - `anchor_id` is the network's PINNED genesis anchor (SWIFTSYNC_PROOFS.md §5 step 3).
 - `cum_work` is at least Core's `nMinimumChainWork` for the network (§5 step 3a); below it the answer is about a
   valid chain, but not shown to be the network's.
@@ -105,8 +105,8 @@ zyncAPP could not know inside the zkVM, exactly as SWIFTSYNC_PROOFS.md §5 does 
 ## 5. Publishing a zyncAPP
 
 - **Source is public.** A user must be able to rebuild the zyncAPP and get the same image id, as `reproduce/` does for
-  the core. A zyncAPP whose source is hidden cannot be trusted, whatever its receipt says.
-- **Its id is published** next to the core ids, with the core versions it reads.
+  the core. A zyncAPP whose source is hidden cannot be trusted, whatever its proof says.
+- **Its id and key pin are published** next to the core ids, with the core versions it reads.
 - **Nothing commercial in the guest.** Payment, accounts and rate limits live outside the proofs.
 
 ## 6. Examples
@@ -176,20 +176,21 @@ byte-identical (`./build.sh`, sha256 in `swiftsync-verify-wasm/README.md`). Ever
 
 | path | what |
 |---|---|
-| `zapps/<name>/` | the check library (`zapp_<name>`), on `swiftsync-verify` as a library (receipt verification, chain state, facts) |
+| `zapps/<name>/` | the check library (`zapp_<name>`), on `swiftsync-verify` as a library (proof verification, chain state, facts) |
 | `zapps/<name>/cli/` | its CLI `zapp-<name>`, a crate of its own: only it links `zapps/common`, so the library, C ABI and WASM module carry no CLI code |
 | `zapps/<name>/wasm/` | its own WASM module (`build.sh`: the core's flags, `scripts/wasm-build.sh`), JS glue `zapp-<name>.js`, README with its sha256 |
 | `zapps/<name>/ffi/` | its C ABI, only where the zAPP has one; beside the core's `libswiftsync_verify.a`, link the zAPP's `.so` (two Rust static archives in one binary clash) |
 | `zapps/<name>/test.sh` | all its tests, run from its own directory by CI's `zapps` job (`scripts/check-test-surfaces.sh` §1, §6); it checks the built `.wasm` against the README's sha and links its C ABI beside the core's (`scripts/zapp-checks.sh`) |
 | `zapps/common/` | not a zAPP: what every zAPP CLI shares, so each takes the same chain-identity flags as the core verifier (`--expect`, `--mempool` / `--mempool-url`, `--bitcoin-cli`), on the core library's `parse_expect` / `identity_matches`. CLIs only |
-| `zapps/corecheck/` | not a zAPP: the core receipt check a zAPP resting on a core proof makes first (the image named, the receipt verified by the core verifier, its tip compared with the caller's `expect`); no CLI code, so a zAPP's library, C ABI and WASM module may use it |
+| `zapps/corecheck/` | not a zAPP: the core proof check a zAPP resting on a core proof makes first (the image and key named, the proof verified by the core verifier, its tip compared with the caller's `expect`); no CLI code, so a zAPP's library, C ABI and WASM module may use it |
 
 | zAPP | module | CLI | WASM glue | C ABI |
 |---|---|---|---|---|
-| Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`, `headersImageId`) | none |
+| Header chain (ROADMAP K1, N3; `coordinator/deploy/headers`) | `zapps/headers` | `zapp-headers` | `zapp-headers.js` (`verifyHeaders`; `headersImageId` "" until one is published) | none |
 | SwiftSync hints (HINTS_ZAPP.md) | `zapps/hints` | `zapp-hints` | `zapp-hints.js` (`verifyHints`) | `zapps/hints/ffi` (`swiftsync_verify_hints`, `zapp_hints.h`) |
 | assumevalid / assumeutxo (ASSUME_ZAPPS.md) | `zapps/assume` | `zapp-assume` (`assumevalid`, `assumeutxo`) | `zapp-assume.js` (`verifyAssume`) | `zapps/assume/ffi` (`swiftsync_verify_assume`, `zapp_assume.h`) |
 | Coin liveness (LIVENESS_ZAPP.md) | `zapps/liveness` | `zapp-liveness` (also `prove`, `serve`) | `zapp-liveness.js` (`verifyLiveness`) | `zapps/liveness/ffi` (`zapp_liveness_verify`, `zapp_liveness.h`) |
 | Balance statement (STATEMENT_ZAPP.md) | `zapps/statement` | `zapp-statement` (also `draft`, `message`, `sign`, `add-sig`, `test-key`) | `zapp-statement.js` (`verifyStatement`) | none |
 | Deposit proof (DEPOSIT_ZAPP.md) | `zapps/deposit` (on `zapps/headers`) | `zapp-deposit` (also `build`, `mmr-path`) | `zapp-deposit.js` (`verifyDeposit`) | none |
-| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`; base and tip receipts) | `zapp-utreexo.js` (`verify`, `imageId`, `tipImageId`) | none |
+| Utreexo roots (UTREEXO_ZAPP.md) | `zapps/utreexo` | `zapp-utreexo` (`verify`, `id`; base and tip proofs) | `zapp-utreexo.js` (`verify`, `imageId`, `tipImageId`) | none |
+| Zero-confirmation transaction (`zapps/zeroconf/README.md`) | `zapps/zeroconf` | `zapp-zeroconf` | none | none |

@@ -3,7 +3,15 @@
 Status: written 16.11.2026 as the plan, then carried out before the v0.27.0 merges: the fuzz targets (§3.4), the
 cargo-mutants pass of 17.11.2026 and its verdict-path tests (§3.5) and the regtest harness (§3.2,
 `scripts/zapp-regtest/`) are in the code, which cites this file. All eight PRs are released in v0.27.0 (20.11.2026).
-The rest of this file is the plan as written. It covered the eight zAPP PRs that were open as drafts then: #724 header MMR, #726 block check, #731 hints, #740 assumevalid / assumeutxo, #741 liveness,
+The rest of this file is the plan as written, on the RISC Zero receipts of the time.
+
+**On the engine (27.11.2026).** The verifiers check engine (OpenVM) proofs only. What carried over: the fuzz targets
+and verdict-path tests, run on the engine fixtures (each zAPP's `tests/data/engine*`, `swiftsync-verify/vectors`) by
+every `zapps/*/test.sh`. What did not: the regtest harness's receipt checks (its `test-regtest.sh` scripts and the
+regtest receipt tests went with the RISC Zero front; they come back with engine proofs of that chain, of which only
+block 110 exists), the whole-chain OK cases on the RISC Zero header receipt, and every dev-mode, FakeReceipt and
+composite-receipt case (there is no such thing for an engine proof; a key that is not the pinned one is the new
+refusal). engine/CUTOVER.md lists the deleted tests. It covered the eight zAPP PRs that were open as drafts then: #724 header MMR, #726 block check, #731 hints, #740 assumevalid / assumeutxo, #741 liveness,
 #742 balance statement, #743 deposit, #744 Utreexo roots (prototype), and the code they share (`zapps/common`,
 `zapps/corecheck`, `scripts/zapp-checks.sh`, `scripts/wasm-build.sh`). Each zAPP is its own module (ZYNCAPPS.md §9).
 

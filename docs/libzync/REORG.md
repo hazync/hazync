@@ -1,5 +1,9 @@
 # Reorg handling for the libzync board (design)
 
+> **27.11.2026:** this page describes the RISC Zero board (stopped 26.11.2026). Its prep, coordinator and follower
+> design carries over to the engine; the commands, image ids and measurements here are that board's, and the page is
+> brought up to date when the board moves to the engine (engine/ROADMAP.md 3.2-3.4).
+
 > **Design, 16.11.2026; P1 and P2 built the same day** (branch `feat/reorg-p1-p2`, §15), P3 too (§16), P4 and P6 on
 > 18.11.2026 (§17), P5 (followers) the same day (§18). All six are released in v0.27.0 (20.11.2026), with automatic
 > rewinds off (`HAZYNC_REORG_AUTO` unset; §17 says what turning them on requires). **D1, the tip run, on 20.11.2026
