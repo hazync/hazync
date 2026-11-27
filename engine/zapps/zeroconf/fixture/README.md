@@ -38,5 +38,20 @@ image id, txid / wtxid = T's, fee 10,000, weight 1,031, sigops 1. (A tip proved 
 enough for the zAPP, whose statement carries the anchor_id for its verifier to check; the chain from genesis is
 the core prover's, tested on mainnet 1..200.)
 
-Left: a spent input and an unconfirmed parent as fixture cases (both need their own chunk); the zeroconf verifier
-side (`zyncapp verify-zeroconf` on an engine proof: the statement's checks against a verified core state).
+## Two more cases, each with its own transaction and chunk (27.11.2026)
+
+`../make_fixture.py <zr> <tf> <out> spent|parent` and `../cases.sh` (build box, metering image; output: cases.out).
+The default fixture is unchanged by the new code: T.json and template_111.json were rebuilt byte-identical.
+
+| case | Core v31.1 (testmempoolaccept at 110) | the zeroconf guest |
+|---|---|---|
+| **spent**: T spends ALICE's P2PKH coin of block 102, which block 105 spent (log position 104, spent_by 105) | refused, "missing-inputs" | refused: "an input's coin is not unspent at the tip" |
+| **parent**, record 0: T, in a block that also holds T2 | allowed | ACCEPTED (the control) |
+| **parent**, record 1: T2 spends T:0 in the same block (its coin claims height 111, flag bit 1) | allowed as a package with T | refused: "an input spends an unconfirmed coin" |
+
+The speculative chunk is all_valid in all three cases: it checks the scripts, and the zAPP checks the coins. The last
+row is a deliberate difference from Core: an unconfirmed parent's coin is not in the coin log, so the zAPP cannot
+prove it unspent, and refuses it (the guest's own doc comment). A merchant who needs it waits for T to confirm.
+
+Left: the zeroconf verifier side (`zyncapp verify-zeroconf` on an engine proof: the statement's checks against a
+verified core state).

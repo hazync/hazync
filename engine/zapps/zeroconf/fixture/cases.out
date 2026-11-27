@@ -1,0 +1,15 @@
+0. default fixture unchanged (T.json, template_111.json byte-identical)
+== spent: spent case: ALICE's p2pkh coin bffc2f43cbf691028de7.. of block 102, spent in block 105 T 1174735efb215c7523dbefbed0f3c1d5623b1b6d8f53ee8eac71b94216cc36c8 (wtxid 1174735efb215c75..), 1 inputs, fee 1000
+   Core v31.1: testmempoolaccept: [{"txid": "1174735efb215c7523dbefbed0f3c1d5623b1b6d8f53ee8eac71b94216cc36c8", "wtxid": "1174735efb215c7523dbefbed0f3c1d5623b1b6d8f53ee8eac71b94216cc36c8", "allowed": false, "reject-reason": "missing-inputs"}]
+   chunk: all_valid 1, height 111
+   input leaf a2ad3c03b370ff48.. flags 0: log position 104, spent_by [105, 3, 0]
+   refused  T spending a coin spent by 110: /root/engine/zc_spent/zc_0.log-an input's coin is not unspent at the tip
+== parent: parent case: T2 784e05cb19f30625a318c6fc499eaccd2c33b8b2219e556cb1daef11a8b33e10 spends T:0 in the same block T 6c00b169f8895e0a7027c2f74753041f979f44d15015d12310913a3f140dbf38 (wtxid f4a83537af31977f
+   Core v31.1: testmempoolaccept: [{"txid": "6c00b169f8895e0a7027c2f74753041f979f44d15015d12310913a3f140dbf38", "wtxid": "f4a83537af31977fa357da8d09c009838edda166a8f77520bb746b7913a52f84", "allowed": true, "vsize": 258, "fees": {"base": 0.0001, "effective-feerate": 0.0003875
+   chunk: all_valid 1, height 111
+   input leaf bf57652e236a5ee1.. flags 0: log position 105, spent_by None
+   input leaf 448b4b8a9849fae8.. flags 0: log position 175, spent_by None
+   ACCEPTED T (record 0, its inputs unspent): the control
+   input leaf adea69b528f2551f.. flags 2: not in the log (zync-path: no such coin leaf in the log (coins created and s); given a dummy path
+   refused  T2 (record 1) spending T:0, an unconfirmed parent: /root/engine/zc_parent/zc_1.log-an input spends an unconfirmed coin
+ZC_CASES_DONE
