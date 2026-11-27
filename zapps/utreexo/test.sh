@@ -21,7 +21,7 @@ AB=$(printf 'ab%.0s' $(seq 32))
 cargo test --release --manifest-path ./Cargo.toml --features tip
 # the tip step's block rules natively (the BIP30 refusal on the real coinbases of 91,722 / 91,812): the guest's step.rs
 cargo test --release --manifest-path ./tip-step/Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo test --release --manifest-path ./cli/Cargo.toml
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-utreexo
 Z="$T/release/zapp-utreexo"

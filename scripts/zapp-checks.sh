@@ -4,6 +4,10 @@
 #   wasm_sha_is_the_readmes <built .wasm> <README.md>
 #       the module wasm/build.sh just built is the one its README pins (`sha256 (this commit, ...) | `<hex>``): a
 #       published sha nothing compares is a sha nothing guards.
+#   wasm_crate_test <wasm crate dir>
+#       the WASM crate's native unit tests against its COMMITTED Cargo.lock: the engine graph's, with OpenVM's patched
+#       tree (engine/scripts/wasm_ovm.sh) and --locked. A plain `cargo test` re-resolved the lock without the patches
+#       and the next wasm/build.sh refused it (27.11.2026).
 #   c_with_core <C file> <zAPP include dir> <zAPP target dir> <zAPP library name> <output>
 #       compile a C program that calls the core verifier's C ABI (swiftsync-verify-ffi, its static archive) and the
 #       zAPP's in one binary. The zAPP is linked as its cdylib (lib<name>.so): two Rust static archives in one binary
@@ -34,4 +38,16 @@ c_with_core() {
     rm -f "$out"
     cc -O2 -I"$inc" -I"$repo/swiftsync-verify-ffi/include" "$c" "$core" -L"$dir" -l"$lib" -Wl,-rpath,"$dir" \
        -lpthread -ldl -lm -o "$out" || { echo "::error::$c: did not compile and link beside the core's C ABI"; return 1; }
+}
+
+wasm_crate_test() {
+    local crate=$1
+    (
+        REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd) || exit 1
+        # shellcheck source=../engine/scripts/wasm_ovm.sh
+        . "$REPO/engine/scripts/wasm_ovm.sh"
+        ovm_make_tree
+        ovm_cfg "$REPO/$OVM_TREE"
+        cargo test --locked --release --manifest-path "$crate/Cargo.toml" "${OVM_CFG[@]}"
+    ) || { echo "::error::$crate: its native tests failed (or its Cargo.lock is not the engine graph's)"; return 1; }
 }

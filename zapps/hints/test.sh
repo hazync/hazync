@@ -15,7 +15,7 @@ V=$PWD/tests/data/engine
 K=(--image "$(cat $V/image_id)" --vk $V/vk.bin --core-image $CORE)
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 cargo test --release --manifest-path ./Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-hints
 Z=$CT/release/zapp-hints
 want() { # want <exit> <what> <command...>: the command's exit code is <exit>

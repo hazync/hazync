@@ -13,7 +13,7 @@ T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 FT=${CARGO_TARGET_DIR:-$PWD/ffi/target}
 cargo test --release --manifest-path ./Cargo.toml
 cargo test --release --manifest-path ./ffi/Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-assume
 bash test-assume.sh "$T/release/zapp-assume" || { tail -20 test-assume.out; exit 1; }
 tail -1 test-assume.out

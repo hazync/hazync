@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
 T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 cargo test --release --manifest-path ./Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-headers
 bash test_headers_verify.sh "$T/release/zapp-headers"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags): a node that names block 4,031 as

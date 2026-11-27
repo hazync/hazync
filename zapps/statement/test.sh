@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
 T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 cargo test --release --manifest-path ./Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-statement
 ./wasm/build.sh
 wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wasm wasm/README.md

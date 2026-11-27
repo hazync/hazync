@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 . ../../scripts/zapp-checks.sh
 T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 cargo test --release --manifest-path ./Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-deposit
 bash test_deposit.sh "$T/release/zapp-deposit"
 ./wasm/build.sh

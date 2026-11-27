@@ -11,7 +11,7 @@ cd "$(dirname "$0")"
 T=${CARGO_TARGET_DIR:-$PWD/cli/target}
 FT=${CARGO_TARGET_DIR:-$PWD/ffi/target}
 cargo test --release --manifest-path ./Cargo.toml
-cargo test --release --manifest-path ./wasm/Cargo.toml
+wasm_crate_test ./wasm
 cargo test --release --manifest-path ./cli/Cargo.toml
 cargo build --release --manifest-path ./cli/Cargo.toml --bin zapp-liveness
 bash vectors/run.sh "$T/release/zapp-liveness"
