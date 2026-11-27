@@ -5,7 +5,7 @@
 # (default reproduce/out-engine). Images: core (the production core guest, mainnet, default features) and zeroconf.
 #
 # Fixed inside the container: the commit's tracked files (`git archive HEAD`: uncommitted edits never reach an id) at
-# /root/engine-kit, the C/C++ base at /hz/base, the assembled guests at /hz/asm and /hz/zc, keys at /hz/keys-*, HOME /root.
+# /root/engine-kit, the C/C++ base at /hz/base, the assembled guests at /hz/asm and /root/engine/zg/zeroconf, keys at /hz/keys-*, HOME /root.
 # The keys are made here by `hzengine keygen` with HZ_GUEST_MEM_BITS=29 (the production VM config, the build box's
 # keys-rt29); the vm commitment depends only on them. The guests build with their pinned locks (reproduce/engine-locks,
 # OPENVM_BUILD_LOCKED=1: cargo --locked), never re-resolved.
@@ -13,7 +13,13 @@
 # dependency's location into its -C metadata (symbol names), which --remap-path-prefix does not touch. Measured on the
 # build box 27.11.2026 (engine/results/reproduce_engine): the same source with the kit at /root/r41/src/engine gave exe
 # 56d9b208..., at /root/engine-kit/engine 0ddcb255... (keys-ch's). The box's reference images were built from a kit at
-# /root/engine-kit, so this stage is that path. The assembled guest's own path does NOT reach the id (remapped).
+# /root/engine-kit, so this stage is that path.
+# ⛔ A zAPP guest's location reaches its id too: engine.rs remap_flags maps guest/../../.. as "the tree", the assembled
+# tree's root for the core guest (asm/prover/methods/guest) but, for a zAPP guest (one directory), the directory two above
+# it. Measured 27.11.2026: zeroconf assembled under /root/engine/zg/ gives exe b16bc53d... (keys-z-zeroconf3's, built at
+# /root/engine/zg/zeroconf3; the leaf name does not matter), under /root/r41/deep/a/b/ 2c7ab404..., at /hz/zc 4bc80f6d....
+# So it is assembled under /root/engine/zg/ here, as the reference was. To fix before the freeze (4.1/4.2): a remap
+# that does not depend on the layout, which moves every zAPP id once.
 # Needs docker and the network (crates, OpenVM, Core, libsecp).
 # A cargo cache volume (hazync-engine-cargo) keeps downloads between runs; HAZYNC_ENGINE_FRESH=1 starts from an empty one.
 set -euo pipefail
@@ -23,7 +29,7 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
     [ -f /etc/hazync-engine-build-container ] || { echo "$0: not the build container" >&2; exit 1; }
     for v in $(compgen -e | grep "^HAZYNC_\|^HZ_"); do [ "$v" = HAZYNC_ENGINE_IN_CONTAINER ] || unset "$v"; done
     t0=$(date +%s); say(){ echo "[$(( $(date +%s)-t0 )) s] $*"; }
-    K=/root/engine-kit; rm -rf /hz $K && mkdir -p /hz $K
+    K=/root/engine-kit; ZC=/root/engine/zg/zeroconf; rm -rf /hz $K /root/engine && mkdir -p /hz $K
     tar -x -f /in/src.tar -C $K
     commit=$COMMIT
     say "commit $commit (git archive); rustc $(rustc --version | cut -d' ' -f2), guest $(rustc +nightly-2026-02-28 --version | cut -d' ' -f2-4)"
@@ -33,13 +39,13 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
     $K/engine/guest/base.sh /hz/base > /hz/base.log 2>&1 || { tail -5 /hz/base.log; exit 1; }
     $K/engine/guest/assemble.sh /hz/asm > /hz/asm.log 2>&1 || { tail -5 /hz/asm.log; exit 1; }
     cp $K/reproduce/engine-locks/core.Cargo.lock /hz/asm/prover/methods/guest/Cargo.lock
-    $K/engine/zapps/assemble_guest.sh zeroconf /hz/zc > /hz/zc-asm.log 2>&1 || { tail -5 /hz/zc-asm.log; exit 1; }
-    cp $K/reproduce/engine-locks/zeroconf.Cargo.lock /hz/zc/Cargo.lock
+    $K/engine/zapps/assemble_guest.sh zeroconf $ZC > /hz/zeroconf-asm.log 2>&1 || { tail -5 /hz/zeroconf-asm.log; exit 1; }
+    cp $K/reproduce/engine-locks/zeroconf.Cargo.lock $ZC/Cargo.lock
     say "base and guests assembled"
     HZ_GUEST_MEM_BITS=29 $E keygen --dir /hz/keys > /hz/keygen.log 2>&1 || { tail -5 /hz/keygen.log; exit 1; }
     say "keygen: $(grep -a '^keygen:' /hz/keygen.log); sdk.pk $(sha256sum /hz/keys/sdk.pk | cut -c1-16) agg.vk $(sha256sum /hz/keys/agg.vk | cut -c1-16) openvm.toml $(sha256sum /hz/keys/openvm.toml | cut -c1-16)"
     mkdir -p /out
-    for spec in core:/hz/asm/prover/methods/guest zeroconf:/hz/zc; do
+    for spec in core:/hz/asm/prover/methods/guest zeroconf:$ZC; do
         n=${spec%%:*}; g=${spec#*:}; k=/hz/keys-$n
         rm -rf $k && mkdir $k && cp /hz/keys/{sdk.pk,agg.vk,openvm.toml} $k/
         OPENVM_BUILD_LOCKED=1 HZ_BASE=/hz/base $E build --dir $k --guest $g > /hz/$n.build.log 2>&1 \
