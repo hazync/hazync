@@ -22,14 +22,13 @@ ok   a height above the proof's tip (rc 1): liveness proof for f4184fc596403b9d6
 ok   tampered witness (log path) (rc 1): liveness proof for f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0 at 200: the coin is no
 ok   tampered witness (block path) (rc 1): liveness proof for 0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9:0 at 169: that block, wi
 ok   a byte appended (rc 1): liveness proof: bytes after the end of the proof
-ok   dev-mode receipt (FakeReceipt) (rc 1)  [FAIL] the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
-ok   RISC0_DEV_MODE set (the real receipt) (rc 1)
-ok   --image the current id, a receipt of an earlier image (rc 1)  [FAIL] the receipt is of image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet), n
-ok   no --image: the earlier image the receipt names (rc 2)
-ok   a receipt with one seal bit flipped (rc 1)  [FAIL] receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (main
+ok   no --image / --vk (rc 1)
+ok   another core image id (rc 1)  [FAIL] engine proof verifies against image abababababababababababababababababababababababababababababababab 
+ok   a key that is not the image's (rc 1)  [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 
+ok   a proof with one bit flipped (rc 1)  [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 
 ok   your node agrees (hash and chainwork) (rc 2)
 ok   your node names another block (rc 1)  [FAIL] your node's getblockheader 0000000000000000000000000000000000000000000000000000000000000001 has no ch
 ok   an --expect your node contradicts (rc 1)  [FAIL] your node says block 200 is 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320, --expec
 ok   zapp-liveness prove reproduces b9_0_at200.hex
 ok   zapp-liveness prove refuses an output that does not exist
-LIVENESS_CLI: 34 passed, 0 failed
+LIVENESS_CLI: 33 passed, 0 failed

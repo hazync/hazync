@@ -8,9 +8,9 @@
 //! ```
 //!
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image]`
-//! `[u64 now][u32 n][receipt or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis][u32 n][image id hex, n = 0 for the
-//! built-in id][u32 n][JSON {"liveness": [{"proof": hex, "ask": question}]}][u32 n][expect "<height>:<hash>", n = 0 for
-//! none]`. Each question must claim its answer (=unspent / =spent...): this returns whether the claims hold. `expect` is
+//! `[u64 now][u32 n][engine proof file or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis][u32 n][image id hex]
+//! [u32 n][JSON {"liveness": [{"proof": hex, "ask": question}]}][u32 n][expect "<height>:<hash>", n = 0 for
+//! none][u32 n][the core image's verifying key file][u32 32][the key's pin: SHA-256 of that file]`. Each question must claim its answer (=unspent / =spent...): this returns whether the claims hold. `expect` is
 //! the network's block at the proof's height from a source the PAGE trusts, never the fact server (an "expect" key
 //! inside the JSON is refused). Glue: zapp-liveness.js.
 
@@ -64,6 +64,8 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
         let code = f.take(1)?[0];
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let (receipt, anchor_json, image_hex, facts, expect) = (f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?);
+        let vk = f.chunk()?;
+        let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is 32 bytes".to_string())?;
         if f.i != input.len() {
             return Err("input frame has trailing bytes".to_string());
         }
@@ -73,18 +75,20 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
             n => return Err(format!("unknown network code {n}")),
         };
         let image_hex = std::str::from_utf8(image_hex).map_err(|_| "image id is not text")?;
-        let image = zapp_liveness::image_for(network, image_hex, code & 0x10 != 0, code & 0x20 != 0)?;
+        if image_hex.trim().is_empty() || vk.is_empty() {
+            return Err("no engine core image is published yet: give the image id, its verifying key and pin".to_string());
+        }
+        let image = zapp_corecheck::with_key(zapp_liveness::image_for(network, image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, Some(&pin))?;
         let anchor: Option<ChainState> = if anchor_json.is_empty() { None } else {
             Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
         };
         // {"liveness": [...]} and no other key; an "expect" inside it refused (zapp_liveness::facts_from_json)
         let lives = zapp_liveness::facts_from_json(facts)?;
         let expect = std::str::from_utf8(expect).map_err(|_| "expect: not UTF-8".to_string())?.trim().to_string();
-        Ok((receipt, image, !image_hex.trim().is_empty(), anchor, now, lives, expect))
+        Ok((receipt, image, anchor, now, lives, expect))
     })();
-    let (receipt, image, pinned, anchor, now, lives, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
-    // an image id given is the only image the receipt may verify against (pinned)
-    let o = zapp_liveness::verify_liveness(receipt, image, pinned, anchor, now, &lives, Some(expect.as_str()).filter(|e| !e.is_empty()), true);
+    let (receipt, image, anchor, now, lives, expect) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let o = zapp_liveness::verify_liveness(receipt, image, anchor, now, &lives, Some(expect.as_str()).filter(|e| !e.is_empty()), true);
     let rep = &o.report;
     // A fact is "ok" only under an OK verdict: under DEMO it holds on a chain not shown to be the network's.
     let demo = rep.verdict != Verdict::Ok;

@@ -17,7 +17,7 @@ path = "src/main.rs"
 zapp-zeroconf = { path = ".." }
 zapp-common = { path = "../../common" }
 zapp-corecheck = { path = "../../corecheck" }
-swiftsync-verify = { path = "../../../swiftsync-verify", features = ["engine"] }
+swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"
 sha2 = "0.10"
 

@@ -17,8 +17,7 @@ STATEMENT_WASM=wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wa
 # the OK verdict on real proofs: the regtest harness's receipts and trie snapshots, ALICE's keys, Core's scantxoutset,
 # under the tests-only regtest-test feature (dev profile: it does not compile without debug assertions); the shipped
 # CLI and .wasm refusing them
+# (the OK verdict on the regtest harness's RISC Zero receipts, test-regtest.sh, went with them at the cutover, 27.11.2026,
+# until the harness is proved on the engine; the tests-only feature still builds)
 cargo build --features regtest-test --manifest-path ./cli/Cargo.toml --bin zapp-statement
-bash test-regtest.sh "$T/debug/zapp-statement" "$T/release/zapp-statement" wasm/target/wasm32-unknown-unknown/release/zapp_statement_wasm.wasm \
-    || { grep -B3 WRONG test-regtest.out; tail -1 test-regtest.out; exit 1; }
-tail -1 test-regtest.out
 echo "ZAPP_STATEMENT_TESTS OK"

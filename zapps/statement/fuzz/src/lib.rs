@@ -1,7 +1,7 @@
 //! The balance statement zAPP's fuzz properties (docs/libzync/ZAPP_TESTING.md §3.4, §4.6), one function per target, so
 //! the fuzz targets and the stable corpus replay (tests/replay.rs) run the same code. A property that fails panics.
 //!
-//! The reference is a real statement: the real mainnet 1..200 proof (8888d59c) and its block-200 trie, every script
+//! The reference is a real statement: the engine chain's real mainnet 1..200 proof and its block-200 trie (node format 2), every script
 //! type the signer covers (P2PKH, P2SH-P2WPKH, P2WPKH, P2TR, P2PK compressed and uncompressed), signed by fixed test
 //! keys (zero balances: no key of ours was paid in 1..200). It is corpus/statement_check/signed.json, written once by
 //! examples/mkseeds.rs and read from there (a BIP-340 signature need not be the same on a second signing).
@@ -18,9 +18,10 @@ use std::sync::OnceLock;
 use swiftsync_verify::{unhex, ChainState, Image, Inputs, Verdict};
 use zapp_statement::{p2pk, Challenge, Statement};
 
-pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
-pub const TRIE: &[u8] = include_bytes!("../../vectors/mainnet_200_8888d59c.trie");
-pub const IMAGE_8888: &str = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4";
+pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+pub const TRIE: &[u8] = include_bytes!("../../vectors/engine_200.trie");
+const VK: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+const ID: &str = include_str!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
 pub const ASK: Challenge = Challenge { purpose: Some("loan application 15.11.2026"), nonce: Some("7f3a91c2") };
 pub const REFERENCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/statement_check/signed.json");
 
@@ -28,7 +29,7 @@ pub const REFERENCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/stateme
 pub fn state() -> &'static (ChainState, u32) {
     static S: OnceLock<(ChainState, u32)> = OnceLock::new();
     S.get_or_init(|| {
-        let image = Image::by_id("mainnet", IMAGE_8888).unwrap();
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks);
         (r.state.unwrap(), r.undo_from)

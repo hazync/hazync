@@ -1,15 +1,15 @@
 //! zapp-utreexo: check a Utreexo roots zyncAPP proof (docs/libzync/UTREEXO_ZAPP.md §6) and print the proven
 //! accumulator in Floresta's `AssumeUtreexoValue` form.
 //!
-//!   zapp-utreexo verify <final run receipt> [--network mainnet|signet] [--expect <H>:<hash>] [--mempool | --mempool-url <base>]
-//!                       [--bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--image <hex>]
-//!                       [--core-image <hex>] [--vk <key file>] [--json] [--floresta] [--allow-demo]
+//!   zapp-utreexo verify <final run proof.hze> --image <hex> --vk <key file> --core-image <hex> [--base-image <hex>]
+//!                       [--network mainnet|signet] [--expect <H>:<hash>] [--mempool | --mempool-url <base>]
+//!                       [--bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--json] [--floresta] [--allow-demo]
 //!   zapp-utreexo id
 //!
-//! `--vk`: the proof is an ENGINE (OpenVM) proof file and this is the key file of the utreexo image that proved it (of
-//! the tip image, for a tip step), from your own build of that image: its SHA-256 is the pin (engine/VERIFIER.md: the
-//! key, not the image id, authenticates an engine proof). Needs `--image` (and `--core-image`: no engine image is
-//! built in yet). Built with `--features engine`.
+//! The proof is an ENGINE (OpenVM) proof file; `--vk` is the key file of the utreexo image that proved it (of the tip
+//! image, for a tip step), from your own build of that image: its SHA-256 is the pin (engine/VERIFIER.md: the key, not
+//! the image id, authenticates an engine proof). No engine image is published yet, so `--image`, `--vk` and
+//! `--core-image` are required, and a tip step needs `--base-image`. A RISC Zero receipt is checked with v0.27.1.
 //! `--network`: the network the proof must be for (default mainnet, as every zAPP CLI); a proof of another network is
 //! FAIL, and the identity sources are asked about this network. `--expect`: block H from YOUR node's header chain (`bitcoin-cli getblockhash H`, or Floresta's own headers); the
 //! chain-identity flags every zAPP CLI takes (zapps/common: `--mempool`, `--mempool-url`, `--bitcoin-cli`) are asked for
@@ -29,10 +29,10 @@
 //! `--floresta` source starts with a comment line naming the network.
 use swiftsync_verify::Verdict;
 use zapp_common::Identity;
-use zapp_utreexo::{journal_kind, verify_utreexo_tip_with, verify_utreexo_with, TipStatement, UtreexoReport, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER,
+use zapp_utreexo::{journal_kind, verify_utreexo_on, verify_utreexo_tip_on, TipStatement, UtreexoReport, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER,
                    KIND_UTREEXO_TIP, NETWORKS, UTREEXO_IMAGE_ID, UTREEXO_IMAGE_LABEL, UTREEXO_TIP_IMAGE_ID};
 
-const USAGE: &str = "usage: zapp-utreexo verify <receipt> [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<cmd>\"] [--expect-tip T:hash] [--image hex] [--base-image hex] [--core-image hex] [--vk key file] [--json] [--floresta] [--allow-demo] | id";
+const USAGE: &str = "usage: zapp-utreexo verify <proof.hze> --image hex --vk <key file> --core-image hex [--base-image hex] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<cmd>\"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo] | id";
 
 fn usage(m: &str) -> ! {
     eprintln!("zapp-utreexo: {m}\n{USAGE}");
@@ -95,8 +95,8 @@ fn parse(a: &[String]) -> Opts {
         usage("give exactly one receipt");
     }
     o.receipt = pos.remove(0);
-    if o.vk.is_some() && (o.image.is_none() || o.core_image.is_none()) {
-        usage("--vk: give --image and --core-image too (no engine image is built in)");
+    if o.vk.is_none() || o.image.is_none() || o.core_image.is_none() {
+        usage("no engine utreexo image is published yet: give --image, --vk and --core-image (the images you rebuilt)");
     }
     o
 }
@@ -117,32 +117,26 @@ fn main() {
             let pe = |k: &str, v: &Option<String>| v.as_ref().map(|e| swiftsync_verify::parse_expect(e).unwrap_or_else(|| usage(&format!("{k}: want <height>:<64 hex digits>"))));
             let r = std::fs::read(&o.receipt).unwrap_or_else(|e| fail(format!("{}: {e}", o.receipt)));
             // --vk: the key file, pinned by its own SHA-256 (the reader's build of the image)
-            let vk = o.vk.as_ref().map(|p| std::fs::read(p).unwrap_or_else(|e| fail(format!("--vk {p}: {e}"))));
-            let key = vk.as_ref().map(|b| {
-                use sha2::Digest as _;
-                swiftsync_verify::EngineKey { bytes: b, pin: sha2::Sha256::digest(b).into() }
-            });
-            if key.is_some() != swiftsync_verify::is_engine_proof(&r) {
-                fail(if key.is_some() { "--vk given, but the file is not an engine proof".into() } else { "an engine proof file: give the image's key with --vk".into() });
-            }
+            let vkp = o.vk.as_deref().unwrap();
+            let vk = std::fs::read(vkp).unwrap_or_else(|e| fail(format!("--vk {vkp}: {e}")));
+            let key = { use sha2::Digest as _; swiftsync_verify::EngineKey { bytes: &vk, pin: sha2::Sha256::digest(&vk).into() } };
+            let core = o.core_image.as_deref().unwrap();
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let net = o.network.as_deref().unwrap_or("mainnet");
             // a base receipt (a walk from genesis, kind 'ZU' 1) or a tip step ('ZU' 2, §10): the journal's kind word
             // picks which statement the receipt is checked as (and under which image); the receipt then must verify
             let tip = journal_kind(&r) == Some(KIND_UTREEXO_TIP);
-            let (dflt, base_image) = (if tip { UTREEXO_TIP_IMAGE_ID } else { UTREEXO_IMAGE_ID }, o.base_image.as_deref().unwrap_or(UTREEXO_IMAGE_ID));
             if o.base_image.is_some() && !tip { usage("--base-image: only for a tip receipt"); }
-            let image = o.image.as_deref().unwrap_or(dflt);
+            if tip && o.base_image.is_none() { usage("a tip proof: give --base-image (no engine base image is published yet)"); }
+            let base_image = o.base_image.as_deref().unwrap_or("");
+            let image = o.image.as_deref().unwrap();
             if tip { say(&format!("  a tip receipt (UTREEXO_ZAPP.md §10): base image {base_image}")); }
-            if image.eq_ignore_ascii_case(dflt) {
-                say(&format!("  {}image {dflt} (the built-in one: {UTREEXO_IMAGE_LABEL})", if tip { "tip " } else { "" }));
-            }
             let check = |e1: Option<(u32, &str)>, e2: Option<(u32, &str)>| -> (UtreexoReport, Option<TipStatement>) {
                 if tip {
-                    let t = verify_utreexo_tip_with(net, &r, image, key.as_ref(), base_image, o.core_image.as_deref(), now, e1, e2);
+                    let t = verify_utreexo_tip_on(net, &r, image, &key, base_image, core, now, e1, e2);
                     (t.report, t.tip)
                 } else {
-                    (verify_utreexo_with(net, &r, image, key.as_ref(), o.core_image.as_deref(), now, e1, e2), None)
+                    (verify_utreexo_on(net, &r, image, &key, core, now, e1, e2), None)
                 }
             };
             say(&format!("  network {net} (the proof must be for it{})", if o.network.is_none() { "; the default, --network names another" } else { "" }));

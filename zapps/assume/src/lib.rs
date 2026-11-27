@@ -1109,9 +1109,9 @@ mod tests {
         assert!(part.mtp_before(12).is_err());
     }
 
-    // ---- the real vectors: mainnet 1..200 proved under 8888d59c (GPU), Core v31.1.0's dumptxoutset at 199, 200, 1003
+    // ---- the real vectors: the engine chain's proof of mainnet 1..200, Core v31.1.0's dumptxoutset at 199, 200, 1003
 
-    const RCPT: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+    const RCPT: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
     const SNAP_200: &[u8] = include_bytes!("../vectors/utxo_200.dat");
     const SNAP_199: &[u8] = include_bytes!("../vectors/utxo_199.dat");
     const SNAP_1003: &[u8] = include_bytes!("../vectors/utxo_1003.dat");
@@ -1121,7 +1121,10 @@ mod tests {
 
     fn state() -> ChainState {
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-        let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image: swiftsync_verify::Image::by_network("mainnet").unwrap(), anchor: None, now });
+        let id = include_str!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id").trim();
+        let vk = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk").to_vec();
+        let image = swiftsync_verify::Image::by_network("mainnet").unwrap().with_method_id(id).unwrap().with_engine_key(vk);
+        let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image, anchor: None, now });
         assert_eq!(rep.verdict, swiftsync_verify::Verdict::Demo, "{:?}", rep.checks); // low work: DEMO, every check passed
         rep.state.unwrap()
     }

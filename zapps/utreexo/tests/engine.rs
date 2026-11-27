@@ -1,7 +1,7 @@
 //! The utreexo zAPP's ENGINE proofs in its verifier (engine/VERIFIER.md): the engine's base (roots after block 100)
 //! and a tip step 100 -> 150 on it, both over keys-ch's core proof of mainnet 1..200, checked under their pinned keys
-//! by the same statement checks as a RISC Zero receipt; then the refusals. `--features engine,tip`.
-#![cfg(all(feature = "engine", feature = "tip"))]
+//! by the statement checks; then the refusals. `--features tip`.
+#![cfg(feature = "tip")]
 use swiftsync_verify::{hex32, EngineKey, Verdict};
 use zapp_utreexo::*;
 
@@ -32,7 +32,7 @@ fn engine_base_100() {
     let (file, vk) = (rd("base100.hze"), rd("base100.vk"));
     let key = EngineKey { bytes: &vk, pin: hex32(BASE_PIN).unwrap() };
     let base = |f: &[u8], id: &str, k: &EngineKey, at: Option<(u32, &str)>, tip: Option<(u32, &str)>| {
-        verify_utreexo_with("mainnet", f, id, Some(k), Some(CORE_ID), NOW, at, tip)
+        verify_utreexo_on("mainnet", f, id, k, CORE_ID, NOW, at, tip)
     };
     let r = base(&file, BASE_ID, &key, Some((100, H100)), Some((200, H200)));
     show(&r.checks);
@@ -67,11 +67,11 @@ fn engine_base_100() {
     // the tip step's proof where the base belongs (its own key: a real proof, but not a base statement of this image)
     refused(base(&rd("step150.hze"), TIP_ID, &other, None, None), "a tip proof as a base");
     // another core image trusted
-    refused(verify_utreexo_with("mainnet", &file, BASE_ID, Some(&key), Some(TIP_ID), NOW, None, None), "another core image");
+    refused(verify_utreexo_on("mainnet", &file, BASE_ID, &key, TIP_ID, NOW, None, None), "another core image");
     // the wrong network
-    refused(verify_utreexo_with("signet", &file, BASE_ID, Some(&key), Some(CORE_ID), NOW, None, None), "signet");
-    // a RISC Zero verifier given the engine file
-    refused(verify_utreexo_on("mainnet", &file, BASE_ID, Some(CORE_ID), NOW, None, None), "no key: read as a RISC Zero receipt");
+    refused(verify_utreexo_on("signet", &file, BASE_ID, &key, CORE_ID, NOW, None, None), "signet");
+    // not an engine proof file
+    refused(verify_utreexo_on("mainnet", &[1, 0, 0, 0, 9], BASE_ID, &key, CORE_ID, NOW, None, None), "not an engine proof file");
 }
 
 #[test]
@@ -79,7 +79,7 @@ fn engine_tip_step_150() {
     let (file, vk) = (rd("step150.hze"), rd("step150.vk"));
     let key = EngineKey { bytes: &vk, pin: hex32(TIP_PIN).unwrap() };
     let tip = |f: &[u8], base: &str, at: Option<(u32, &str)>| {
-        verify_utreexo_tip_with("mainnet", f, TIP_ID, Some(&key), base, Some(CORE_ID), NOW, at, Some((200, H200)))
+        verify_utreexo_tip_on("mainnet", f, TIP_ID, &key, base, CORE_ID, NOW, at, Some((200, H200)))
     };
     let r = tip(&file, BASE_ID, Some((150, H150)));
     show(&r.report.checks);

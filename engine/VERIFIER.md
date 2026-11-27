@@ -190,6 +190,30 @@ front (the default), the RISC Zero front, its receipt kinds, dev-mode check, Gro
 engine image records go in with their embedded keys, the zAPP fixtures move to engine proofs, the published module
 shas are renewed (README, the site, deploy.sh), and the old chain stays checkable with the last RISC Zero release.
 
+## The cutover (27.11.2026): engine proofs only
+
+Done on this branch (engine/CUTOVER.md C2-C4). The sections above are the record of how it got here; where they name
+`--features engine`, the RISC Zero front or a built-in RISC Zero image, that is the code before this change.
+
+- swiftsync-verify: no `engine` feature (hazync-engine-verify always on), no risc0-zkvm or bincode in its graph. The
+  journal encoding, `Journal` and the id word layout come from engine/journal (hazync-journal). Gone: the RISC Zero
+  front, `receipt_kind`, `decode_receipt`, `receipt_well_formed`, `BABYBEAR_P`, `earlier_image_named_by`,
+  `dev_mode_env`. `verify` takes an engine proof file only; anything else is a FAIL that names v0.27.1's verifier.
+- Image records: one per network (mainnet, signet) with the network's parameters, profile with PROFILE_NODE2, and no
+  image id or key until the Stage 4 freeze. `verify` on such a record FAILs with "no engine image is published for
+  <net> yet: give the image id and its key". Every CLI takes `--image` and `--vk` (the key pinned as given: the
+  reader's own build), the C ABIs take the image id, the key and its pin (a key whose SHA-256 is not the pin is FAIL),
+  the WASM frames carry the key and its pin.
+- zapps/corecheck: `with_key(image, vk, pin)` (cached); `verify_core` lost its `pinned` argument and `image_used` is
+  gone (an engine proof verifies against one image only). REGTEST_IMAGE (tests only) is the engine harness image
+  2d740159 (keys-rtch), with no key.
+- Every zAPP verifier (assume, deposit, headers, hints, liveness, statement, utreexo, zeroconf) is engine only, with no
+  risc0-zkvm in any graph; the built-in zAPP image ids (headers, hints, utreexo base and tip) are empty until published.
+- Test vectors: swiftsync-verify/vectors holds the engine proof of mainnet 1..200 and its one-change copies
+  (make_vectors.py), 16 cases; the RISC Zero receipts and the tests that only exercised them are deleted (the commit
+  messages list them). The regtest harness's RISC Zero receipts are no longer checked by any test: its OK-verdict
+  tests wait until the harness is proved on the engine.
+
 ## Making the files a reader takes (27.11.2026)
 
 `hzengine pack --dir <keys> --proof <P> --out P.hze --key key.bin` writes the proof file (HZE1) and the image's key

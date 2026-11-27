@@ -3,20 +3,22 @@
 //!
 //! `identity`: NUL-separated CLI arguments taken by `Identity::take` as a zAPP CLI takes them; each identity source is
 //! given at most once and `--mempool-url` is https. With `--expect` as the only source (the others ask the network or
-//! run a command, so they are never resolved here), `check_core_tip` against the real 1..200 proof is OK only for an
+//! run a command, so they are never resolved here), `check_core_tip` against the engine chain's real 1..200 proof is OK only for an
 //! `--expect` naming block 200 by its hash (any case), and `expect_for_core` returns the `--expect` given, unchanged.
 
 use std::sync::OnceLock;
 use swiftsync_verify::{ChainState, Image, Inputs, Verdict};
 use zapp_common::Identity;
 
-pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+const VK: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+const ID: &str = include_str!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
 pub const TIP_200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
 
 pub fn state() -> &'static ChainState {
     static S: OnceLock<ChainState> = OnceLock::new();
     S.get_or_init(|| {
-        let image = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo);
         r.state.unwrap()

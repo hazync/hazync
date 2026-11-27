@@ -1,7 +1,6 @@
 //! The hints zAPP's ENGINE proof in its verifier (engine/VERIFIER.md): keys-z-hints's proof for H = 200 over keys-ch's
 //! core proof of mainnet 1..200 (engine/results/zapp_hints; `hzengine wasm-inputs` wrote the file, key and pin), with
-//! the hints and undo-hash files the host derived; then the refusals. `--features engine`.
-#![cfg(feature = "engine")]
+//! the hints and undo-hash files the host derived; then the refusals.
 use swiftsync_verify::{hex32, EngineKey, Verdict};
 use zapp_hints::*;
 
@@ -26,7 +25,7 @@ fn engine_hints_200() {
     let (hints, undo) = (rd("mainnet-200.hints"), rd("mainnet-200.undo"));
     let key = EngineKey { bytes: &vk, pin: hex32(&txt("vk.sha256")).unwrap() };
     let run = |f: &[u8], h: &[u8], u: Option<&[u8]>, id: &str, k: Option<&EngineKey>, core: &str, at: Option<(u32, &str)>| {
-        verify_hints_with(f, h, u, id, k, Some(core), NOW, at, None)
+        verify_hints(f, h, u, id, k.unwrap(), core, NOW, at, None)
     };
     let r = run(&file, &hints, Some(&undo), &id, Some(&key), CORE_ID, Some((200, H200)));
     for (ok, s) in &r.checks {
@@ -58,6 +57,7 @@ fn engine_hints_200() {
     let bad = EngineKey { bytes: &vk, pin: [7u8; 32] };
     refused(run(&file, &hints, None, &id, Some(&bad), CORE_ID, None), "a pin that is not the key's");
     refused(run(&file, &hints, None, &id, Some(&key), &id, None), "another core image");
-    // the engine file without a key: read as a RISC Zero receipt, refused
-    refused(run(&file, &hints, None, &id, None, CORE_ID, None), "no key");
+    // not an engine proof file (a RISC Zero receipt's first bytes); and a core image id that is not hex
+    refused(run(&[1, 0, 0, 0, 9, 9], &hints, None, &id, Some(&key), CORE_ID, None), "not an engine proof");
+    refused(run(&file, &hints, None, &id, Some(&key), "xyz", None), "a core image id that is not hex");
 }

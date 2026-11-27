@@ -1,7 +1,6 @@
 //! The assume checkers on the ENGINE chain (engine/VERIFIER.md, roadmap 2.5): the engine's proof of mainnet 1..200
 //! verified, then Core v31.1.0's real UTXO snapshot at 200 (vectors/utxo_200.dat) checked against its live-coin hash,
 //! and assumevalid on its tip. Neither input depends on the node format, so they are the RISC Zero chain's own vectors.
-#![cfg(feature = "engine")]
 use swiftsync_verify::*;
 use zapp_assume::*;
 

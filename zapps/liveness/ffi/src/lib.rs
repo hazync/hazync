@@ -34,7 +34,8 @@ unsafe fn text<'a>(p: *const c_char, what: &str) -> Result<Option<&'a str>, Stri
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: usize, network: u8, now: u64,
-                                              image_hex: *const c_char, anchor_json: *const c_char,
+                                              image_hex: *const c_char, vk: *const u8, vk_len: usize, vk_pin: *const u8,
+                                              anchor_json: *const c_char,
                                               facts_json: *const c_char, expect: *const c_char,
                                               msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
@@ -44,7 +45,13 @@ pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: u
             (Ok(a), Ok(b), Ok(c), Ok(d)) => (a, b, c, d),
             (Err(e), ..) | (_, Err(e), ..) | (_, _, Err(e), _) | (.., Err(e)) => return fail(&e),
         };
-    let image = match zapp_liveness::image_for(net, image_hex.unwrap_or(""), network & 0x10 != 0, network & 0x20 != 0) {
+    // the core image's id and its verifying key (engine/VERIFIER.md): no engine image is published yet, so both are given
+    if image_hex.is_none_or(|h| h.trim().is_empty()) || vk.is_null() || vk_len == 0 || vk_pin.is_null() {
+        return fail("no engine core image is published yet: give the image id, its verifying key and the key's 32-byte pin");
+    }
+    let pin: [u8; 32] = slice(vk_pin, 32).try_into().unwrap();
+    let image = match zapp_liveness::image_for(net, image_hex.unwrap_or(""), network & 0x10 != 0, network & 0x20 != 0)
+        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), Some(&pin))) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };
@@ -59,9 +66,7 @@ pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: u
         None => return fail("no facts JSON: give {\"liveness\": [...]}"),
         Some(j) => match zapp_liveness::facts_from_json(j.as_bytes()) { Ok(f) => f, Err(e) => return fail(&e) },
     };
-    // an image id given is the only image the receipt may verify against (pinned)
-    let pinned = image_hex.is_some_and(|h| !h.trim().is_empty());
-    let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, pinned, anchor, now, &facts, expect, true);
+    let o = zapp_liveness::verify_liveness(slice(receipt, receipt_len), image, anchor, now, &facts, expect, true);
     match o.report.verdict {
         Verdict::Ok => { write_msg(msg, msg_len, "every liveness claim holds on the proven chain, its tip the block expect names"); OK }
         Verdict::Demo => { write_msg(msg, msg_len, "the liveness claims hold, but the chain is not shown to be the network's (no matching expect, below minimum work, or from an anchor)"); DEMO }

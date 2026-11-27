@@ -39,7 +39,9 @@ pub struct SwiftsyncHints {
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn swiftsync_verify_hints(receipt: *const u8, receipt_len: usize, file: *const u8, file_len: usize,
-                                                undo: *const u8, undo_len: usize, now: u64, expect: *const c_char,
+                                                undo: *const u8, undo_len: usize, image_hex: *const c_char,
+                                                core_image_hex: *const c_char, vk: *const u8, vk_len: usize, vk_pin: *const u8,
+                                                now: u64, expect: *const c_char,
                                                 out: *mut SwiftsyncHints, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
     let exp = if expect.is_null() { None } else {
@@ -49,9 +51,24 @@ pub unsafe extern "C" fn swiftsync_verify_hints(receipt: *const u8, receipt_len:
             None => return fail("expect: give height:hash"),
         }
     };
+    // the hints image, its key and the core image (engine/VERIFIER.md): no engine image is published yet, so all are given
+    let text = |p: *const c_char| -> Option<String> { if p.is_null() { None } else { CStr::from_ptr(p).to_str().ok().map(|s| s.trim().to_string()) } };
+    let (Some(image), Some(core)) = (text(image_hex), text(core_image_hex)) else {
+        return fail("no engine hints image is published yet: give the hints image id and the core image id (UTF-8)");
+    };
+    if vk.is_null() || vk_len == 0 || vk_pin.is_null() {
+        return fail("an engine proof needs the hints image's verifying key and the key's 32-byte pin");
+    }
+    let (vkb, pin): (&[u8], [u8; 32]) = (slice(vk, vk_len), slice(vk_pin, 32).try_into().unwrap());
+    {
+        use sha2::Digest as _;
+        if <[u8; 32]>::from(sha2::Sha256::digest(vkb)) != pin {
+            return fail("the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)");
+        }
+    }
     let u = slice(undo, undo_len);
     let rep = zapp_hints::verify_hints(slice(receipt, receipt_len), slice(file, file_len), (!u.is_empty()).then_some(u),
-                                                    zapp_hints::HINTS_IMAGE_ID, None, now,
+                                                    &image, &swiftsync_verify::EngineKey { bytes: vkb, pin }, &core, now,
                                                     exp.as_ref().map(|(h, x)| (*h, x.as_str())), None);
     if let (Some(z), false, false) = (&rep.statement, out.is_null(), rep.verdict == Verdict::Fail) {
         *out = SwiftsyncHints { height: z.height, block_hash: z.block_hash, format: z.format, n_unspent: z.n_unspent, unspent_value: z.unspent_value };

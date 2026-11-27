@@ -113,7 +113,7 @@ pub fn network_of(cs: &ChainState) -> &'static str {
 
 /// The image id that made a chain state, as printed (hex of the digest's bytes).
 pub fn core_id_of(cs: &ChainState) -> String {
-    hex(risc0_zkvm::sha::Digest::from(cs.self_id).as_bytes())
+    hex(&hazync_journal::id_bytes(&cs.self_id))
 }
 
 /// A block hash in display order.
@@ -446,7 +446,8 @@ pub fn sign(st: &mut Statement, keys: &[bitcoin::PrivateKey]) -> Result<usize, S
 
 #[cfg(test)]
 mod tests {
-    //! Against the real mainnet 1..200 proof (image 8888d59c, vectors/) and its block-200 trie snapshot, with keys
+    //! Against the engine chain's real mainnet 1..200 proof (swiftsync-verify/vectors) and its block-200 trie (vectors/
+    //! engine_200.trie, node format 2), with keys
     //! generated here (never printed). The coins of 1..200 are all P2PK, which no key of ours can sign for, so the
     //! positive cases on the real trie are zero balances; the non-zero cases use a trie built here with coins for our
     //! scripts under the real proof's state (its trie root replaced: a state no receipt proves, labelled as such).
@@ -479,15 +480,16 @@ mod tests {
 
     /// The real proof's verified state, and its undo_from.
     fn real() -> (ChainState, u32) {
-        let r = vector("mainnet_1_200_8888d59c.rcpt");
-        let image = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
+        let r = vector("mainnet_1_200_engine.hze");
+        let id = String::from_utf8(vector("mainnet_1_200_engine.image_id")).unwrap();
+        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(vector("mainnet_1_200_engine.vk"));
         let rep = verify(&Inputs { receipt: &r, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(rep.verdict, Verdict::Demo, "1..200 is a real proof below the minimum work");
         (rep.state.unwrap(), rep.undo_from)
     }
 
     fn real_trie() -> libzync::trie_store::TrieStore {
-        libzync::trie_store::TrieStore::from_bytes(&vector("mainnet_200_8888d59c.trie")).unwrap()
+        libzync::trie_store::TrieStore::from_bytes(&vector("engine_200.trie")).unwrap()
     }
 
     /// A trie with coins for `owned` (value per script) under the real state, its root put in place of the real one.
@@ -754,11 +756,13 @@ mod tests {
 
     #[test]
     fn a_failed_receipt_gives_no_state_to_check() {
-        // a dev-mode FakeReceipt: verify() fails it before any journal is read (the CLI then checks no statement)
-        let r = vector("fake_block_2501.rcpt");
-        let rep = verify(&Inputs { receipt: &r, image: Image::by_network("mainnet").unwrap(), anchor: None, now: 1_800_000_000 });
+        // a proof with one bit flipped: verify() fails it before any journal is read (the CLI then checks no statement)
+        let r = vector("mainnet_1_200_engine_proof_flipped.hze");
+        let id = String::from_utf8(vector("mainnet_1_200_engine.image_id")).unwrap();
+        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(vector("mainnet_1_200_engine.vk"));
+        let rep = verify(&Inputs { receipt: &r, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(rep.verdict, Verdict::Fail);
-        assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("FakeReceipt")), "{:?}", rep.checks);
+        assert!(rep.state.is_none(), "{:?}", rep.checks);
     }
 
     #[test]
@@ -775,7 +779,7 @@ mod tests {
         let (cs, _) = real();
         let st = draft(&cs, &real_trie(), &[unhex(P2PK_BLOCK9).unwrap()], "audit", "n1").unwrap();
         assert_eq!(message(&st).unwrap(), "Hazync balance statement v1\nnetwork: mainnet\n\
-            core image: 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4\n\
+            core image: c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9\n\
             block: 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320\n\
             scripts: 1 sha256 ".to_string() + &hex(&script_list_hash(&[unhex(P2PK_BLOCK9).unwrap()])) + "\ntotal: 2800000000 sat\npurpose: audit\nnonce: n1");
     }

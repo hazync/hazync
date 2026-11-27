@@ -1,8 +1,7 @@
 //! The balance-statement zAPP on the ENGINE chain (engine/VERIFIER.md, roadmap 2.5): the engine's proof of mainnet
 //! 1..200 verified, its counting trie at 200 (vectors/engine_200.trie: native prep's, whose state equals the
 //! engine-proven one but for self_id; node format 2), a statement by two fresh keys (their balance facts are absence
-//! proofs) checked against the verified state. `--features engine`.
-#![cfg(feature = "engine")]
+//! proofs) checked against the verified state.
 use swiftsync_verify::*;
 use zapp_statement::*;
 
@@ -50,8 +49,4 @@ fn statement_on_the_engine_chain() {
     let mut bad = st.clone();
     bad.total = 1;
     assert!(check_statement(&cs, uf, &bad, &ASK).is_err(), "claiming 1 sat");
-    // the RISC Zero chain's (format 1) trie file is refused by the store itself, before any fact is drawn from it
-    let old = libzync::trie_store::TrieStore::from_bytes(&rd(format!("{}/vectors/mainnet_200_8888d59c.trie", env!("CARGO_MANIFEST_DIR"))));
-    eprintln!("  the format-1 trie file: {:?}", old.as_ref().err());
-    assert!(old.is_err());
 }

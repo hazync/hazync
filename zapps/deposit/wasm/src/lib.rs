@@ -3,7 +3,7 @@
 //! core's `verify_deposit`). Same raw ABI as the core's (no wasm-bindgen): `alloc(len) -> ptr`,
 //! `verify_deposit(ptr, len) -> p` with p pointing to [u32 LE length][UTF-8 JSON]. Glue: zapp-deposit.js.
 
-use swiftsync_verify::{hex, Image, Verdict};
+use swiftsync_verify::{hex, Verdict};
 
 #[no_mangle]
 pub extern "C" fn alloc(len: usize) -> *mut u8 {
@@ -92,8 +92,6 @@ fn parse_ask(v: &serde_json::Value) -> Result<(zapp_deposit::DepositAsk, String)
         allow_pow_only_block: flag("allow_pow_only_block", false)?, expect_tip,
         max_tip_age: num("max_tip_age")?,
         require_identity: flag("require_identity", true)?, allow_demo: flag("allow_demo", false)?,
-        // the WASM takes no image id: the network's built-in image, never pinned
-        pin_core_image: false,
     };
     Ok((ask, network))
 }
@@ -106,6 +104,9 @@ fn parse_ask(v: &serde_json::Value) -> Result<(zapp_deposit::DepositAsk, String)
 /// "require_identity"? (default true: without "expect" the verdict is at best "demo"), "allow_demo"? (default false),
 /// "network"?}`. Any other key is refused (a FAIL verdict naming it), as the CLI refuses an unknown flag; so is a key
 /// given as null (NaN and Infinity become null in JSON): leave a key out for its default. The bundle is refused when it has a field its format does not name.
+/// Then (engine proofs only since 27.11.2026; no engine image is published yet) `[u32 n][core image id hex][u32 n][its
+/// verifying key file][u32 32][the key's pin][u32 n][header-chain image id hex][u32 n][its key file][u32 n][its pin]`,
+/// the header fields n = 0 for a bundle without header runs.
 ///
 /// `now` is the CALLER's clock (the glue passes the device's unless given one). Unlike the CLI, which refuses a `--now`
 /// later than its own clock, the module has no clock to compare it with (wasm32-unknown-unknown, no imports): a page
@@ -122,18 +123,35 @@ fn parse_ask(v: &serde_json::Value) -> Result<(zapp_deposit::DepositAsk, String)
 pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
     use zapp_deposit::{disp, DepositAsk, DepositBundle};
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, DepositBundle, DepositAsk, String), String> {
+    #[allow(clippy::type_complexity)]
+    let parsed = (|| -> Result<(u64, DepositBundle, DepositAsk, String, String, &[u8], [u8; 32], String, Option<(&[u8], [u8; 32])>), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let b: DepositBundle = serde_json::from_slice(f.chunk()?).map_err(|e| format!("bundle: not a deposit bundle ({e})"))?;
         let v: serde_json::Value = serde_json::from_slice(f.chunk()?).map_err(|e| format!("ask: not JSON ({e})"))?;
+        // the core image id, its key and pin; the header-chain image id, its key and pin (n = 0: no header runs)
+        let text = |b: &[u8]| std::str::from_utf8(b).map(|s| s.trim().to_lowercase()).map_err(|_| "image id: not UTF-8".to_string());
+        let core = text(f.chunk()?)?;
+        let cvk = f.chunk()?;
+        let cpin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the core key's pin is 32 bytes".to_string())?;
+        let himage = text(f.chunk()?)?;
+        let hvk = f.chunk()?;
+        let hpin = f.chunk()?;
+        let hk = if hvk.is_empty() { None } else { Some((hvk, <[u8; 32]>::try_from(hpin).map_err(|_| "the header key's pin is 32 bytes".to_string())?)) };
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
         let (ask, network) = parse_ask(&v)?;
-        Ok((now, b, ask, network))
+        Ok((now, b, ask, network, core, cvk, cpin, himage, hk))
     })();
-    let (now, b, ask, network) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
-    let Some(image) = Image::by_network(&network) else { return fail(format!("unknown network {network:?}")) };
-    let rep = zapp_deposit::verify_deposit(&b, &ask, &network, image, zapp_headers::HEADERS_IMAGE_ID, now);
+    let (now, b, ask, network, core, cvk, cpin, himage, hk) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    if core.is_empty() || cvk.is_empty() {
+        return fail("no engine core image is published yet: give the core image id, its verifying key and pin".into());
+    }
+    let image = match zapp_corecheck::image_for(&network, &core, false, false).and_then(|i| zapp_corecheck::with_key(i, cvk, Some(&cpin))) {
+        Ok(i) => i,
+        Err(e) => return fail(e),
+    };
+    let hkey = hk.map(|(bytes, pin)| swiftsync_verify::EngineKey { bytes, pin });
+    let rep = zapp_deposit::verify_deposit(&b, &ask, &network, image, &himage, hkey.as_ref(), now);
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),

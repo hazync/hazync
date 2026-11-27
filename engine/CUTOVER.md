@@ -27,3 +27,12 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
 - 27.11.2026 C1 done: `engine/journal` (hazync-journal). Its serde is risc0-zkvm 3.1.0's file for file (diff: WORD_SIZE
   as a constant). `compat/` (cargo run --release): 2,000 random values of a struct using every serde type the encoding
   has, plus a real ChainState and the id word layout, encode and decode byte-identical to risc0-zkvm 3.1.0.
+- 27.11.2026 C2 done: swiftsync-verify engine only (no risc0-zkvm, no bincode; hazync-journal for the encoding), its
+  CLI, C ABI (swiftsync-verify-ffi) and the wasm crate's sources. vectors/ rebuilt on the engine proof of mainnet
+  1..200 (make_vectors.py; 16/16), test.sh 19/19, C ABI test.c 18/18 and test_engine.c 7/7.
+- 27.11.2026 C3 done: one record per network, no image id or key until the Stage 4 freeze; every surface takes the image
+  id and its key (CLI: pinned as given; C ABI and WASM: with its pin).
+- 27.11.2026 C4 done: every zAPP verifier engine only, risc0-zkvm out of every graph (cargo tree, all features). Each
+  module's test.sh passes up to its wasm steps (build, README pin, .mjs glue), which are C5's. The regtest harness's
+  OK-verdict scripts (test-regtest.sh of assume, deposit, liveness, statement) are deleted with its RISC Zero
+  receipts, until the harness is proved on the engine.

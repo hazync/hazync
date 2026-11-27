@@ -4,8 +4,7 @@
 //!
 //! [`verify_zeroconf`] checks the zAPP's ENGINE (OpenVM) proof under the zeroconf image's pinned key, then the
 //! statement: that it is about the caller's T, and that it rests on a core chain the caller trusts. That is the core
-//! verifier's policy (trusted core image and profile, lineage, genesis anchor, time-too-new, minimum work), the same
-//! checks `zyncapp verify-zeroconf` made on a RISC Zero receipt, plus the whole profile (as the hints zAPP, review
+//! verifier's policy (trusted core image and profile, lineage, genesis anchor, time-too-new, minimum work), plus the whole profile (as the hints zAPP, review
 //! H5). Engine proofs only: this module is new with the engine (engine/VERIFIER.md).
 //!
 //! ⚠ Valid NOW, not final: a conflicting transaction can still confirm first. The statement says nothing about the
@@ -19,7 +18,8 @@ use swiftsync_verify::{anchor_id, hex, hex32, identity_matches, lineage_of, work
 /// 1. Its own since 27.11.2026; before, the coin zAPP's 0x5A43_0002, so only the image id told the two apart.
 pub const KIND_ZEROCONF: u32 = 0x5A5A_0001;
 
-/// The guest's committed statement, field for field and in order: risc0's serde encoding of exactly this struct.
+/// The guest's committed statement, field for field and in order: the guests' word encoding (hazync-journal) of exactly
+/// this struct.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ZeroconfStatement {
     pub kind: u32,
@@ -145,7 +145,7 @@ pub fn verify_zeroconf(file: &[u8], image_hex: &str, key: &EngineKey, core: &Ima
     rep
 }
 
-fn engine_run(file: &[u8], key: &EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+fn engine_run(file: &[u8], key: &EngineKey, id: &[u8; 32]) -> Result<swiftsync_verify::Journal, String> {
     if !swiftsync_verify::is_engine_proof(file) {
         return Err("not an engine proof file".into());
     }

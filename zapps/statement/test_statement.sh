@@ -1,6 +1,6 @@
 #!/bin/bash
-# Balance statement zyncAPP (docs/libzync/STATEMENT_ZAPP.md), CLI end to end on the REAL mainnet 1..200 proof (image
-# 8888d59c) and its block-200 trie snapshot, with keys generated for the run (P2WPKH, P2TR, P2PK compressed and
+# Balance statement zyncAPP (docs/libzync/STATEMENT_ZAPP.md), CLI end to end on the engine chain's REAL mainnet 1..200
+# proof (swiftsync-verify/vectors, under its image id and key) and its block-200 trie (vectors/engine_200.trie), with keys generated for the run (P2WPKH, P2TR, P2PK compressed and
 # uncompressed; never printed, deleted on exit). The 1..200 chain is below Core's minimum chainwork, so the best verdict
 # is DEMO (exit 2); every refusal is FAIL (1). Run from this directory after `cargo build --release` (or give the
 # binary: test_statement.sh [<zapp-statement>]); ../test.sh does both.
@@ -8,8 +8,9 @@
 cd "$(dirname "$0")" || exit 1
 exec > >(tee test_statement.out) 2>&1
 BAD=0; N=0
-V=${1:-cli/target/release/zapp-statement}; Z=$V; X=../../swiftsync-verify/vectors
-R=$X/mainnet_1_200_8888d59c.rcpt; TRIE=vectors/mainnet_200_8888d59c.trie
+Z=${1:-cli/target/release/zapp-statement}; X=../../swiftsync-verify/vectors
+R=$X/mainnet_1_200_engine.hze; TRIE=vectors/engine_200.trie
+ID=$(cat $X/mainnet_1_200_engine.image_id); K="--image $ID --vk $X/mainnet_1_200_engine.vk"; V="$Z $K"
 TIP=200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 P2PK9=410411db93e1dcdb8a016b49840f8c53bc1eb68a382e97b1482ecad7b148a6909a5cb2e0eaddfb84ccf9744464f82e160bfa9b8b64f9d4c03f999b8643f656b412a3ac
 T=$(mktemp -d); trap 'rm -rf $T' EXIT
@@ -20,7 +21,7 @@ $Z test-key $T/k1 > $T/k1.s; $Z test-key $T/k2 > $T/k2.s; $Z test-key $T/k3 --un
 W=$(awk '$1=="p2wpkh"{print $2}' $T/k1.s); TR=$(awk '$1=="p2tr"{print $2}' $T/k2.s)
 PC=$(awk '$1=="p2pk"{print $2}' $T/k1.s); PU=$(awk '$1=="p2pk"{print $2}' $T/k3.s)
 C="--purpose audit-15.11.2026 --nonce 5be1"
-$Z draft --receipt $R --trie $TRIE $C $W $TR $PC $PU > $T/s.json && $Z sign $T/s.json --keys $T/keys
+$Z draft --receipt $R $K --trie $TRIE $C $W $TR $PC $PU > $T/s.json && $Z sign $T/s.json --keys $T/keys
 A="--expect $TIP"
 # 1. the statement holds (zero balances: no key of ours was paid in 1..200; P2WPKH, P2TR, P2PK compressed and
 #    uncompressed), asked with the same challenge
@@ -39,7 +40,7 @@ edit $T/s.json "e=[x for x in s['entries'] if x['format']=='full']; e[0]['signat
 # 5. a script not in the facts: entry 0's proof relabelled with block 9's script (a real balance it does not prove)
 edit $T/s.json "s['entries'][0]['fact']['script_pubkey']='$P2PK9'; s['entries'].sort(key=lambda e: bytes.fromhex(e['fact']['script_pubkey']))" $T/t5.json; run 1 $V $A $C $R $T/t5.json
 # 6. block 9's real 50 BTC (P2PK): the fact holds; unsigned (no key), then with our P2PK signature filed under it
-$Z draft --receipt $R --trie $TRIE $C $P2PK9 $W > $T/p.json && $Z sign $T/p.json --keys $T/keys
+$Z draft --receipt $R $K --trie $TRIE $C $P2PK9 $W > $T/p.json && $Z sign $T/p.json --keys $T/keys
 run 1 $V $A $C $R $T/p.json
 OURS=$(python3 -c "import json;print([e['signature'] for e in json.load(open('$T/s.json'))['entries'] if e['fact']['script_pubkey']=='$PC'][0])")
 edit $T/p.json "[e.update(format='full', signature='$OURS') for e in s['entries'] if e['fact']['script_pubkey']=='$P2PK9']" $T/p2.json; run 1 $V $A $C $R $T/p2.json
@@ -79,19 +80,16 @@ N=$((N+1)); if [ "$fl" = 0 ] && [ "$hl" -ge 1 ]; then echo "starting=$fl holding
 #     that holds (or, for --max-age, another that holds), so the case fails only on the repeat: last-wins gave exit 2
 run 1 $V $A $C --purpose audit-15.11.2026 $R $T/s.json
 run 1 $V $A $C --nonce 5be1 $R $T/s.json
-run 1 $V $A --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $C $R $T/s.json
+run 1 $V $A --image $ID $C $R $T/s.json
 run 1 $V $A --network mainnet --network mainnet $C $R $T/s.json
 run 1 $V --bitcoin-cli $T/node206 --max-age 6 --max-age 9 $C $R $T/s.json
 run 1 $V $A --now 1700000000 --now 1700000000 $C $R $T/s.json
-# 9. a dev-mode receipt (FakeReceipt), with and without RISC0_DEV_MODE in the environment; a flipped seal
-run 1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
-run 1 env RISC0_DEV_MODE=1 $V $A $C $X/fake_block_2501.rcpt $T/s.json
-run 1 env RISC0_DEV_MODE=1 $V $A $C $R $T/s.json
-# an --image given is the only image the receipt may verify against (review 11-16): the current mainnet id given
-# explicitly refuses this 8888d59c receipt; its own id verifies it
-run 1 $V $A $C --image 46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c $R $T/s.json
-run 2 $V $A $C --image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 $R $T/s.json
-run 1 $V $A $C $X/mainnet_1_200_8888d59c_flipped.rcpt $T/s.json
+# 9. the image id and key (no engine core image is published yet): none given, another id, a key that is not the
+#    image's; and a proof with one bit flipped
+run 1 $Z $A $C $R $T/s.json
+run 1 $Z --image $(printf 'ab%.0s' $(seq 32)) --vk $X/mainnet_1_200_engine.vk $A $C $R $T/s.json
+run 1 $Z --image $ID --vk $X/mainnet_1_200_engine_key_flipped.vk $A $C $R $T/s.json
+run 1 $V $A $C $X/mainnet_1_200_engine_proof_flipped.hze $T/s.json
 # 10. the producer refuses to file a signature that does not verify
 echo "== zapp-statement add-sig with entry 1's signature for entry 0 (expect exit 1)"
 S1=$(python3 -c "import json;print(json.load(open('$T/s.json'))['entries'][1]['signature'])")
@@ -102,11 +100,11 @@ N=$((N+1)); if [ "$got" = 1 ]; then echo "exit=$got PASS"; else echo "exit=$got 
 # 10b. the producer's flags, taken in order: a flag's value may look like a flag (the purpose "--nonce"), a repeat is
 #      refused
 echo "== zapp-statement draft --purpose --nonce --nonce 5be1 (expect exit 0, purpose \"--nonce\")"
-$Z draft --receipt $R --trie $TRIE --purpose --nonce --nonce 5be1 $W > $T/d.json 2>&1; got=$?
+$Z draft --receipt $R $K --trie $TRIE --purpose --nonce --nonce 5be1 $W > $T/d.json 2>&1; got=$?
 pp=$(python3 -c "import json;print(json.load(open('$T/d.json'))['purpose'])" 2>/dev/null)
 N=$((N+1)); if [ "$got" = 0 ] && [ "$pp" = "--nonce" ]; then echo "exit=$got purpose=$pp PASS"; else echo "exit=$got purpose=$pp WRONG"; BAD=$((BAD+1)); fi
 echo "== zapp-statement draft $C --purpose audit-15.11.2026 (expect exit 1)"
-$Z draft --receipt $R --trie $TRIE $C --purpose audit-15.11.2026 $W 2>&1 | sed "s#$T#<tmp>#g"; got=${PIPESTATUS[0]}
+$Z draft --receipt $R $K --trie $TRIE $C --purpose audit-15.11.2026 $W 2>&1 | sed "s#$T#<tmp>#g"; got=${PIPESTATUS[0]}
 N=$((N+1)); if [ "$got" = 1 ]; then echo "exit=$got PASS"; else echo "exit=$got WRONG"; BAD=$((BAD+1)); fi
 # 11. the same statement through the zAPP's WASM module, when one is given: STATEMENT_WASM=<.wasm>
 if [ -n "${STATEMENT_WASM:-}" ]; then

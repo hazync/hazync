@@ -16,6 +16,7 @@ cargo-fuzz = true
 path = "src/lib.rs"
 
 [dependencies]
+sha2 = "0.10"
 libfuzzer-sys = "0.4"
 zapp-deposit = { path = ".." }
 zapp-headers = { path = "../../headers" }

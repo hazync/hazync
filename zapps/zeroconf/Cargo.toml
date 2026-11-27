@@ -16,9 +16,7 @@ name = "zapp_zeroconf"
 path = "src/lib.rs"
 
 [dependencies]
-swiftsync-verify = { path = "../../swiftsync-verify", features = ["engine"] }
-# the journal's serde decoding (risc0's word encoding, which the engine guests keep); disable-dev-mode as every verifier
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+swiftsync-verify = { path = "../../swiftsync-verify" }
 serde = { version = "1", features = ["derive"] }
 
 [dev-dependencies]

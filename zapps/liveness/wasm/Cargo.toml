@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 # The zAPP's own library (one implementation of the check, as the CLI and the C ABI); raw ABI, no wasm-bindgen.
 [dependencies]
 zapp-liveness = { path = ".." }
+zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"
 

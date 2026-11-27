@@ -26,16 +26,14 @@ pub mod mmr {
     include!("../../../prover/zyncapps/methods/headers/src/mmr.rs");
 }
 extern crate alloc;
-use swiftsync_verify::{decode_journal, decode_receipt, dev_mode_env, receipt_kind, work_at_least, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
-use risc0_zkvm::sha::Digest;
+use swiftsync_verify::{decode_journal, work_at_least, EngineKey, Journal, Verdict, IMAGES, MAX_FUTURE_BLOCK_TIME};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-/// The header-chain image id this verifier trusts by default: the `zyncapp-headers` line of reproduce/LIBZYNC_IDS (the
-/// reproducible build; reproduce/pin-libzync-ids.py sets it). `--image <hex>` replaces it for a reader who rebuilt it.
-pub const HEADERS_IMAGE_ID: &str = "de54b94f40d750c746aafd8f306988791a074e424e81e411702312d4c528bf07";
+// No built-in header-chain image id: the engine image is published at the Stage 4 freeze (engine/CUTOVER.md C3); until
+// then a reader gives the id and key of the image they rebuilt. (de54b94f was the RISC Zero image; v0.27.1 checks it.)
 
-/// The guest's state, field for field and in order (risc0 serde): the last header's height, hash (internal byte
+/// The guest's state, field for field and in order (the guests' word encoding, hazync-journal): the last header's height, hash (internal byte
 /// order), chainwork (little-endian), nBits, time, its retarget epoch's first time, the last <= 11 times, the
 /// largest time seen, and the MMR peaks of the block hashes 0..=height (left to right, largest first; crate::mmr).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -62,9 +60,9 @@ impl HeaderState {
     /// The MMR root: the committed peaks bagged right to left (crate::mmr::root). Pair it with the height.
     pub fn mmr_root(&self) -> [u8; 32] { crate::mmr::root(&self.mmr_peaks) }
     pub fn mmr_root_hex(&self) -> String { self.mmr_root().iter().map(|b| format!("{b:02x}")).collect() }
-    /// What the guest commits for an input state: sha256 of risc0's serde words, as little-endian bytes.
+    /// What the guest commits for an input state: sha256 of its serde words (hazync-journal), as little-endian bytes.
     pub fn digest(&self) -> [u8; 32] {
-        let w = risc0_zkvm::serde::to_vec(self).expect("a HeaderState always serialises");
+        let w = hazync_journal::serde::to_vec(self).expect("a HeaderState always serialises");
         Sha256::digest(w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>()).into()
     }
     /// The tip hash as block explorers print it (reversed, hex).
@@ -128,61 +126,31 @@ impl HeadersReport {
 /// The most chained runs [`verify_headers`] takes (as the WASM frame allows): a tip follower re-bases long before.
 pub const MAX_RUNS: usize = 4096;
 
-pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, now: u64, expect: Option<(i64, &str)>,
+///
+/// Every run is an ENGINE (OpenVM) proof file of the headers image, checked under its pinned `key` (engine/VERIFIER.md:
+/// the key, not the image id, authenticates it); a RISC Zero receipt is checked with v0.27.1's verifier.
+pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, key: &EngineKey, now: u64, expect: Option<(i64, &str)>,
                       include: Option<&Inclusion>) -> HeadersReport {
-    verify_headers_with(receipts, image_hex, None, now, expect, include)
-}
-
-/// [`verify_headers`] with the headers image's engine key: every run is then an ENGINE (OpenVM) proof file of that image,
-/// checked under the pinned key (engine/VERIFIER.md: the key, not the image id, authenticates it); without one, every
-/// run is a RISC Zero receipt. Everything after the proof check (the runs' linking, time, identity, inclusion, work) is
-/// the same code for both.
-pub fn verify_headers_with(receipts: &[&[u8]], image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>, now: u64,
-                           expect: Option<(i64, &str)>, include: Option<&Inclusion>) -> HeadersReport {
     let mut rep = HeadersReport { checks: Vec::new(), state: None, verdict: Verdict::Fail, included: None, tip_checked: false };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the headers image id is 32 bytes of hex ({image_hex})"));
         return rep;
     };
-    let image = Digest::from_bytes(id);
     if !rep.check(!receipts.is_empty(), "at least one receipt") { return rep; }
     // a cap on the runs, checked before any is verified: each costs a STARK verification
     if !rep.check(receipts.len() <= MAX_RUNS, format!("at most {MAX_RUNS} chained runs ({} given)", receipts.len())) { return rep; }
-    // risc0 built with disable-dev-mode panics in Receipt::verify under RISC0_DEV_MODE (see swiftsync_verify::verify)
-    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") { return rep; }
     let mut want_in = HeaderState::empty().digest();
     let mut last: Option<HeaderState> = None;
     for (i, bytes) in receipts.iter().enumerate() {
         let n = i + 1;
-        // an engine run: verified under the key, its journal read only once it has
-        let journal = if let Some(k) = engine_key {
-            match engine_run(bytes, k, &id) {
-                Ok(j) => {
-                    rep.check(true, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex} under the pinned key {}", swiftsync_verify::hex(&k.pin)));
-                    j
-                }
-                Err(e) => { rep.check(false, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex}: {e}")); return rep; }
+        // verified under the key; its journal is read only once it has (an unverified journal's numbers, a height of
+        // i64::MAX, must not reach the arithmetic below)
+        let journal = match engine_run(bytes, key, &id) {
+            Ok(j) => {
+                rep.check(true, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex} under the pinned key {}", swiftsync_verify::hex(&key.pin)));
+                j
             }
-        } else {
-            if let Err(e) = receipt_kind(bytes) {
-                rep.check(false, format!("receipt {n} is a single succinct or Groth16 proof ({e})"));
-                return rep;
-            }
-            let r: risc0_zkvm::Receipt = match decode_receipt(bytes) {
-                Ok(r) => r,
-                Err(e) => { rep.check(false, format!("receipt {n} decodes ({e})")); return rep; }
-            };
-            if !rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), format!("receipt {n} is a real proof")) {
-                return rep;
-            }
-            // An unverified journal is not read at all: nothing in it is known, and its numbers (a height of i64::MAX)
-            // must not reach the arithmetic below.
-            let v = r.verify(image);
-            if !rep.check(v.is_ok(), format!("receipt {n} verifies against the headers image {image_hex}{}",
-                                             v.err().map(|e| format!(": {e}")).unwrap_or_default())) {
-                return rep;
-            }
-            r.journal
+            Err(e) => { rep.check(false, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex}: {e}")); return rep; }
         };
         let (din, out): ([u8; 32], HeaderState) = match decode_journal(&journal) {
             Ok(j) => j,
@@ -572,21 +540,12 @@ fn hex32(s: &str) -> Option<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    /// The header-chain zyncAPP's built-in id is the published one (reproduce/LIBZYNC_IDS, `zyncapp-headers` line).
-    #[test]
-    fn headers_image_matches_the_published_id() {
-        let f = include_str!("../../../reproduce/LIBZYNC_IDS");
-        let line = f.lines().find(|l| l.starts_with("zyncapp-headers mainnet ")).expect("reproduce/LIBZYNC_IDS has no zyncapp-headers line");
-        let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-        assert_eq!(id, HEADERS_IMAGE_ID, "HEADERS_IMAGE_ID and reproduce/LIBZYNC_IDS disagree");
-    }
-
     use crate::mmr;
     /// The empty state's digest must equal what the guest computes over the same serde words: pinned here so a
     /// change to HeaderState's layout (which would break every chain of runs) fails a test.
     #[test]
     fn empty_state_serialises_as_the_guest_reads_it() {
-        let w = risc0_zkvm::serde::to_vec(&HeaderState::empty()).unwrap();
+        let w = hazync_journal::serde::to_vec(&HeaderState::empty()).unwrap();
         // height i64 (2 words), hash (32 words, one per byte), work (32), bits, time, epoch_first_time, len 0, max_time,
         // mmr_peaks len 0
         assert_eq!(w.len(), 2 + 32 + 32 + 3 + 1 + 1 + 1);
@@ -596,7 +555,7 @@ mod tests {
         let mut s = HeaderState::empty();
         s.height = 2;
         s.mmr_peaks = vec![[7; 32], [9; 32]];
-        let w = risc0_zkvm::serde::to_vec(&s).unwrap();
+        let w = hazync_journal::serde::to_vec(&s).unwrap();
         assert_eq!(w.len(), 72 + 64);
         assert_eq!(w[71], 2);
         assert_eq!(w[72], 7);
@@ -806,33 +765,36 @@ mod tests {
         assert!(Inclusion::parse(1, v["hash"].as_str().unwrap(), &["zz"], None).is_err());
     }
 
-    const HDR_0_100: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
-    const HDR_101_200: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
+    /// The engine's proof of mainnet headers 0..4,031 (tests/data/engine4031: keys-hdr) and its key.
+    const ENG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/engine4031");
+    fn eng_file() -> Vec<u8> { std::fs::read(format!("{ENG}/proof.hze")).unwrap() }
+    fn eng_id() -> String { std::fs::read_to_string(format!("{ENG}/image_id")).unwrap().trim().to_string() }
+    fn eng_key() -> EngineKey<'static> {
+        let vk: &'static [u8] = Box::leak(std::fs::read(format!("{ENG}/vk.bin")).unwrap().into_boxed_slice());
+        EngineKey { bytes: vk, pin: hex32(std::fs::read_to_string(format!("{ENG}/vk.sha256")).unwrap().trim()).unwrap() }
+    }
+    fn verify_eng(rs: &[&[u8]], expect: Option<(i64, &str)>, include: Option<&Inclusion>) -> HeadersReport {
+        verify_headers(rs, &eng_id(), &eng_key(), now(), expect, include)
+    }
+    fn include_200(hash: &str) -> Inclusion {
+        let p = lines(include_str!("../tests/data/engine4031/mmr_path_200_tip4031.txt"));
+        Inclusion::parse(200, hash, &p, None).unwrap()
+    }
+    const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
 
-    /// #758 (fuzz round 11-17) carried here when it met #724's move: the header-chain reader uses the core's strict
-    /// receipt decoder and journal guard, so it refuses the same inputs the core does, as a FAIL, never a panic.
+    /// The engine counterparts of #758 (fuzz round 11-17): a byte appended, the file cut, a journal not whole words:
+    /// FAIL, never a panic.
     #[test]
-    fn strict_receipt_and_journal_decoding() {
-        let mut trailing = HDR_0_100.to_vec();
+    fn malformed_engine_files_are_a_fail() {
+        let f = eng_file();
+        let mut trailing = f.clone();
         trailing.push(0);
-        let mut r: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
-        r.journal.bytes.push(0);
-        let journal = bincode::serialize(&r).unwrap();
-        let mut m: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
-        let risc0_zkvm::InnerReceipt::Succinct(s) = &mut m.inner else { panic!("hdr_0_100 is a succinct receipt") };
-        let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
-        words[0] = 0xffff_ffff;
-        s.control_inclusion_proof.digests[0] = words.into();
-        let ctrl = bincode::serialize(&m).unwrap();
-        for (b, want) in [(&ctrl, "malformed receipt"), (&trailing, "not a receipt")] {
-            let rep = verify_headers(&[b.as_slice()], HEADERS_IMAGE_ID, now(), None, None);
-            assert_eq!(rep.verdict, Verdict::Fail);
-            assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains(want)), "{want}: {:?}", rep.checks);
+        for (b, why) in [(trailing, "a byte appended"), (f[..f.len() / 2].to_vec(), "cut"), (b"HZE1".to_vec(), "the magic alone"),
+                         (vec![1, 0, 0, 0, 9, 9], "a RISC Zero receipt's bytes")] {
+            let rep = verify_eng(&[&b], None, None);
+            assert_eq!(rep.verdict, Verdict::Fail, "{why}");
+            assert!(rep.state.is_none(), "{why}");
         }
-        // A journal that is not whole words: this reader never decodes an unverified journal, so it is refused at the
-        // verify step (the claim no longer matches), before the guard — still a FAIL, never a panic.
-        let rep = verify_headers(&[journal.as_slice()], HEADERS_IMAGE_ID, now(), None, None);
-        assert_eq!(rep.verdict, Verdict::Fail);
     }
     const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16"; // block 170, Satoshi to Hal Finney
     fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
@@ -860,21 +822,17 @@ mod tests {
         right.as_object_mut().unwrap().remove("txid");
         assert!(verify_tx_in_header(&bhash(&right), &TxInclusion::from_json(T170, &right).unwrap()).is_ok());
 
-        // through verify_headers, on the real chained receipts: the lie is a FAIL with nothing reported as included;
-        // the right answer reports the block and the ASKED txid (the verdict is DEMO: 201 headers are below the
-        // minimum work, and `included` must be read with the verdict)
-        let rs = [HDR_0_100, HDR_101_200];
-        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, Some(&include_170(T170, &other).unwrap()));
-        assert_eq!(r.verdict, Verdict::Fail);
-        assert!(r.included.is_none());
-        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, Some(&include_170(T170, &fixture("170_1")).unwrap()));
-        assert_eq!(r.verdict, Verdict::Demo);
-        let inc = r.included.expect("included");
-        assert_eq!((inc.height, inc.hash_hex().as_str(), inc.txid_hex().as_deref()),
-                   (170, "00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee", Some(T170)));
+        // through verify_headers, on the engine proof 0..4,031: a block inclusion is reported only with every check
+        // passing (DEMO: 4,032 headers are below the minimum work, and `included` must be read with the verdict)
+        let f = eng_file();
+        let r = verify_eng(&[&f], None, Some(&include_200(H200)));
+        assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks);
+        assert_eq!(r.included.as_ref().map(|i| (i.height, i.hash_hex())), Some((200, H200.to_string())));
+        let r = verify_eng(&[&f], None, Some(&include_200(&H200.replace('8', "9"))));
+        assert_eq!((r.verdict, r.included.is_none()), (Verdict::Fail, true));
         // nothing included when nothing was asked, nor when another check failed (a wrong expected tip)
-        assert!(verify_headers(&rs, HEADERS_IMAGE_ID, now(), None, None).included.is_none());
-        let r = verify_headers(&rs, HEADERS_IMAGE_ID, now(), Some((199, "00")), Some(&include_170(T170, &fixture("170_1")).unwrap()));
+        assert!(verify_eng(&[&f], None, None).included.is_none());
+        let r = verify_eng(&[&f], Some((4030, "00")), Some(&include_200(H200)));
         assert_eq!((r.verdict, r.included.is_none()), (Verdict::Fail, true));
     }
 
@@ -902,14 +860,17 @@ mod tests {
         assert_eq!(s.leaves(), 0);
         s.height = i64::MAX;
         assert_eq!(s.leaves(), 1u64 << 63);
-        // a real receipt with its journal's height set to i64::MAX: it no longer verifies, and the verifier must stop
-        // there rather than read the journal (twice, so the second run's "from" would be i64::MAX)
-        let mut r: risc0_zkvm::Receipt = bincode::deserialize(HDR_0_100).unwrap();
-        let (din, mut out): ([u8; 32], HeaderState) = r.journal.decode().unwrap();
+        // the engine proof with its journal's height set to i64::MAX: it no longer verifies (the public values are
+        // SHA-256 of the journal), and the verifier must stop there rather than read the journal (twice, so the second
+        // run's "from" would be i64::MAX)
+        let f = eng_file();
+        let j = swiftsync_verify::proof_journal(&f).unwrap();
+        let (din, mut out): ([u8; 32], HeaderState) = j.decode().unwrap();
         out.height = i64::MAX;
-        r.journal.bytes = risc0_zkvm::serde::to_vec(&(din, out)).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
-        let forged = bincode::serialize(&r).unwrap();
-        let rep = verify_headers(&[&forged, &forged], HEADERS_IMAGE_ID, now(), None, None);
+        let nj: Vec<u8> = hazync_journal::serde::to_vec(&(din, out)).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let pl = u32::from_le_bytes(f[4..8].try_into().unwrap()) as usize;
+        let forged = [&f[..8 + pl], &nj[..]].concat();
+        let rep = verify_eng(&[&forged, &forged], None, None);
         assert_eq!(rep.verdict, Verdict::Fail);
         assert!(rep.state.is_none());
         assert!(!rep.checks.last().unwrap().0, "the last check is the failed verify: {:?}", rep.checks.last());
@@ -920,22 +881,20 @@ mod tests {
     #[test]
     fn a_broken_link_stops_the_check_and_runs_are_capped() {
         let verified = |r: &HeadersReport| r.checks.iter().filter(|c| c.0 && c.1.contains("verifies against the headers image")).count();
-        let rep = verify_headers(&[HDR_0_100, HDR_0_100, HDR_0_100, HDR_0_100], HEADERS_IMAGE_ID, now(), None, None);
+        let f = eng_file();
+        let rep = verify_eng(&[&f, &f, &f, &f], None, None);
         assert_eq!(rep.verdict, Verdict::Fail);
         assert_eq!(verified(&rep), 2, "copy 2's link fails, copies 3 and 4 are never verified: {:?}", rep.checks);
         assert!(!rep.checks.last().unwrap().0 && rep.checks.last().unwrap().1.contains("run 2 starts where run 1 ended"));
         assert!(rep.state.is_none());
-        // the first run not from genesis: one verification, then the end
-        let rep = verify_headers(&[HDR_101_200, HDR_0_100], HEADERS_IMAGE_ID, now(), None, None);
-        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Fail, 1));
         // more than MAX_RUNS: refused before any verification
-        let many = vec![HDR_0_100; MAX_RUNS + 1];
-        let rep = verify_headers(&many, HEADERS_IMAGE_ID, now(), None, None);
+        let many = vec![&f[..]; MAX_RUNS + 1];
+        let rep = verify_eng(&many, None, None);
         assert_eq!((rep.verdict, verified(&rep)), (Verdict::Fail, 0));
         assert!(rep.checks.iter().any(|c| !c.0 && c.1.contains("at most 4096 chained runs")));
-        // the good chain still verifies both runs
-        let rep = verify_headers(&[HDR_0_100, HDR_101_200], HEADERS_IMAGE_ID, now(), None, None);
-        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Demo, 2));
+        // the good chain verifies its one run
+        let rep = verify_eng(&[&f], None, None);
+        assert_eq!((rep.verdict, verified(&rep)), (Verdict::Demo, 1));
     }
 
     /// Review 11-18: the include JSON and the /tx answer take only their documented keys, each once. Before, every
@@ -983,15 +942,9 @@ mod tests {
     }
 }
 
-#[cfg(feature = "engine")]
-fn engine_run(file: &[u8], key: &swiftsync_verify::EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+fn engine_run(file: &[u8], key: &EngineKey, id: &[u8; 32]) -> Result<Journal, String> {
     if !swiftsync_verify::is_engine_proof(file) {
         return Err("not an engine proof file".into());
     }
     swiftsync_verify::engine_proof_journal(file, key, id)
-}
-
-#[cfg(not(feature = "engine"))]
-fn engine_run(_: &[u8], _: &swiftsync_verify::EngineKey, _: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
-    Err("this build has no engine support (feature `engine`)".into())
 }

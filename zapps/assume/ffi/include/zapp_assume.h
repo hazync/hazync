@@ -28,6 +28,10 @@ typedef struct {
 
 /* The assumevalid and assumeutxo checks (docs/libzync/ASSUME_ZAPPS.md), after the core verifier's receipt checks (as
  * swiftsync_verify_facts makes them) (genesis only: no anchor; a .rcpt receipt, not a bundle).
+ *   image_hex, vk, vk_len, vk_pin: the core image id (64 hex digits), its verifying key file and that file's 32-byte
+ *                      SHA-256, which you hold as the image's published pin (or your own build's); a key whose SHA-256 is
+ *                      not vk_pin is FAIL. Engine (OpenVM) proofs only; no engine image is published yet, so all four
+ *                      are required (as swiftsync_verify_engine_facts).
  *   expect:            as swiftsync_verify_facts; OK needs it to match (and enough work), else at most DEMO.
  *   assumevalid_block: NULL for no assumevalid check; 32 bytes, internal order: the block to name as -assumevalid,
  *                      or 32 zero bytes for the proven tip. Any block but the tip needs `headers` from it to the tip.
@@ -47,7 +51,8 @@ typedef struct {
 } swiftsync_assume_result;
 
 int swiftsync_verify_assume(const uint8_t* receipt, size_t receipt_len, uint8_t network, uint64_t now,
-                            const char* image_hex, const char* expect, const uint8_t* assumevalid_block,
+                            const char* image_hex, const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin,
+                            const char* expect, const uint8_t* assumevalid_block,
                             const uint8_t* headers, size_t headers_len, const uint8_t* snapshot, size_t snapshot_len,
                             const char* tracked, zapp_assume_chain* out, swiftsync_assume_result* aout,
                             char* msg, size_t msg_len);

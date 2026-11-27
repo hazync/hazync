@@ -1,7 +1,6 @@
 //! The liveness zAPP on the ENGINE chain (engine/VERIFIER.md, roadmap 2.5): the engine's proof of mainnet 1..200
 //! (node format 2), liveness proofs made from ITS history (vectors/engine, `zapp-liveness prove`), each checked against
-//! the verified engine state: the same claims and refusals as the RISC Zero chain's vectors/run.sh. `--features engine`.
-#![cfg(feature = "engine")]
+//! the verified engine state: the same claims and refusals as vectors/run.sh.
 use swiftsync_verify::*;
 use zapp_liveness::*;
 
@@ -55,7 +54,4 @@ fn liveness_on_the_engine_chain() {
     ] {
         assert!(check(&cs, uf, n, q.clone()).is_err(), "{why}: {q} was accepted");
     }
-    // a RISC Zero (format 1) liveness proof does not hold against the engine (format 2) state
-    let old = liveness_bytes(&rd(format!("{}/vectors/b9_0_at200.hex", env!("CARGO_MANIFEST_DIR")))).unwrap();
-    assert!(check_liveness(&cs, uf, &old, &LivenessAsk::parse(&format!("{T9}:0@200=spent:170:1:0")).unwrap()).is_err());
 }

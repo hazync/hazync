@@ -20,9 +20,6 @@ swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"
 sha2 = "0.10"
 
-[features]
-# engine (OpenVM) proofs with --vk (engine/VERIFIER.md)
-engine = ["zapp-utreexo/engine"]
 
 [profile.release]
 opt-level = "z"

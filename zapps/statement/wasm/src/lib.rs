@@ -8,7 +8,7 @@
 //! ```
 //!
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet][u64 now, unix seconds][u32 n][receipt]`
-//! `[u32 n][image id hex, n = 0 for the network's built-in image][u32 n][statement JSON]`
+//! `[u32 n][image id hex][u32 n][its verifying key file][u32 32][the key's pin][u32 n][statement JSON]`
 //! `[u32 n][expect "<height>:<hash>"][u32 n][purpose][u32 n][nonce][u32 n][max age, blocks][u32 n][network tip height]`.
 //! expect, purpose, nonce, the max age and the tip height come from the PAGE (the block it trusts, the challenge it gave
 //! the holder, its recency policy and the tip it fetched), never from the statement's sender; each may be empty. Without
@@ -65,6 +65,8 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
     let receipt = f.chunk()?;
     let image_hex = f.text()?.to_lowercase();
+    let vk = f.chunk()?;
+    let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is 32 bytes".to_string())?;
     let st: Statement = serde_json::from_slice(f.chunk()?).map_err(|e| format!("statement JSON: {e}"))?;
     let (expect, purpose, nonce) = (f.text()?, f.raw()?, f.raw()?);
     let num = |t: String, what: &str| -> Result<Option<u32>, String> {
@@ -75,11 +77,12 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     if f.i != input.len() {
         return Err("input frame has trailing bytes".into());
     }
-    // the image as every zAPP resolves it; an image id given is the only image the receipt may verify against (pinned)
-    let image = zapp_corecheck::image_for(network, &image_hex, false, false)?;
-    // the image reported is the one the receipt verified against (CoreCheck.image): asked for none, a receipt of an
-    // earlier built-in image of the network verifies as that image, not the one asked for (review 11-18)
-    let core = zapp_corecheck::verify_core(receipt, image, !image_hex.trim().is_empty(), None, now, None);
+    // the image as every zAPP resolves it, with its pinned key: no engine image is published yet, so both are given
+    if image_hex.trim().is_empty() || vk.is_empty() {
+        return Err("no engine core image is published yet: give the image id, its verifying key and pin".into());
+    }
+    let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, false, false)?, vk, Some(&pin))?;
+    let core = zapp_corecheck::verify_core(receipt, image, None, now, None);
     let (mut rep, image) = (core.report, core.image);
     let mut why: Vec<&str> = Vec::new();
     let mut age_checked = false;

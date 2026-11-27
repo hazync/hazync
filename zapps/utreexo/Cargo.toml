@@ -19,17 +19,13 @@ path = "src/lib.rs"
 # Tip mode (docs/libzync/UTREEXO_ZAPP.md §10): the tip statement's checks. Off by default (a user of the base checks
 # alone builds without them); the CLI and the WASM enable it.
 tip = []
-# engine (OpenVM) utreexo proofs: verify_utreexo_with / verify_utreexo_tip_with + a key (engine/VERIFIER.md)
-engine = ["swiftsync-verify/engine"]
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 libzync = { path = "../../libzync", default-features = false, features = ["utreexo"] }
 # disable-dev-mode: RISC0_DEV_MODE can never make this checker accept a fake receipt (as swiftsync-verify).
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = "1"
 
 [profile.release]
 opt-level = "z"

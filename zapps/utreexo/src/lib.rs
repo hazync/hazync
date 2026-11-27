@@ -6,9 +6,8 @@
 //! earlier runs and the core receipt are assumptions of the final receipt, so its verification covers them. What the
 //! zyncAPP could not know (which core images to trust, the genesis anchor, minimum work, the clock, and that block
 //! `height` is the node's own) is checked here, with the core verifier's own tables (swiftsync-verify as a library).
-use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
-use swiftsync_verify::{hex, hex32, identity_matches, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME};
+use swiftsync_verify::{hex, hex32, identity_matches, work_at_least, EngineKey, Image, Journal, Verdict, MAX_FUTURE_BLOCK_TIME};
 
 /// Tip mode (UTREEXO_ZAPP.md §10): the newest roots a few blocks below the tip, a chain of steps from a base.
 #[cfg(feature = "tip")]
@@ -16,16 +15,15 @@ mod tip;
 #[cfg(feature = "tip")]
 pub use tip::*;
 
-/// The utreexo (base walk) image id this checker trusts by default: the reproducible container's build
-/// (reproduce/libzync.Dockerfile, `libzync-ids.sh`), pinned in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, 21.11.2026,
-/// two agreeing builds of cffa2cbb on hazync-coord: the strict compact sizes of #774's follow-up; before it 27bea7da).
-pub const UTREEXO_IMAGE_ID: &str = "00b2d1e856b5ac55dc330da5b0d7143ccda357edb18d61a69a808999b2d2d4c6";
+/// The utreexo (base walk) image id this checker trusts by default: none until the engine image is published at the
+/// Stage 4 freeze (engine/CUTOVER.md C3), so a reader gives the id and key of the image they rebuilt. (00b2d1e8 was the
+/// RISC Zero image; v0.27.1 checks it.)
+pub const UTREEXO_IMAGE_ID: &str = "";
 /// How [`UTREEXO_IMAGE_ID`] is labelled wherever it is printed, until it is pinned.
-pub const UTREEXO_IMAGE_LABEL: &str = "pinned in reproduce/LIBZYNC_IDS, reproducible container build";
+pub const UTREEXO_IMAGE_LABEL: &str = "no engine utreexo image is published yet";
 /// Whether [`UTREEXO_IMAGE_ID`] is a reproducible build pinned in reproduce/LIBZYNC_IDS. While it is not, nobody can
-/// check which code the id stands for, so a proof under it is at most DEMO ([`image_source`]), whether the id came by
-/// default or was named with `--image`. Pinned 18.11.2026 (the container build gave the same id, so no vector moved).
-pub const UTREEXO_IMAGE_PINNED: bool = true;
+/// check which code the id stands for, so a proof under it is at most DEMO ([`image_source`]).
+pub const UTREEXO_IMAGE_PINNED: bool = false;
 
 /// The networks a caller can name (the core verifier's `Image` table has these two).
 pub const NETWORKS: [&str; 2] = ["mainnet", "signet"];
@@ -47,27 +45,10 @@ pub fn image_source(id: &[u8; 32]) -> &'static str {
     }
 }
 
-/// The largest receipt this checker decodes. A succinct receipt here is about 225 kB; anything far larger is refused
-/// before any decoding.
-pub const MAX_RECEIPT_BYTES: usize = 16 << 20;
-
-/// The receipt, decoded by the CORE verifier's strict decoder (`swiftsync_verify::decode_receipt`, #758: the kind gate,
-/// bincode with trailing bytes refused, and `receipt_well_formed`, which refuses the words risc0 would assert on: the
-/// fuzz round's unreduced control-inclusion word, fuzz/artifacts/utreexo_verify), after this checker's own size bound
-/// and its composite check (a composite, fake or unknown receipt is refused BEFORE bincode reads it: composites nest
-/// without bound and the recursive decode overflows the stack on a deep one; reviews of b127747 H1 / f99c301 L6).
-pub fn decode_receipt(receipt: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
-    if receipt.len() > MAX_RECEIPT_BYTES {
-        return Err(format!("{} bytes, over the {MAX_RECEIPT_BYTES}-byte limit", receipt.len()));
-    }
-    receipt_kind(receipt)?;
-    swiftsync_verify::decode_receipt(receipt)
-}
-
 /// The statement's kind word ('ZU', version 1), as libzync::utreexo_roots::KIND_UTREEXO.
 pub const KIND_UTREEXO: u32 = libzync::utreexo_roots::KIND_UTREEXO;
 
-/// The guest's statement, field for field and in order (risc0 serde).
+/// The guest's statement, field for field and in order (the guests' word encoding, hazync-journal).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct UtreexoStatement {
     pub kind: u32,
@@ -146,53 +127,39 @@ impl UtreexoReport {
     }
 }
 
-/// Verifies the final run's receipt on mainnet: [`verify_utreexo_on`]`("mainnet", ..)`, the default every zAPP takes
+/// Verifies the final run's proof on mainnet: [`verify_utreexo_on`]`("mainnet", ..)`, the default every zAPP takes
 /// when the caller names no network.
-pub fn verify_utreexo(receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
-                      expect_tip: Option<(u32, &str)>) -> UtreexoReport {
-    verify_utreexo_on("mainnet", receipt, image_hex, core_image_hex, now, expect_at, expect_tip)
+pub fn verify_utreexo(receipt: &[u8], image_hex: &str, key: &EngineKey, core_image_hex: &str, now: u64,
+                      expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
+    verify_utreexo_on("mainnet", receipt, image_hex, key, core_image_hex, now, expect_at, expect_tip)
 }
 
-/// Verifies the final run's receipt for the network the CALLER names (`network`: "mainnet" or "signet"; a proof of
-/// another network is FAIL, the proof never picks the network). `image_hex`: the utreexo image id
-/// ([`UTREEXO_IMAGE_ID`] by default); `core_image_hex`: a core image to trust instead of the network's built-in one;
-/// `now`: the checker's clock; `expect_at`: (H, hash at H as `getblockhash` prints it) from the node's own header
-/// chain; `expect_tip`: the same for the core tip when it is above H. The receipt checks are here; everything after
-/// the journal is decoded is [`judge_verified_statement`]. A FAIL report carries no statement.
-pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, core_image_hex: Option<&str>, now: u64,
-                         expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
-    verify_utreexo_with(network, receipt, image_hex, None, core_image_hex, now, expect_at, expect_tip)
-}
-
-/// [`verify_utreexo_on`] with the utreexo image's engine key: `receipt` is then an ENGINE (OpenVM) proof file of
-/// image `image_hex`, verified under the pinned key (engine/VERIFIER.md: the key, not the image id, authenticates
-/// it); the statement's checks are the same ([`judge_verified_statement`]). Without a key, a RISC Zero receipt.
+/// Verifies the final run's proof for the network the CALLER names (`network`: "mainnet" or "signet"; a proof of
+/// another network is FAIL, the proof never picks the network). `receipt`: an ENGINE (OpenVM) proof file of the utreexo
+/// image `image_hex`, verified under its pinned `key` (engine/VERIFIER.md: the key, not the image id, authenticates it);
+/// `core_image_hex`: the engine core image it rests on (node format 2: an engine zAPP proof can only rest on an engine
+/// core proof, its child verified in the same VM); `now`: the checker's clock; `expect_at`: (H, hash at H as
+/// `getblockhash` prints it) from the node's own header chain; `expect_tip`: the same for the core tip when it is above
+/// H. The proof checks are here; everything after the journal is decoded is [`judge_verified_statement`]. A FAIL report
+/// carries no statement. A RISC Zero receipt is checked with v0.27.1's verifier.
 #[allow(clippy::too_many_arguments)]
-pub fn verify_utreexo_with(network: &str, receipt: &[u8], image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>,
-                           core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
-                           expect_tip: Option<(u32, &str)>) -> UtreexoReport {
+pub fn verify_utreexo_on(network: &str, receipt: &[u8], image_hex: &str, key: &EngineKey, core_image_hex: &str, now: u64,
+                         expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> UtreexoReport {
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: network.to_string(), image_source: hex32(image_hex).as_ref().map(image_source) };
-    if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
-        return rep;
-    }
-    let Some(mut img) = NETWORKS.contains(&network).then(|| Image::by_network(network)).flatten() else {
+    let Some(img) = NETWORKS.contains(&network).then(|| Image::by_network(network)).flatten() else {
         rep.check(false, format!("the network is mainnet or signet ({network:?})"));
         return rep;
     };
-    if let Some(h) = core_image_hex {
-        match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
-    }
-    // an engine zAPP proof can only rest on an ENGINE core proof (its child, verified in the same VM): the core
-    // image is then an engine build, node format 2 (profile bit 7), as every engine guest computes
-    if engine_key.is_some() {
-        img = img.with_node2();
-    }
+    let Some(img) = img.with_method_id(&core_image_hex.to_lowercase()) else {
+        rep.check(false, format!("the core image id is 64 hex digits ({core_image_hex})"));
+        return rep;
+    };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the utreexo image id is 32 bytes of hex ({image_hex})"));
         return rep;
     };
-    let Some(journal) = proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo image {image_hex}"), engine_key) else {
+    let Some(journal) = proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo image {image_hex}"), key) else {
         return rep;
     };
     let z: UtreexoStatement = match journal.decode() {
@@ -213,49 +180,21 @@ pub fn verify_utreexo_with(network: &str, receipt: &[u8], image_hex: &str, engin
     s
 }
 
-/// The final run's journal and the checks that prove it (pushed to `checks`): a RISC Zero receipt verified under
-/// `id`, or, with `engine_key`, an ENGINE proof file of image `id` verified under the pinned key. None: the proof is
-/// not of a form whose journal may be read at all. A journal returned with a failed check is not proven; the caller
-/// must not pass on what it says (every caller turns any failed check into FAIL).
-pub(crate) fn proven_journal(checks: &mut Vec<(bool, String)>, file: &[u8], id: &[u8; 32], what: &str,
-                             engine_key: Option<&swiftsync_verify::EngineKey>) -> Option<risc0_zkvm::Journal> {
-    if let Some(k) = engine_key {
-        return match engine_run(file, k, id) {
-            Ok(j) => {
-                checks.push((true, format!("the engine proof verifies against {what} under the pinned key {}", hex(&k.pin))));
-                Some(j)
-            }
-            Err(e) => {
-                checks.push((false, format!("the engine proof verifies against {what}: {e}")));
-                None
-            }
-        };
+/// The final run's journal and the check that proves it (pushed to `checks`): an ENGINE proof file of image `id`
+/// verified under the pinned key. None: the proof did not verify, and its journal may not be read at all.
+pub(crate) fn proven_journal(checks: &mut Vec<(bool, String)>, file: &[u8], id: &[u8; 32], what: &str, key: &EngineKey) -> Option<Journal> {
+    let r = if swiftsync_verify::is_engine_proof(file) { swiftsync_verify::engine_proof_journal(file, key, id) }
+            else { Err("not an engine proof file (a RISC Zero receipt is checked with v0.27.1's verifier)".to_string()) };
+    match r {
+        Ok(j) => {
+            checks.push((true, format!("the engine proof verifies against {what} under the pinned key {}", hex(&key.pin))));
+            Some(j)
+        }
+        Err(e) => {
+            checks.push((false, format!("the engine proof verifies against {what}: {e}")));
+            None
+        }
     }
-    if let Err(e) = receipt_kind(file) {
-        checks.push((false, format!("the receipt is a single succinct or Groth16 proof ({e})")));
-        return None;
-    }
-    let r: risc0_zkvm::Receipt = match decode_receipt(file) {
-        Ok(r) => r,
-        Err(e) => { checks.push((false, format!("the receipt decodes ({e})"))); return None; }
-    };
-    checks.push((!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof".to_string()));
-    let v = r.verify(Digest::from_bytes(*id));
-    checks.push((v.is_ok(), format!("the receipt verifies against {what}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default())));
-    Some(r.journal)
-}
-
-#[cfg(feature = "engine")]
-fn engine_run(file: &[u8], key: &swiftsync_verify::EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
-    if !swiftsync_verify::is_engine_proof(file) {
-        return Err("not an engine proof file".into());
-    }
-    swiftsync_verify::engine_proof_journal(file, key, id)
-}
-
-#[cfg(not(feature = "engine"))]
-fn engine_run(_: &[u8], _: &swiftsync_verify::EngineKey, _: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
-    Err("this build has no engine support (feature `engine`)".into())
 }
 
 /// The verdict on a decoded statement, a pure function of it: `id` the utreexo image its receipt verified under, `img`
@@ -272,7 +211,7 @@ pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image,
     rep.check(z.kind == KIND_UTREEXO, "a utreexo statement (kind 'ZU' 1)");
     rep.check(z.done == 1 && z.to == z.height, "the final run: it ended at H and checked the core receipt");
     // every earlier run was verified, inside the zkVM, under the id this statement commits: it must be this image
-    rep.check(z.self_id == swiftsync_verify::words(&Digest::from_bytes(*id)), "every run of the chain is this image (self_id)");
+    rep.check(z.self_id == swiftsync_verify::words(id), "every run of the chain is this image (self_id)");
     rep.check(z.roots.len() as u32 == z.leaves.count_ones(), format!("{} roots for {} leaves (one per set bit)", z.roots.len(), z.leaves));
     // The one lineage check. A zero lineage: the core image proved 1..T alone, so every block carries its undo
     // commitment. A non-zero one (a handover, HANDOVER.md) is refused even when it is the image's own lineage
@@ -325,10 +264,6 @@ pub(crate) fn network_bits(net: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
-    fn rd(f: &str) -> Option<Vec<u8>> { std::fs::read(format!("{}/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).ok() }
-    fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
-    const H3: &str = "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449";
-    const H2: &str = "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd";
 
     #[test]
     fn floresta_source_form() {
@@ -340,37 +275,17 @@ mod tests {
         assert!(n.floresta_rust("signet").contains("acchashes![") && !n.floresta_rust("signet").contains("Empty"));
     }
 
+    /// Bytes that are not an engine proof file: refused before any decoding (a RISC Zero receipt's bincode length
+    /// prefix of 2^60, a file of zeros).
     #[test]
-    fn hostile_receipt_bytes() {
-        // a bincode Vec length of 2^60 at the front: refused by the limit, not reserved
+    fn hostile_bytes_are_refused() {
         let mut b = vec![0u8; 64];
         b[..8].copy_from_slice(&(1u64 << 60).to_le_bytes());
-        assert!(decode_receipt(&b).is_err());
-        assert!(decode_receipt(&vec![0u8; MAX_RECEIPT_BYTES + 1]).unwrap_err().contains("limit"));
-    }
-
-    /// The real receipts (vectors/, proved on CPU): DEMO (3 blocks are below minimum work), and refused when the
-    /// height, hash or image differ.
-    #[test]
-    fn real_receipts() {
-        let Some(r3) = rd("mainnet-3.receipt") else { panic!("vectors/mainnet-3.receipt missing") };
-        let ok = verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), None);
-        assert_eq!(ok.verdict, Verdict::Demo, "{:?}", ok.checks);
-        assert!(ok.identity_checked);
-        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((2, H3)), None).verdict, Verdict::Fail);
-        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H2)), None).verdict, Verdict::Fail);
-        assert_eq!(verify_utreexo(&r3, &"ab".repeat(32), None, now(), Some((3, H3)), None).verdict, Verdict::Fail);
-        // T = H: a given tip is still compared
-        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((3, H3))).verdict, Verdict::Demo);
-        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((3, H2))).verdict, Verdict::Fail);
-        assert_eq!(verify_utreexo(&r3, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), Some((2, H2))).verdict, Verdict::Fail);
-        let Some(r2) = rd("mainnet-2.receipt") else { panic!("vectors/mainnet-2.receipt missing") };
-        assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H3))).verdict, Verdict::Demo);
-        assert_eq!(verify_utreexo(&r2, UTREEXO_IMAGE_ID, None, now(), Some((2, H2)), Some((3, H2))).verdict, Verdict::Fail);
-        let Some(s) = rd("mainnet-3-split.receipt") else { panic!("vectors/mainnet-3-split.receipt missing") };
-        let v = verify_utreexo(&s, UTREEXO_IMAGE_ID, None, now(), Some((3, H3)), None);
-        assert_eq!(v.verdict, Verdict::Demo, "{:?}", v.checks);
-        assert_eq!(v.statement.as_ref().unwrap().runs, 2);
-        assert_eq!(v.statement.unwrap().roots, ok.statement.unwrap().roots, "one run and two runs give the same roots");
+        let key = EngineKey { bytes: &[], pin: [0; 32] };
+        for f in [&b[..], &vec![0u8; 4096][..]] {
+            let r = verify_utreexo(f, &"ab".repeat(32), &key, &"cd".repeat(32), 1_800_000_000, None, None);
+            assert_eq!(r.verdict, Verdict::Fail);
+            assert!(r.statement.is_none());
+        }
     }
 }

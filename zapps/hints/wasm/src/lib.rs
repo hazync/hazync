@@ -46,18 +46,20 @@ impl<'a> Frame<'a> {
 }
 
 /// The SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md), by the same `zapp_hints::verify_hints` the CLI
-/// `zapp-hints` uses. Input frame (little-endian): `[u64 now]` then seven chunks `[u32 n][bytes]`: the
-/// receipt, the hints file, the undo-hash file (n = 0: not checked), the hints image id hex (n = 0: built in), a core
-/// image id hex (n = 0: the network's built-in one), "H:hash" from the node's header chain (n = 0: none), "T:hash" for
-/// the core tip when it is above H (n = 0: none). The file is hashed here: a page streams nothing to a server.
+/// `zapp-hints` uses. Input frame (little-endian): `[u64 now]` then nine chunks `[u32 n][bytes]`: the engine proof
+/// file, the hints file, the undo-hash file (n = 0: not checked), the hints image id hex, the core image id hex, "H:hash"
+/// from the node's header chain (n = 0: none), "T:hash" for the core tip when it is above H (n = 0: none), the hints
+/// image's verifying key file, and its 32-byte pin (SHA-256 of that file, a constant the page is published with). No
+/// engine image is published yet, so both ids and the key are required. The file is hashed here: a page streams
+/// nothing to a server.
 #[no_mangle]
 pub extern "C" fn verify_hints(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    type In<'a> = (u64, [&'a [u8]; 7]);
+    type In<'a> = (u64, [&'a [u8]; 9]);
     let parsed = (|| -> Result<In, String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
-        let c = [f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?];
+        let c = [f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?];
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
         Ok((now, c))
     })();
@@ -67,14 +69,17 @@ pub extern "C" fn verify_hints(ptr: *const u8, len: usize) -> *const u8 {
         (Ok(a), Ok(b), Ok(d), Ok(e)) => (a, b, d, e),
         _ => return fail("a text field is not UTF-8".into()),
     };
-    let image = if image.is_empty() { zapp_hints::HINTS_IMAGE_ID.to_string() } else { image };
+    if image.is_empty() || core.is_empty() || c[7].is_empty() {
+        return fail("no engine hints image is published yet: give the hints image id, the core image id and the key".into());
+    }
+    let Ok(pin) = <[u8; 32]>::try_from(c[8]) else { return fail("the key's pin is 32 bytes".into()) };
     let pe = |e: &str| -> Result<Option<(u32, String)>, String> {
         if e.is_empty() { return Ok(None); }
         e.split_once(':').and_then(|(h, x)| h.parse::<u32>().ok().map(|h| Some((h, x.to_string())))).ok_or(format!("{e:?}: give height:hash"))
     };
     let (e1, e2) = match (pe(&exp), pe(&tip)) { (Ok(a), Ok(b)) => (a, b), (Err(e), _) | (_, Err(e)) => return fail(e) };
     let rep = zapp_hints::verify_hints(c[0], c[1], (!c[2].is_empty()).then_some(c[2]), &image,
-                                                    (!core.is_empty()).then_some(core.as_str()), now,
+                                                    &swiftsync_verify::EngineKey { bytes: c[7], pin }, &core, now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     let z = rep.statement.as_ref().filter(|_| rep.verdict != Verdict::Fail);
     let d = |b: &[u8; 32]| -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() };
@@ -91,10 +96,10 @@ pub extern "C" fn verify_hints(ptr: *const u8, len: usize) -> *const u8 {
     }).to_string())
 }
 
-/// The built-in hints image id, for the page to display.
+/// The published hints image id, for the page to display: empty until the Stage 4 freeze publishes one.
 #[no_mangle]
 pub extern "C" fn hints_image_id() -> *const u8 {
-    ret(zapp_hints::HINTS_IMAGE_ID.to_string())
+    ret(String::new())
 }
 
 #[cfg(test)]

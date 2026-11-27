@@ -26,7 +26,7 @@ echo "control: regtest-test is refused in a release build and in a WASM build"
 # a stand-in zAPP shared library, and two programs: one that links beside the core's archive, one that calls a symbol
 # nothing defines
 printf 'int zc_dummy(void) { return 0; }\n' > "$W/d.c"; cc -shared -fPIC -o "$W/libzc_dummy.so" "$W/d.c"
-printf '#include <string.h>\n#include "swiftsync_verify.h"\nint zc_dummy(void);\nint main(void) { const char* i = swiftsync_image_id(0); return !(i && strlen(i) == 64) + zc_dummy(); }\n' > "$W/ok.c"
+printf '#include <string.h>\n#include "swiftsync_verify.h"\nint zc_dummy(void);\nint main(void) { const char* i = swiftsync_image_id(0); return (i ? strlen(i) != 64 : 0) + zc_dummy(); }\n' > "$W/ok.c"
 printf 'int zc_no_such_symbol(void);\nint main(void) { return zc_no_such_symbol(); }\n' > "$W/broken.c"
 c_with_core "$W/ok.c" "$W" "$W" zc_dummy "$W/ok"
 "$W/ok"

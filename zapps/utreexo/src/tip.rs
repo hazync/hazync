@@ -7,23 +7,21 @@
 //! step's core receipt `core_id` proved valid from genesis to `core_height`. Every earlier step and the base are
 //! assumptions of the newest receipt, so its verification covers them. What the guests could not know (which images to
 //! trust, the anchor, minimum work, the clock, that block `height` is the node's own) is checked here.
-use crate::{decode_receipt, disp, image_source, network_bits, UtreexoReport, UtreexoStatement, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER,
+use crate::{disp, image_source, network_bits, UtreexoReport, UtreexoStatement, IMAGE_BUILTIN_UNPINNED, IMAGE_CALLER,
             NETWORKS, UTREEXO_IMAGE_LABEL};
-use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
-use swiftsync_verify::{hex, hex32, identity_matches, receipt_kind, work_at_least, Image, Verdict, MAX_FUTURE_BLOCK_TIME};
+use swiftsync_verify::{hex, hex32, identity_matches, work_at_least, EngineKey, Image, Verdict, MAX_FUTURE_BLOCK_TIME};
 
 /// The tip statement's kind word ('ZU', version 2; version 1 is the base).
 pub const KIND_UTREEXO_TIP: u32 = 0x5A55_0002;
 
-/// The utreexo TIP image id this checker trusts by default: the reproducible container's build, pinned in
-/// reproduce/LIBZYNC_IDS (`zyncapp-utreexo-tip`, 21.11.2026, two agreeing builds of cffa2cbb on
-/// hazync-coord: the strict compact sizes of #774's follow-up; before it ab6f7a26).
-pub const UTREEXO_TIP_IMAGE_ID: &str = "5ef26dfeb987a448f6921e8e7546620488a24b90f69c342b1837409d3c6c023d";
+/// The utreexo TIP image id this checker trusts by default: none until the engine image is published at the Stage 4
+/// freeze (engine/CUTOVER.md C3). (5ef26dfe was the RISC Zero image; v0.27.1 checks it.)
+pub const UTREEXO_TIP_IMAGE_ID: &str = "";
 /// Whether [`UTREEXO_TIP_IMAGE_ID`] is pinned (a reproducible build). While it is not, a proof under it is at most DEMO.
-pub const UTREEXO_TIP_IMAGE_PINNED: bool = true;
+pub const UTREEXO_TIP_IMAGE_PINNED: bool = false;
 
-/// The tip guest's statement, field for field and in order (risc0 serde).
+/// The tip guest's statement, field for field and in order (the guests' word encoding, hazync-journal).
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct TipStatement {
     pub kind: u32,
@@ -70,19 +68,11 @@ pub fn tip_image_source(id: &[u8; 32]) -> &'static str {
     }
 }
 
-/// The kind word of a receipt's journal (unverified: only to pick which statement to check it as). None for anything
-/// that is not a single succinct or Groth16 receipt: `receipt_kind` refuses composite receipts BEFORE any decoding,
-/// because they nest without bound and bincode's recursion overflows the stack on a deep one (review H1, 18.11.2026:
-/// 300,000 nested levels, 6 MB, killed the CLI with a stack overflow when this decoded first).
+/// The kind word of a proof file's journal (unverified: only to pick which statement to check it as), by the engine
+/// file's framing alone (no decoder runs). None for anything that is not an engine proof file.
 pub fn journal_kind(receipt: &[u8]) -> Option<u32> {
-    if swiftsync_verify::is_engine_proof(receipt) {
-        // an engine proof file: its journal by the framing alone (no decoder runs)
-        let j = swiftsync_verify::proof_journal(receipt).ok()?;
-        return j.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-    }
-    receipt_kind(receipt).ok()?;
-    let r = decode_receipt(receipt).ok()?;
-    r.journal.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    let j = swiftsync_verify::proof_journal(receipt).ok()?;
+    j.bytes.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap()))
 }
 
 pub struct TipReport {
@@ -91,44 +81,28 @@ pub struct TipReport {
     pub tip: Option<TipStatement>,
 }
 
-/// Verifies a tip receipt for the network the CALLER names. `tip_image_hex` / `base_image_hex`: the tip and base
-/// utreexo image ids ([`UTREEXO_TIP_IMAGE_ID`] / [`crate::UTREEXO_IMAGE_ID`] by default); the rest as
-/// [`crate::verify_utreexo_on`]. A FAIL report carries no statement.
+/// Verifies a tip proof for the network the CALLER names: an ENGINE proof file of the tip image `tip_image_hex` under
+/// its pinned `key`; `base_image_hex`: the base utreexo image; the rest as [`crate::verify_utreexo_on`]. A FAIL report
+/// carries no statement.
 #[allow(clippy::too_many_arguments)]
-pub fn verify_utreexo_tip_on(network: &str, receipt: &[u8], tip_image_hex: &str, base_image_hex: &str, core_image_hex: Option<&str>,
-                             now: u64, expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> TipReport {
-    verify_utreexo_tip_with(network, receipt, tip_image_hex, None, base_image_hex, core_image_hex, now, expect_at, expect_tip)
-}
-
-/// [`verify_utreexo_tip_on`] with the TIP image's engine key: `receipt` is then an ENGINE proof file of the tip image,
-/// verified under the pinned key ([`crate::verify_utreexo_with`]); the statement's checks are the same.
-#[allow(clippy::too_many_arguments)]
-pub fn verify_utreexo_tip_with(network: &str, receipt: &[u8], tip_image_hex: &str, engine_key: Option<&swiftsync_verify::EngineKey>,
-                               base_image_hex: &str, core_image_hex: Option<&str>, now: u64, expect_at: Option<(u32, &str)>,
-                               expect_tip: Option<(u32, &str)>) -> TipReport {
+pub fn verify_utreexo_tip_on(network: &str, receipt: &[u8], tip_image_hex: &str, key: &EngineKey, base_image_hex: &str,
+                             core_image_hex: &str, now: u64, expect_at: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> TipReport {
     let mut rep = UtreexoReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false,
                                   network: network.to_string(), image_source: hex32(tip_image_hex).as_ref().map(tip_image_source) };
     let fail = |rep: UtreexoReport| TipReport { report: rep, tip: None };
-    if !rep_check(&mut rep, !swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
-        return fail(rep);
-    }
-    let Some(mut img) = NETWORKS.contains(&network).then(|| Image::by_network(network)).flatten() else {
+    let Some(img) = NETWORKS.contains(&network).then(|| Image::by_network(network)).flatten() else {
         rep_check(&mut rep, false, format!("the network is mainnet or signet ({network:?})"));
         return fail(rep);
     };
-    if let Some(h) = core_image_hex {
-        match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep_check(&mut rep, false, "--core-image is 64 hex digits"); return fail(rep); } }
-    }
-    // an engine zAPP proof can only rest on an ENGINE core proof (its child, verified in the same VM): the core
-    // image is then an engine build, node format 2 (profile bit 7), as every engine guest computes
-    if engine_key.is_some() {
-        img = img.with_node2();
-    }
+    let Some(img) = img.with_method_id(&core_image_hex.to_lowercase()) else {
+        rep_check(&mut rep, false, format!("the core image id is 64 hex digits ({core_image_hex})"));
+        return fail(rep);
+    };
     let (Some(id), Some(base)) = (hex32(tip_image_hex), hex32(base_image_hex)) else {
         rep_check(&mut rep, false, format!("the tip and base image ids are 32 bytes of hex ({tip_image_hex}, {base_image_hex})"));
         return fail(rep);
     };
-    let Some(journal) = crate::proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo tip image {tip_image_hex}"), engine_key) else {
+    let Some(journal) = crate::proven_journal(&mut rep.checks, receipt, &id, &format!("the utreexo tip image {tip_image_hex}"), key) else {
         return fail(rep);
     };
     let z: TipStatement = match journal.decode() {
@@ -166,8 +140,8 @@ pub fn judge_tip_statement(z: TipStatement, id: &[u8; 32], base: &[u8; 32], img:
     let core_words = swiftsync_verify::words(&img.method_id());
     rep_check(&mut rep, z.kind == KIND_UTREEXO_TIP, "a utreexo tip statement (kind 'ZU' 2)");
     // every earlier step was verified inside the zkVM under the self_id this statement commits: it must be this image
-    rep_check(&mut rep, z.self_id == swiftsync_verify::words(&Digest::from_bytes(*id)), "every step of the chain is this tip image (self_id)");
-    rep_check(&mut rep, z.base_id == swiftsync_verify::words(&Digest::from_bytes(*base)),
+    rep_check(&mut rep, z.self_id == swiftsync_verify::words(id), "every step of the chain is this tip image (self_id)");
+    rep_check(&mut rep, z.base_id == swiftsync_verify::words(base),
               format!("the chain starts from a walk of the trusted base image {}", hex(base)));
     rep_check(&mut rep, z.steps >= 1 && z.from < z.height && z.base_height <= z.from, format!("{} steps from the base at {} (the last from {} to {})", z.steps, z.base_height, z.from, z.height));
     rep_check(&mut rep, z.roots.len() as u32 == z.leaves.count_ones(), format!("{} roots for {} leaves (one per set bit)", z.roots.len(), z.leaves));

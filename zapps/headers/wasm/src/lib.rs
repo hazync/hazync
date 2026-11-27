@@ -49,8 +49,9 @@ impl<'a> Frame<'a> {
 /// The header-chain zyncAPP (ROADMAP K1, N3), by the same `zapp_headers::verify_headers` the CLI
 /// `zapp-headers` uses. Input frame (little-endian): `[u64 now][u32 count]` then count times
 /// `[u32 n][receipt]` (the first from genesis, each next one starting where the one before ended), then
-/// `[u32 n][image id hex, n = 0 for the built-in id][u32 n]["height:hash" from a source the page trusts, n = 0 for none]`,
-/// optionally followed by `[u32 n][include JSON, n = 0 for none]`: `{"height", "hash" (as explorers print it), "path"
+/// `[u32 n][image id hex][u32 n]["height:hash" from a source the page trusts, n = 0 for none][u32 n][the image's
+/// verifying key file][u32 32][the key's pin: SHA-256 of that file, a constant the page is published with]`, optionally
+/// followed by `[u32 n][include JSON, n = 0 for none]`: `{"height", "hash" (as explorers print it), "path"
 /// (MMR hashes as zyncapp headers-mmr-path prints them), "txid"? and "tx"?, both or neither: the transaction asked
 /// about (as explorers print it; the CALLER's, never the service's) and the path service's /tx answer (pos, header,
 /// raw, branch, coinbase, coinbase_branch; zapp_headers::TxInclusion::from_json, which does not read the
@@ -67,7 +68,7 @@ impl<'a> Frame<'a> {
 #[no_mangle]
 pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    let parsed = (|| -> Result<(u64, Vec<&[u8]>, String, String, Option<zapp_headers::Inclusion>), String> {
+    let parsed = (|| -> Result<(u64, Vec<&[u8]>, String, String, &[u8], [u8; 32], Option<zapp_headers::Inclusion>), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let n = u32::from_le_bytes(f.take(4)?.try_into().unwrap()) as usize;
@@ -76,22 +77,26 @@ pub extern "C" fn verify_headers(ptr: *const u8, len: usize) -> *const u8 {
         for _ in 0..n { rs.push(f.chunk()?); }
         let image = std::str::from_utf8(f.chunk()?).map_err(|_| "image id: not UTF-8")?.to_string();
         let expect = std::str::from_utf8(f.chunk()?).map_err(|_| "expect: not UTF-8")?.to_string();
+        let vk = f.chunk()?;
+        let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is 32 bytes")?;
         let include = if f.i == input.len() { None } else {
             let j = f.chunk()?;
             if j.is_empty() { None } else { Some(parse_include(j)?) }
         };
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, rs, image, expect, include))
+        Ok((now, rs, image, expect, vk, pin, include))
     })();
-    let (now, rs, image, expect, include) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
-    let image = if image.is_empty() { zapp_headers::HEADERS_IMAGE_ID.to_string() } else { image };
+    let (now, rs, image, expect, vk, pin, include) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    if image.is_empty() {
+        return fail("no engine header-chain image is published yet: give the image id, its verifying key and pin".into());
+    }
     let exp = if expect.is_empty() { None } else {
         match expect.split_once(':').and_then(|(h, x)| h.parse::<i64>().ok().map(|h| (h, x))) {
             Some(e) => Some(e),
             None => return fail(format!("expect {expect:?}: give height:hash")),
         }
     };
-    let rep = zapp_headers::verify_headers(&rs, &image, now, exp, include.as_ref());
+    let rep = zapp_headers::verify_headers(&rs, &image, &swiftsync_verify::EngineKey { bytes: vk, pin }, now, exp, include.as_ref());
     // "ok" needs the tip compared with `expect` (a source the caller trusts), as every zAPP (review 11-16): without it a
     // chain with enough work is "demo", and `included` is never true
     let verdict = rep.gated();
@@ -122,10 +127,10 @@ fn parse_include(j: &[u8]) -> Result<zapp_headers::Inclusion, String> {
     zapp_headers::parse_include_json(j)
 }
 
-/// The built-in header-chain image id, for the page to display.
+/// The published header-chain image id, for the page to display: empty until the Stage 4 freeze publishes one.
 #[no_mangle]
 pub extern "C" fn headers_image_id() -> *const u8 {
-    ret(zapp_headers::HEADERS_IMAGE_ID.to_string())
+    ret(String::new())
 }
 
 #[cfg(test)]

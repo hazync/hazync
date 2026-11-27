@@ -11,9 +11,10 @@ int main(void) {
     char msg[256]; zapp_assume_chain out; swiftsync_assume_result a; memset(&out, 0, sizeof out); memset(&a, 0, sizeof a);
     unsigned char junk[9] = {1, 2, 3, 4, 5, 6, 7, 8, 9};
     const uint8_t tip[32] = {0};
-    int rc = swiftsync_verify_assume(junk, sizeof junk, ZAPP_ASSUME_NET_MAINNET, 0, NULL, NULL, tip, NULL, 0, NULL, 0, NULL,
+    int rc = swiftsync_verify_assume(junk, sizeof junk, ZAPP_ASSUME_NET_MAINNET, 0, NULL, NULL, 0, NULL, NULL, tip, NULL, 0, NULL, 0, NULL,
                                      &out, &a, msg, sizeof msg);
-    int ok = id && strlen(id) == 64 && rc == ZAPP_ASSUME_FAIL;
+    /* no engine image is published yet: the core's id is NULL until one is */
+    int ok = (id == NULL || strlen(id) == 64) && rc == ZAPP_ASSUME_FAIL;
     printf("%s core image id %.8s..., zAPP refuses junk: rc %d (%.60s)\n", ok ? "PASS" : "WRONG", id ? id : "(null)", rc, msg);
     printf("CORE_AND_ZAPP_IN_ONE_BINARY %s\n", ok ? "OK" : "FAIL");
     return !ok;

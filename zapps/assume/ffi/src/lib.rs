@@ -50,8 +50,8 @@ pub struct SwiftsyncAssumeResult {
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len: usize, network: u8, now: u64,
-                                                 image_hex: *const c_char, expect: *const c_char,
-                                                 assumevalid_block: *const u8, headers: *const u8, headers_len: usize,
+                                                 image_hex: *const c_char, vk: *const u8, vk_len: usize, vk_pin: *const u8,
+                                                 expect: *const c_char, assumevalid_block: *const u8, headers: *const u8, headers_len: usize,
                                                  snapshot: *const u8, snapshot_len: usize, tracked: *const c_char,
                                                  out: *mut ZappAssumeChain, aout: *mut SwiftsyncAssumeResult,
                                                  msg: *mut c_char, msg_len: usize) -> i32 {
@@ -62,7 +62,13 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
     let image_hex = if image_hex.is_null() { String::new() } else {
         match CStr::from_ptr(image_hex).to_str() { Ok(h) => h.to_string(), Err(_) => return fail("image id is not UTF-8") }
     };
-    let image = match zapp_corecheck::image_for(base.network, &image_hex, network & 0x10 != 0, network & 0x20 != 0) {
+    // the core image's id and its verifying key (engine/VERIFIER.md): no engine image is published yet, so both are given
+    if image_hex.trim().is_empty() || vk.is_null() || vk_len == 0 || vk_pin.is_null() {
+        return fail("no engine core image is published yet: give the image id, its verifying key and the key's 32-byte pin");
+    }
+    let pin: [u8; 32] = slice(vk_pin, 32).try_into().unwrap();
+    let image = match zapp_corecheck::image_for(base.network, &image_hex, network & 0x10 != 0, network & 0x20 != 0)
+        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), Some(&pin))) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };
@@ -73,8 +79,7 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
     if rb.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
         return fail("assume: a proof bundle is not accepted here: give the receipt");
     }
-    // an image id given is the only image the receipt may verify against (pinned)
-    let core = zapp_corecheck::verify_core(rb, image, !image_hex.is_empty(), None, now, expect_s.as_deref());
+    let core = zapp_corecheck::verify_core(rb, image, None, now, expect_s.as_deref());
     let rep = core.report;
     let tip_checked = core.tip_checked;
     if rep.verdict == Verdict::Fail || rep.checks.iter().any(|(ok, _)| !ok) {
@@ -131,8 +136,10 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
 #[cfg(test)]
 mod assume_tests {
     use super::*;
-    const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
-    const FLIPPED: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt");
+    const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+    const FLIPPED: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine_proof_flipped.hze");
+    const VK: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+    const ID: &str = include_str!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
     const SNAP: &[u8] = include_bytes!("../../vectors/utxo_200.dat");
     const SNAP199: &[u8] = include_bytes!("../../vectors/utxo_199.dat");
     const HDRS: &[u8] = include_bytes!("../../vectors/headers_0_200.bin");
@@ -144,7 +151,10 @@ mod assume_tests {
         let mut msg = [0 as c_char; 512];
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
         let avb = av.map(|b| b.to_vec());
-        let rc = unsafe { swiftsync_verify_assume(rcpt.as_ptr(), rcpt.len(), 0, now, std::ptr::null(),
+        let id = std::ffi::CString::new(ID.trim()).unwrap();
+        use sha2::Digest as _;
+        let pin: [u8; 32] = sha2::Sha256::digest(VK).into();
+        let rc = unsafe { swiftsync_verify_assume(rcpt.as_ptr(), rcpt.len(), 0, now, id.as_ptr(), VK.as_ptr(), VK.len(), pin.as_ptr(),
             expect.map_or(std::ptr::null(), |e| e.as_ptr() as *const c_char), avb.as_ref().map_or(std::ptr::null(), |b| b.as_ptr()),
             HDRS.as_ptr(), HDRS.len(), snap.map_or(std::ptr::null(), |s| s.as_ptr()), snap.map_or(0, |s| s.len()), std::ptr::null(),
             out.as_mut_ptr(), a.as_mut_ptr(), msg.as_mut_ptr(), msg.len()) };

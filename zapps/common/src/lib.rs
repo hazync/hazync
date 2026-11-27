@@ -445,14 +445,15 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// Against the real mainnet 1..200 proof's state (8888d59c, verified by the core verifier): its tip expected holds,
+    /// Against the engine chain's real mainnet 1..200 proof's state (verified by the core verifier): its tip expected holds,
     /// another height does not, no source gives no check.
     #[test]
     fn core_tip_against_a_real_state() {
         use swiftsync_verify::{verify, Image, Inputs};
-        let r = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt")).unwrap();
-        let img = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
-        let cs = verify(&Inputs { receipt: &r, image: img, anchor: None, now: 1_800_000_000 }).state.unwrap();
+        let rd = |f: &str| std::fs::read(format!("{}/../../swiftsync-verify/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+        let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
+        let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd("mainnet_1_200_engine.vk"));
+        let cs = verify(&Inputs { receipt: &rd("mainnet_1_200_engine.hze"), image: img, anchor: None, now: 1_800_000_000 }).state.unwrap();
         let id = Identity { expect: Some(format!("200:{H200}")), ..Default::default() };
         assert!(check_core_tip(&id, "mainnet", &cs).1);
         assert!(!check_core_tip(&Identity { expect: Some(format!("199:{H200}")), ..Default::default() }, "mainnet", &cs).1);

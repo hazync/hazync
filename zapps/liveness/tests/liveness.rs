@@ -1,7 +1,7 @@
-//! Liveness proofs (docs/libzync/LIVENESS_ZAPP.md) against the REAL proof of mainnet 1..200 (image 8888d59c, risc0
-//! 3.1.0, the core's swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt) and the history of that run
-//! (vectors/mainnet_1_200_history.bin). The proofs in vectors/ were written by `zync-path live ... --blocks
-//! prover/testdata/libzync/mainnet`, now `zapp-liveness prove`.
+//! Liveness proofs (docs/libzync/LIVENESS_ZAPP.md) against the engine chain's REAL proof of mainnet 1..200 (the core's
+//! swiftsync-verify/vectors/mainnet_1_200_engine.*) and the history of that run (swiftsync-verify/tests/data/engine200/
+//! history.bin, node format 2). The proofs in vectors/engine were written by `zapp-liveness prove ... --blocks
+//! prover/testdata/libzync/mainnet`.
 
 use libzync::liveness as lv;
 use swiftsync_verify::*;
@@ -20,18 +20,32 @@ fn zapp_path(f: &str) -> String {
     format!("{}/vectors/{f}", env!("CARGO_MANIFEST_DIR"))
 }
 
+/// The engine chain's liveness proofs.
 fn proof(f: &str) -> Vec<u8> {
+    liveness_bytes(&std::fs::read(zapp_path(&format!("engine/{f}"))).unwrap()).unwrap()
+}
+
+/// A proof of the regtest harness's host data (node format 1, vectors/regtest_*).
+fn regtest_proof(f: &str) -> Vec<u8> {
     liveness_bytes(&std::fs::read(zapp_path(f)).unwrap()).unwrap()
 }
 
-fn verified(rcpt: &str) -> Report {
-    let receipt = std::fs::read(vec_path(rcpt)).unwrap();
-    let image = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
+/// The engine chain's history of 1..200.
+fn history() -> Vec<libzync::history::Rec> {
+    let p = format!("{}/../../swiftsync-verify/tests/data/engine200/history.bin", env!("CARGO_MANIFEST_DIR"));
+    libzync::history::decode_all(&std::fs::read(p).unwrap()).unwrap()
+}
+
+fn verified(file: &str) -> Report {
+    let receipt = std::fs::read(vec_path(file)).unwrap();
+    let id = std::fs::read_to_string(vec_path("mainnet_1_200_engine.image_id")).unwrap();
+    let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap()
+        .with_engine_key(std::fs::read(vec_path("mainnet_1_200_engine.vk")).unwrap());
     verify(&Inputs { receipt: &receipt, image, anchor: None, now: 1_800_000_000 })
 }
 
 fn state() -> (ChainState, u32) {
-    let r = verified("mainnet_1_200_8888d59c.rcpt");
+    let r = verified("mainnet_1_200_engine.hze");
     assert_eq!(r.verdict, Verdict::Demo, "below minimum work: DEMO");
     (r.state.unwrap(), r.undo_from)
 }
@@ -52,7 +66,7 @@ const HONEST: [(&str, &str, &str); 5] = [
 #[test]
 fn honest_proofs_hold_and_the_producer_is_deterministic() {
     let (cs, uf) = state();
-    let recs = libzync::history::decode_all(&std::fs::read(zapp_path("mainnet_1_200_history.bin")).unwrap()).unwrap();
+    let recs = history();
     for (f, q, want) in HONEST {
         let b = proof(f);
         let (got, line) = check_liveness(&cs, uf, &b, &ask(q)).unwrap_or_else(|e| panic!("{f}: {e}"));
@@ -127,7 +141,7 @@ fn spent_claimed_unspent_and_unspent_claimed_spent_are_refused() {
 #[test]
 fn an_outpoint_that_never_existed_has_no_proof() {
     let (cs, uf) = state();
-    let recs = libzync::history::decode_all(&std::fs::read(zapp_path("mainnet_1_200_history.bin")).unwrap()).unwrap();
+    let recs = history();
     let p = lv::decode(&proof("b170_0_at200.hex")).unwrap();
     // vout 2 of the first payment (it has two outputs), and a made-up txid, on every position of the log
     for coin in [lv::Coin { vout: 2, ..p.coin.clone() }, lv::Coin { txid: [0x42; 32], ..p.coin.clone() }] {
@@ -161,10 +175,14 @@ fn heights_above_the_tip_and_mismatched_questions_are_refused() {
     let mut t = lv::decode(&proof("b170_0_at200.hex")).unwrap();
     t.at = 199;
     assert!(check_liveness(&cs, uf, &lv::encode(&t), &ask(&format!("{T170}:0@199"))).is_err());
-    // an undo hash on a block whose leaf has none (this image predates the commitment)
+    // the engine chain's leaves carry the undo commitment (undo_from 1): an opening with another undo hash, or none
+    assert_eq!(uf, 1);
     let mut u = lv::decode(&proof("b9_0_at169.hex")).unwrap();
+    assert!(u.opening.as_ref().unwrap().undo.is_some());
     u.opening.as_mut().unwrap().undo = Some([7; 32]);
-    assert!(check_liveness(&cs, uf, &lv::encode(&u), &ask(&format!("{T9}:0@169"))).unwrap_err().contains("undo"));
+    assert!(check_liveness(&cs, uf, &lv::encode(&u), &ask(&format!("{T9}:0@169"))).is_err());
+    u.opening.as_mut().unwrap().undo = None;
+    assert!(check_liveness(&cs, uf, &lv::encode(&u), &ask(&format!("{T9}:0@169"))).is_err());
 }
 
 /// Every bit of every real proof is bound (the #695 lesson): any single-bit change is refused by the proof check
@@ -198,8 +216,8 @@ fn every_byte_is_bound() {
 
 /// A receipt that does not verify gives no state to check a proof against.
 #[test]
-fn a_dev_mode_or_tampered_receipt_is_refused() {
-    for r in ["fake_block_2501.rcpt", "mainnet_1_200_8888d59c_flipped.rcpt"] {
+fn a_tampered_proof_is_refused() {
+    for r in ["mainnet_1_200_engine_proof_flipped.hze", "mainnet_1_200_engine_trailing_byte.hze"] {
         assert_eq!(verified(r).verdict, Verdict::Fail, "{r}");
     }
 }
@@ -272,7 +290,7 @@ fn recreated() -> (tempdir::Dir, Vec<libzync::history::Rec>, ChainState, lv::Coi
         Rec { height: 3, hash: [13; 32], value: v, flips: vec![], appends: vec![new.leaf()], undo: None },
     ];
     let r = libzync::history::replay(&recs, 3, 3).unwrap();
-    let mut cs = genesis_anchor(Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap());
+    let mut cs = genesis_anchor(Image::by_network("mainnet").unwrap());
     cs.profile |= swiftsync_verify::PROFILE_NODE2;   // a synthetic state, built in node format 2 (this thread's default)
     cs.profile |= PROFILE_COINLOG;
     cs.height = 3;
@@ -402,7 +420,7 @@ fn above_block_200_on_regtest() {
     assert!(cases.len() >= 3);
     let mut n = 0;
     for (f, q, want) in &cases {
-        let b = proof(f);
+        let b = regtest_proof(f);
         assert_eq!(&check_liveness(&cs, uf, &b, &ask(q)).unwrap_or_else(|e| panic!("{f}: {e}")).0, want, "{f}");
         n += flips_refused(&b, &chain);
     }

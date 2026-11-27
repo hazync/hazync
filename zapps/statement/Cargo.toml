@@ -16,14 +16,10 @@ path = "src/lib.rs"
 # The library only: the CLI zapp-statement (the checker, and the producer as subcommands) is its own crate (cli/), so the
 # library and its WASM module never link the CLI's chain-identity lookups (zapps/common: curl, bitcoin-cli).
 
-[features]
-# engine (OpenVM) core proofs (engine/VERIFIER.md)
-engine = ["swiftsync-verify/engine"]
-
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 libzync = { path = "../../libzync", default-features = false }
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+hazync-journal = { path = "../../engine/journal" }
 # BIP-322 by the rust-bitcoin project's crate (CC0-1.0; its tests run BIP-322's official vectors), not code of our own.
 # The one hand-written part is P2PK (src/p2pk.rs), which the crate does not cover.
 bip322 = "=0.0.12"

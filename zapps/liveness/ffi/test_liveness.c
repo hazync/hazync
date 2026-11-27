@@ -1,5 +1,6 @@
-/* test_liveness.c: the liveness zAPP's C ABI (zapp_liveness_verify) on the real mainnet 1..200 proof (8888d59c,
- * risc0 3.1.0; the core's ../../../swiftsync-verify/vectors) and this zAPP's proofs (../vectors). Honest claims are
+/* test_liveness.c: the liveness zAPP's C ABI (zapp_liveness_verify) on the engine chain's real mainnet 1..200 proof
+ * (the core's ../../../swiftsync-verify/vectors, under its image id and pinned key) and this zAPP's proofs
+ * (../vectors/engine). Honest claims are
  * DEMO (below minimum work), refusals FAIL. Moved from swiftsync-verify-ffi/test.c's 7 liveness cases, 15.11.2026.
  *   cc -O2 -Iinclude test_liveness.c target/release/libzapp_liveness_ffi.a -lpthread -ldl -lm -o test_liveness && ./test_liveness */
 #include <stdio.h>
@@ -15,7 +16,7 @@ static unsigned char* slurp(const char* p, size_t* n) {
 }
 
 static int bad = 0, n = 0;
-static const char* IMG = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4";
+static char IMG[65]; static unsigned char *VK, PIN[32]; static size_t VN;
 static const char* CORE = "../../../swiftsync-verify/vectors/";
 
 /* A liveness proof: `flip` >= 0 flips that hex digit. */
@@ -23,13 +24,13 @@ static void live(const char* name, const char* rc, const char* proof, const char
     size_t rn, pn; char msg[512], path[512];
     snprintf(path, sizeof path, "%s%s", CORE, rc);
     unsigned char* r = slurp(path, &rn);
-    snprintf(path, sizeof path, "../vectors/%s", proof);
+    snprintf(path, sizeof path, "../vectors/%s%s", strncmp(proof, "regtest", 7) ? "engine/" : "", proof);
     unsigned char* p = slurp(path, &pn);
     while (pn && (p[pn - 1] == '\n' || p[pn - 1] == '\r')) pn--;
     if (flip >= 0) p[flip] = p[flip] == '0' ? '1' : '0';
     char* facts = malloc(pn + strlen(ask) + 64);
     sprintf(facts, "{\"liveness\": [{\"proof\": \"%.*s\", \"ask\": \"%s\"}]}", (int)pn, (const char*)p, ask);
-    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, NULL, facts, expect, msg, sizeof msg);
+    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, VK, VN, PIN, NULL, facts, expect, msg, sizeof msg);
     printf("%s  %-24s verdict %d (want %d)  %.150s\n", got == want ? "PASS" : "WRONG", name, got, want, msg);
     bad += got != want; n++; free(r); free(p); free(facts);
 }
@@ -38,23 +39,28 @@ static void live(const char* name, const char* rc, const char* proof, const char
  * (up to 3 times); `why`: a word the refusal names. Before facts_from_json a key beside "liveness" was dropped unread. */
 static void facts(const char* name, const char* fmt, int want, const char* why) {
     size_t rn, pn; char msg[512], path[512];
-    snprintf(path, sizeof path, "%smainnet_1_200_8888d59c.rcpt", CORE);
+    snprintf(path, sizeof path, "%smainnet_1_200_engine.hze", CORE);
     unsigned char* r = slurp(path, &rn);
-    unsigned char* p = slurp("../vectors/b170_0_at200.hex", &pn);
+    unsigned char* p = slurp("../vectors/engine/b170_0_at200.hex", &pn);
     while (pn && (p[pn - 1] == '\n' || p[pn - 1] == '\r')) pn--;
     char* f = malloc(pn + 256);
     sprintf(f, "{\"proof\": \"%.*s\", \"ask\": \"f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200=unspent\"}", (int)pn, (const char*)p);
     char* j = malloc(3 * strlen(f) + strlen(fmt) + 1);
     sprintf(j, fmt, f, f, f);
-    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, NULL, j, NULL, msg, sizeof msg);
+    int got = zapp_liveness_verify(r, rn, 0x20, (uint64_t)time(NULL), IMG, VK, VN, PIN, NULL, j, NULL, msg, sizeof msg);
     int ok = got == want && (!why || strstr(msg, why));
     printf("%s  %-24s verdict %d (want %d)  %.150s\n", ok ? "PASS" : "WRONG", name, got, want, msg);
     bad += !ok; n++; free(r); free(p); free(f); free(j);
 }
 
 int main(void) {
+    size_t k; char path[512];
+    snprintf(path, sizeof path, "%smainnet_1_200_engine.image_id", CORE); unsigned char* i = slurp(path, &k); memcpy(IMG, i, 64); IMG[64] = 0;
+    snprintf(path, sizeof path, "%smainnet_1_200_engine.vk", CORE); VK = slurp(path, &VN);
+    snprintf(path, sizeof path, "%s../tests/data/engine200/vk.sha256", CORE); unsigned char* ph = slurp(path, &k);
+    for (int j = 0; j < 32; j++) sscanf((char*)ph + 2 * j, "%2hhx", &PIN[j]);
     const char* H = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16:0@200";
-    const char* R = "mainnet_1_200_8888d59c.rcpt";
+    const char* R = "mainnet_1_200_engine.hze";
     const char* TIP = "200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
     char q[256];
     snprintf(q, sizeof q, "%s=unspent,value=1000000000", H);
@@ -74,11 +80,7 @@ int main(void) {
     snprintf(q, sizeof q, "%s=unspent,created=171", H);
     live("liveness_wrong_created", R, "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
     live("liveness_upper_case_txid", R, "b170_0_at200.hex", "F4184FC596403B9D638783CF57ADFE4C75C605F6356FBC91338530E9831E9E16:0@200=unspent", -1, NULL, ZAPP_LIVENESS_FAIL);
-    live("liveness_fake_receipt", "fake_block_2501.rcpt", "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
-    /* positive control: the zAPP regtest harness's real receipt (image eb2cd424) and its real liveness proof are refused */
-    live("regtest_receipt_refused", "../../scripts/zapp-regtest/receipts/a/block_112.rcpt", "regtest_x_spent_a112.hex",
-         "e0b6ab75f1ce5f1dcf1a77ded4bf03eb962f50365ee8f77a4b269802dadd5a9f:1@112=spent:111:2:0", -1,
-         "112:67c1d2e718067bba4ffd07a10f2ce27f5e6b55702eb2c766fafbf36db6160574", ZAPP_LIVENESS_FAIL);
+    live("liveness_flipped_proof", "mainnet_1_200_engine_proof_flipped.hze", "b170_0_at200.hex", q, -1, NULL, ZAPP_LIVENESS_FAIL);
     facts("facts_documented_key", "{\"liveness\": [%s]}", ZAPP_LIVENESS_DEMO, NULL);
     facts("facts_misspelt_beside", "{\"liveness\": [%s], \"livenes\": [%s]}", ZAPP_LIVENESS_FAIL, "unknown field `livenes`");
     facts("facts_misspelt_alone", "{\"livenes\": [%s]}", ZAPP_LIVENESS_FAIL, "unknown field `livenes`");

@@ -17,10 +17,8 @@ path = "src/lib.rs"
 
 [dependencies]
 libfuzzer-sys = "0.4"
-zapp-utreexo = { path = ".." }
+zapp-utreexo = { path = "..", features = ["tip"] }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
-bincode = "1"
 
 [[bin]]
 name = "utreexo_decode"

@@ -1,46 +1,34 @@
 //! The Utreexo roots zAPP's fuzz properties (docs/libzync/ZAPP_TESTING.md §3.4, §4.8), one function per target, so the
 //! fuzz targets and the stable corpus replay (tests/replay.rs) run the same code. A property that fails panics.
+//! Engine proofs only since the cutover (27.11.2026, engine/CUTOVER.md).
 //!
-//! - `decode`: any bytes into `decode_receipt` (the 16 MiB limit): no panic, no allocation beyond the limit; a receipt
-//!   it decodes re-encodes (bincode, fixed-width integers) to a prefix of the input (trailing bytes are allowed by
-//!   design, as `bincode::deserialize`).
-//! - `verify`: mutations of the real receipts (vectors/, CPU proofs at H = 2 and 3) through `verify_utreexo` with the
-//!   questions the zAPP's tests ask: a verdict other than FAIL only for a receipt whose decoding is one of the real
-//!   receipts (the input's own bytes up to any trailing ones).
+//! - `decode`: any bytes into `journal_kind` (the engine file's framing, unverified): no panic; a kind is read only from
+//!   an engine proof file whose framing holds.
+//! - `verify`: mutations of the engine's real base proof (tests/data/engine/base100.hze, roots after block 100) through
+//!   `verify_utreexo` under its image id and pinned key: a verdict other than FAIL only for exactly the real file.
 
-use std::sync::OnceLock;
-use swiftsync_verify::Verdict;
-use zapp_utreexo::{decode_receipt, verify_utreexo, UTREEXO_IMAGE_ID};
+use swiftsync_verify::{hex32, EngineKey, Verdict};
+use zapp_utreexo::{journal_kind, verify_utreexo};
 
-pub const H3: &str = "0000000082b5015589a3fdf2d4baff403e6f0be035a5d9742c1cae6295464449";
-pub const H2: &str = "000000006a625f06636b8bb6ac7b960a8d03705d1ace08b1a19da3fdcc99ddbd";
+pub const H100: &str = "000000007bc154e0fa7ea32218a72fe2c1bb9f86cf8c9ebf9a715ed27fdb229a";
+pub const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
+pub const BASE_ID: &str = "340f6675bafcdd893c12e0dfae0391043cc7fd8919b526ff756ec13d5d76cc95";
+pub const CORE_ID: &str = "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9";
+pub const BASE_PIN: &str = "a966e0ebe4e542192436c292a0db4b1c1b4ac2f0208a3d985fd1f5563ecd730a";
 pub const NOW: u64 = 1_800_000_000;
-pub const REAL: [&[u8]; 3] = [include_bytes!("../../vectors/mainnet-2.receipt"), include_bytes!("../../vectors/mainnet-3.receipt"),
-                              include_bytes!("../../vectors/mainnet-3-split.receipt")];
-
-fn canon(b: &[u8]) -> Option<Vec<u8>> {
-    decode_receipt(b).ok().map(|r| bincode::serialize(&r).unwrap())
-}
-
-fn real_canon() -> &'static Vec<Vec<u8>> {
-    static C: OnceLock<Vec<Vec<u8>>> = OnceLock::new();
-    C.get_or_init(|| REAL.iter().map(|b| { let c = canon(b).unwrap(); assert_eq!(&c[..], *b, "a real receipt is not canonical"); c }).collect())
-}
+pub const REAL: &[u8] = include_bytes!("../../tests/data/engine/base100.hze");
+const VK: &[u8] = include_bytes!("../../tests/data/engine/base100.vk");
 
 pub fn decode(data: &[u8]) {
-    if let Ok(r) = decode_receipt(data) {
-        let c = bincode::serialize(&r).unwrap();
-        assert!(data.starts_with(&c), "NONCANONICAL: decode_receipt accepted bytes whose re-encoding is not a prefix of them");
+    if journal_kind(data).is_some() {
+        assert!(swiftsync_verify::is_engine_proof(data), "a journal kind read from bytes that are not an engine proof file");
     }
 }
 
 pub fn verify(data: &[u8]) {
-    for (at, tip) in [((3, H3), None), ((2, H2), Some((3, H3)))] {
-        let rep = verify_utreexo(data, UTREEXO_IMAGE_ID, None, NOW, Some(at), tip);
-        if rep.verdict != Verdict::Fail {
-            let c = canon(data);
-            assert!(c.as_ref().is_some_and(|c| real_canon().contains(c)),
-                    "WRONG-OK: {:?} for a receipt that is not one of the real ones ({} bytes)", rep.verdict, data.len());
-        }
+    let key = EngineKey { bytes: VK, pin: hex32(BASE_PIN).unwrap() };
+    let rep = verify_utreexo(data, BASE_ID, &key, CORE_ID, NOW, Some((100, H100)), Some((200, H200)));
+    if rep.verdict != Verdict::Fail {
+        assert!(data == REAL, "WRONG-OK: {:?} for a file that is not the real proof ({} bytes)", rep.verdict, data.len());
     }
 }

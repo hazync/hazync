@@ -7,11 +7,13 @@
 //!   image_id() -> p                the built-in utreexo image id, same encoding
 //!   tip_image_id() -> p            the built-in utreexo TIP image id (UTREEXO_ZAPP.md §10), same encoding
 //! ```
-//! Input frame (little-endian): `[u64 now][u32 n][receipt][u32 n][image id hex, n = 0 for the built-in]`
+//! Input frame (little-endian): `[u64 now][u32 n][engine proof file][u32 n][image id hex]`
 //! `[u32 n]["H:hash" from the page's own source, n = 0 for none][u32 n]["T:hash" for the core tip, n = 0 for none]`
-//! `[u32 n][network: "mainnet" or "signet", n = 0 for mainnet]`. The network is the caller's: a proof of another
-//! network is FAIL. (Until 18.11.2026 the frame had no network and the proof's own profile picked it; such a frame is
-//! now refused as truncated.) Optional last field, since tip mode: `[u32 n][base image id hex, n = 0 for the built-in]`.
+//! `[u32 n][network: "mainnet" or "signet", n = 0 for mainnet][u32 n][core image id hex][u32 n][the image's verifying
+//! key file][u32 32][the key's pin: SHA-256 of that file, a constant the page is published with]`. The network is the
+//! caller's: a proof of another network is FAIL. Engine proofs only since the cutover (27.11.2026): no engine image is
+//! published yet, so the image id, the core image id and the key are required. Optional last field, for tip mode:
+//! `[u32 n][base image id hex]` (required for a tip proof).
 //! A TIP receipt (the journal's kind word 'ZU' 2) is checked as a tip statement: the image id is then the tip image's,
 //! the base image the built-in one unless named; its JSON adds `mode: "tip"`, `steps`, `from`, `base_height`,
 //! `base_image`, and `n_live` is not reported.
@@ -72,7 +74,7 @@ fn expect(s: &str, what: &str) -> Result<Option<(u32, String)>, String> {
 pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
     #[allow(clippy::type_complexity)]
-    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>, String, String), String> {
+    let parsed = (|| -> Result<(u64, &[u8], String, Option<(u32, String)>, Option<(u32, String)>, String, String, &[u8], [u8; 32], String), String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
         let r = f.chunk()?;
@@ -80,22 +82,28 @@ pub extern "C" fn verify_utreexo(ptr: *const u8, len: usize) -> *const u8 {
         let at = expect(&f.text("expect-at")?, "expect-at")?;
         let tip = expect(&f.text("expect-tip")?, "expect-tip")?;
         let network = f.text("network")?;
+        let core = f.text("core image id")?;
+        let vk = f.chunk()?;
+        let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is 32 bytes".to_string())?;
         let base = if f.i < input.len() { f.text("base image id")? } else { String::new() };
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
-        Ok((now, r, image, at, tip, network, base))
+        Ok((now, r, image, at, tip, network, core, vk, pin, base))
     })();
-    let (now, r, image, at, tip, network, base) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    let (now, r, image, at, tip, network, core, vk, pin, base) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
+    if image.is_empty() || core.is_empty() || vk.is_empty() {
+        return fail("no engine utreexo image is published yet: give the image id, the core image id, the key and its pin".into());
+    }
+    let key = swiftsync_verify::EngineKey { bytes: vk, pin };
     let network = if network.is_empty() { "mainnet".to_string() } else { network };
     let is_tip = zapp_utreexo::journal_kind(r) == Some(zapp_utreexo::KIND_UTREEXO_TIP);
     if !is_tip && !base.is_empty() { return fail("a base image id is only for a tip receipt".into()); }
-    let image = if !image.is_empty() { image } else if is_tip { zapp_utreexo::UTREEXO_TIP_IMAGE_ID.to_string() } else { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() };
-    let base = if base.is_empty() { zapp_utreexo::UTREEXO_IMAGE_ID.to_string() } else { base };
+    if is_tip && base.is_empty() { return fail("a tip proof: give the base image id (no engine base image is published yet)".into()); }
     let (at, tip) = (at.as_ref().map(|(h, x)| (*h, x.as_str())), tip.as_ref().map(|(h, x)| (*h, x.as_str())));
     let (rep, tz) = if is_tip {
-        let t = zapp_utreexo::verify_utreexo_tip_on(&network, r, &image, &base, None, now, at, tip);
+        let t = zapp_utreexo::verify_utreexo_tip_on(&network, r, &image, &key, &base, &core, now, at, tip);
         (t.report, t.tip)
     } else {
-        (zapp_utreexo::verify_utreexo_on(&network, r, &image, None, now, at, tip), None)
+        (zapp_utreexo::verify_utreexo_on(&network, r, &image, &key, &core, now, at, tip), None)
     };
     let ok = rep.verdict != Verdict::Fail;
     let z = rep.statement.as_ref().filter(|_| ok);

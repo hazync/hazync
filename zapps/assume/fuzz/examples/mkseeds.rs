@@ -23,9 +23,9 @@ fn main() {
     put("assume_side_inputs", "all_tracked", &side(HDRS, "# one coin\n0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098:0\n"));
     put("assume_side_inputs", "last_51", &side(&HDRS[HDRS.len() - 80 * 51..], "av:tip"));
     put("assume_side_inputs", "none", &side(&[], "av:tip"));
-    put("assume_core_receipt", "mainnet_1_200_8888d59c.rcpt", RCPT);
-    let fl = std::fs::read(format!("{}/../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt", env!("CARGO_MANIFEST_DIR"))).unwrap();
-    put("assume_core_receipt", "mainnet_1_200_8888d59c_flipped.rcpt", &fl);
+    put("assume_core_receipt", "mainnet_1_200_engine.hze", RCPT);
+    let fl = std::fs::read(format!("{}/../../../swiftsync-verify/vectors/mainnet_1_200_engine_proof_flipped.hze", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    put("assume_core_receipt", "mainnet_1_200_engine_proof_flipped.hze", &fl);
     for t in ["assume_snapshot_decode", "assume_snapshot_check", "assume_side_inputs", "assume_core_receipt"] {
         let d = format!("{}/corpus/{t}", env!("CARGO_MANIFEST_DIR"));
         for e in std::fs::read_dir(&d).unwrap() {

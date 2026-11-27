@@ -12,6 +12,7 @@ crate-type = ["staticlib", "cdylib"]
 
 [dependencies]
 zapp-liveness = { path = ".." }
+zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 serde_json = "1"
 

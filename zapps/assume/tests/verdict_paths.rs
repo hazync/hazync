@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use swiftsync_verify::{ChainState, PROFILE_LIBZYNC};
 use zapp_assume::*;
 
-const RCPT: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+const RCPT: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
 const SNAP_200: &[u8] = include_bytes!("../vectors/utxo_200.dat");
 const HDRS: &[u8] = include_bytes!("../vectors/headers_0_200.bin");
 const MAINNET: [u8; 4] = [0xf9, 0xbe, 0xb4, 0xd9];
@@ -17,8 +17,10 @@ const MAX_MONEY: u64 = 21_000_000 * 100_000_000;
 
 fn state() -> ChainState {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image: swiftsync_verify::Image::by_network("mainnet").unwrap(),
-                                                                   anchor: None, now });
+    let id = include_str!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id").trim();
+    let vk = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk").to_vec();
+    let image = swiftsync_verify::Image::by_network("mainnet").unwrap().with_method_id(id).unwrap().with_engine_key(vk);
+    let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image, anchor: None, now });
     assert_eq!(rep.verdict, swiftsync_verify::Verdict::Demo, "{:?}", rep.checks);
     rep.state.unwrap()
 }

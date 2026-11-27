@@ -17,7 +17,9 @@ extern "C" {
 
 /* Verify a core receipt (or .sspf bundle) as swiftsync_verify does, then each liveness proof against it.
  * network: 0 mainnet, 1 signet; | 0x10 a coin-log image, | 0x20 the product image (as swiftsync_verify_facts).
- * image_hex: NULL for the built-in image, else 64 hex digits. anchor_json: a ChainState, or NULL for genesis.
+ * image_hex, vk, vk_len, vk_pin: the engine core image id (64 hex digits), its verifying key file and that file's
+ *   32-byte SHA-256, which you hold as the image's published pin (or your own build's); a key whose SHA-256 is not vk_pin
+ *   is FAIL. No engine image is published yet, so all four are required. anchor_json: a ChainState, or NULL for genesis.
  * facts_json: {"liveness": [{"proof": "<lower-case hex>", "ask": "<txid>:<vout>@<height|tip>=unspent|=spent[:<h>[:<tx>:<vin>]]
  *   [,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]"}]}, that key only (any other, or one given twice, is
  *   refused): one outpoint's state after a height each. The ask is
@@ -28,7 +30,7 @@ extern "C" {
  *   trust, or NULL (then at most DEMO); never inside facts_json (refused there).
  * Returns ZAPP_LIVENESS_OK, _DEMO, or _FAIL (reason in msg). */
 int zapp_liveness_verify(const uint8_t* receipt, size_t receipt_len, uint8_t network, uint64_t now, const char* image_hex,
-                         const char* anchor_json, const char* facts_json, const char* expect, char* msg, size_t msg_len);
+                         const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin, const char* anchor_json, const char* facts_json, const char* expect, char* msg, size_t msg_len);
 
 #ifdef __cplusplus
 }

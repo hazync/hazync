@@ -1,6 +1,7 @@
 //! The chain-identity checks' verdict paths (docs/libzync/ZAPP_TESTING.md §3.5, the cargo-mutants pass of 17.11.2026):
 //! what decides whether a zAPP's tip counts as compared with a source the caller trusts. Fake nodes are shell scripts
-//! (run as `sh <file>`, never exec'd: see the crate's own node tests), the state is the real mainnet 1..200 proof's.
+//! (run as `sh <file>`, never exec'd: see the crate's own node tests), the state is the engine chain's real proof of
+//! mainnet 1..200 (swiftsync-verify/vectors/mainnet_1_200_engine.*).
 
 use swiftsync_verify::{verify, ChainState, Image, Inputs};
 use zapp_common::*;
@@ -8,9 +9,10 @@ use zapp_common::*;
 const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
 
 fn state() -> ChainState {
-    let r = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt")).unwrap();
-    let img = Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap();
-    verify(&Inputs { receipt: &r, image: img, anchor: None, now: 1_800_000_000 }).state.unwrap()
+    let rd = |f: &str| std::fs::read(format!("{}/../../swiftsync-verify/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap();
+    let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
+    let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd("mainnet_1_200_engine.vk"));
+    verify(&Inputs { receipt: &rd("mainnet_1_200_engine.hze"), image: img, anchor: None, now: 1_800_000_000 }).state.unwrap()
 }
 
 /// Block 200's chainwork as getblockheader prints it (201 blocks of difficulty 1, 0x100010001 each).

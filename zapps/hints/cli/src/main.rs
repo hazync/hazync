@@ -8,7 +8,7 @@ use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-hints [--image <hex>] [--core-image <hex>] {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] [--vk <key file>] <receipt> <hints file>");
+    eprintln!("usage: zapp-hints --image <hex> --vk <key file> --core-image <hex> {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>");
     exit(1);
 }
 
@@ -32,21 +32,21 @@ fn main() {
     run(std::env::args().skip(1).collect());
 }
 
-/// `zapp-hints [--image <hex>] [--core-image <hex>] [--expect <H>:<hash>] [--expect-tip <T>:<hash>]
-/// [--undo <file>] [--now <unix seconds>] <receipt> <hints file>`: the SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md).
+/// `zapp-hints --image <hex> --vk <key file> --core-image <hex> [--expect <H>:<hash>] [--expect-tip <T>:<hash>]
+/// [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>`: the SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md).
 /// `--expect` is block H from YOUR node's header chain; `--mempool` / `--bitcoin-cli` (zapp-common, every zAPP CLI's
 /// chain-identity flags) are asked for block H, and for the core tip when it is above H and no `--expect-tip` is given. Exit 0 OK, 2 DEMO (below minimum work or the checkpoint, or the
-/// block at H / the core tip not compared), 1 FAIL. `--vk`: the receipt is an ENGINE (OpenVM) proof file and this is
-/// the key file of the hints image that proved it, from your own build of that image: its SHA-256 is the pin
-/// (engine/VERIFIER.md). Needs `--image` and `--core-image` (no engine image is built in yet); `--features engine`.
+/// block at H / the core tip not compared), 1 FAIL. The proof is an ENGINE (OpenVM) proof file; `--vk` is the key file
+/// of the hints image that proved it, from your own build of that image: its SHA-256 is the pin (engine/VERIFIER.md).
+/// No engine image is published yet, so `--image`, `--vk` and `--core-image` are all required.
 fn run(a: Vec<String>) -> ! {
     let (mut image, mut core, mut id, mut expect_tip, mut undo, mut now, mut files) =
-        (zapp_hints::HINTS_IMAGE_ID.to_string(), None, Identity::default(), None, None, None, Vec::new());
-    let (mut vk_path, mut image_given): (Option<String>, bool) = (None, false);
+        (String::new(), None, Identity::default(), None, None, None, Vec::new());
+    let mut vk_path: Option<String> = None;
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
-            "--image" => { image = it.next().unwrap_or_else(|| usage()); image_given = true }
+            "--image" => image = it.next().unwrap_or_else(|| usage()),
             "--vk" => vk_path = Some(it.next().unwrap_or_else(|| usage())),
             "--core-image" => core = Some(it.next().unwrap_or_else(|| usage())),
             "--expect-tip" => expect_tip = Some(it.next().unwrap_or_else(|| usage())),
@@ -63,16 +63,13 @@ fn run(a: Vec<String>) -> ! {
     let rd = |f: &str| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
     let (r, f) = (rd(&files[0]), rd(&files[1]));
     let u = undo.as_deref().map(rd);
-    // --vk: the key file, pinned by its own SHA-256 (the reader's build of the image)
-    if vk_path.is_some() && (!image_given || core.is_none()) { fail("--vk: give --image and --core-image too (no engine image is built in)"); }
-    let vk = vk_path.as_deref().map(rd);
-    let key = vk.as_ref().map(|b| {
-        use sha2::Digest as _;
-        swiftsync_verify::EngineKey { bytes: b, pin: sha2::Sha256::digest(b).into() }
-    });
-    if key.is_some() != swiftsync_verify::is_engine_proof(&r) {
-        fail(if key.is_some() { "--vk given, but the receipt is not an engine proof" } else { "an engine proof file: give the image's key with --vk" });
+    // the key file, pinned by its own SHA-256 (the reader's build of the image)
+    if image.is_empty() || vk_path.is_none() || core.is_none() {
+        fail("no engine hints image is published yet: give --image, --vk and --core-image (the images you rebuilt)");
     }
+    let core = core.unwrap();
+    let vk = rd(vk_path.as_deref().unwrap());
+    let key = { use sha2::Digest as _; swiftsync_verify::EngineKey { bytes: &vk, pin: sha2::Sha256::digest(&vk).into() } };
     let pe = |e: &Option<String>| e.as_deref().map(|e| {
         let (h, x) = e.split_once(':').unwrap_or_else(|| fail("--expect <height>:<hash>"));
         (h.parse::<u32>().unwrap_or_else(|_| fail("--expect: bad height")), x.to_string())
@@ -81,7 +78,7 @@ fn run(a: Vec<String>) -> ! {
     // above H and no --expect-tip is given), which the receipt names, and their answers are checked as --expect is
     let (mut expect, mut extra) = (id.expect.clone(), Vec::new());
     if id.needs_lookup() {
-        let pre = zapp_hints::verify_hints_with(&r, &f, u.as_deref(), &image, key.as_ref(), core.as_deref(), now, None, None);
+        let pre = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, now, None, None);
         if let Some(z) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
             let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
             // the proof's chainwork is the core tip's: it is block H's only when H is the tip
@@ -96,7 +93,7 @@ fn run(a: Vec<String>) -> ! {
         }
     }
     let (e1, e2) = (pe(&expect), pe(&expect_tip));
-    let mut rep = zapp_hints::verify_hints_with(&r, &f, u.as_deref(), &image, key.as_ref(), core.as_deref(), now,
+    let mut rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
     rep.checks.splice(0..0, extra);

@@ -15,6 +15,7 @@ zapp-assume = { path = ".." }
 # the core receipt check (zapps/corecheck: no CLI code)
 zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "z"

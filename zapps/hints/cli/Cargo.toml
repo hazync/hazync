@@ -19,9 +19,6 @@ zapp-common = { path = "../../common" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
 sha2 = "0.10"
 
-[features]
-# engine (OpenVM) proofs with --vk (engine/VERIFIER.md)
-engine = ["zapp-hints/engine"]
 
 [profile.release]
 opt-level = "z"

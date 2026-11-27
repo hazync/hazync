@@ -20,8 +20,6 @@ libfuzzer-sys = "0.4"
 zapp-assume = { path = ".." }
 zapp-corecheck = { path = "../../corecheck" }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
-bincode = "1"
 num-bigint = "0.4"
 
 [[bin]]

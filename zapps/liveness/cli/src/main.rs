@@ -3,7 +3,7 @@
 //! `swiftsync-verify --liveness`, the producer `zync-path live` and the server route `zync-serve /live`.
 //!
 //! ```text
-//!   zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json]
+//!   zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog | --product] [--anchor state.json]
 //!                 [--now <unix seconds>] [--expect <height>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli "<cmd>"]
 //!                 (--liveness <proof> <question>)... <receipt|bundle.sspf>
 //!       check each liveness proof against the verified core proof and against YOUR question
@@ -32,7 +32,7 @@ use zapp_liveness::{coin_source, LivenessAsk, LivenessFact};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-liveness [--network mainnet|signet] [--image <hex>] [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])... <receipt|bundle.sspf>");
+    eprintln!("usage: zapp-liveness [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog | --product] [--anchor state.json] [--now <unix seconds>] {IDENTITY_USAGE} (--liveness <proof> <txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1])... <proof.hze|bundle.sspf>");
     eprintln!("       zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli \"<cmd>\") [--height <h>]");
     eprintln!("       zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli \"<cmd>\")");
     exit(1);
@@ -94,12 +94,14 @@ fn main() {
 
 fn check_main(a: Vec<String>) -> ! {
     let (mut network, mut image_hex, mut anchor, mut now, mut id) = ("mainnet".to_string(), String::new(), None, None, Identity::default());
+    let mut vk: Option<String> = None;
     let (mut coinlog, mut product, mut liveness, mut files) = (false, false, Vec::<(String, String)>::new(), Vec::new());
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
             "--network" => network = it.next().unwrap_or_else(|| usage()),
             "--image" => image_hex = it.next().unwrap_or_else(|| usage()),
+            "--vk" => vk = Some(it.next().unwrap_or_else(|| usage())),
             "--anchor" => anchor = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
             "--coinlog" => coinlog = true,
@@ -117,9 +119,13 @@ fn check_main(a: Vec<String>) -> ! {
     if files.len() != 1 || liveness.is_empty() { usage(); }
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
-    let image = zapp_liveness::image_for(&network, &image_hex, coinlog, product).unwrap_or_else(|e| fail(&e));
-    if !image_hex.is_empty() { println!("  image id given on the command line: {}", image.method_id_hex); }
     let rd = |f: &str| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
+    // the core image's id and key (engine/VERIFIER.md): no engine image is published yet, so both are your own build's
+    if image_hex.is_empty() { fail("--image <hex>: no engine core image is published yet: give the id of the image you rebuilt") }
+    let vk = vk.unwrap_or_else(|| fail("--vk <file>: the verifying key from that image's build"));
+    let image = zapp_liveness::image_for(&network, &image_hex, coinlog, product)
+        .and_then(|i| zapp_corecheck::with_key(i, &rd(&vk), None)).unwrap_or_else(|e| fail(&e));
+    println!("  image id given on the command line: {}; its key {} taken as your own build's", image.method_id_hex, esc(&vk));
     let anchor: Option<ChainState> = anchor.map(|p| serde_json::from_slice(&rd(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p)))));
     // The proof file's bytes (raw or hex) as the C ABI and WASM take them: lower-case hex.
     let facts: Vec<LivenessFact> = liveness.iter().map(|(p, q)| {
@@ -130,10 +136,9 @@ fn check_main(a: Vec<String>) -> ! {
     // chain identity (zapp-common): --mempool / --bitcoin-cli are asked for the block at the proof's height, which the
     // receipt gives, and their answer is checked as an --expect is
     // only about a height the receipt has SHOWN: a receipt that does not verify asks no source (review 11-16)
-    let pinned = !image_hex.is_empty();
     let (expect, extra) = match id.needs_lookup() {
         true => {
-            let pre = zapp_corecheck::verify_core(&rb, image, pinned, anchor.clone(), now, None).report;
+            let pre = zapp_corecheck::verify_core(&rb, image, anchor.clone(), now, None).report;
             match pre.state.filter(|_| pre.verdict != Verdict::Fail) {
                 Some(cs) => zapp_common::expect_for_core(&id, image.network, &cs),
                 None => (id.expect.clone(), Vec::new()),
@@ -141,7 +146,7 @@ fn check_main(a: Vec<String>) -> ! {
         }
         false => (id.expect.clone(), Vec::new()),
     };
-    let mut o = zapp_liveness::verify_liveness(&rb, image, pinned, anchor, now, &facts, expect.as_deref(), false);
+    let mut o = zapp_liveness::verify_liveness(&rb, image, anchor, now, &facts, expect.as_deref(), false);
     if o.report.verdict != Verdict::Fail {
         println!("  the receipt verified against image {} ({})", o.image.method_id_hex, o.image.network);
     }
@@ -236,13 +241,12 @@ fn serve_main(all: &[String]) -> ! {
 mod live_tests {
     use super::*;
 
-    /// /live against the real mainnet 1..200 history and the repo's block files (moved from zync-serve, 15.11.2026)
+    /// /live against the engine chain's mainnet 1..200 history (node format 2, the default) and the repo's block files
+    /// (moved from zync-serve, 15.11.2026)
     #[test]
     fn live_route() {
-        // the vectors are the RISC Zero chain's (node format 1), as `serve --node-format 1` would serve them
-        libzync::coinlog::set_node_format(1);
         let dir = env!("CARGO_MANIFEST_DIR");
-        let recs = decode_all(&std::fs::read(format!("{dir}/../vectors/mainnet_1_200_history.bin")).unwrap()).unwrap();
+        let recs = decode_all(&std::fs::read(format!("{dir}/../../../swiftsync-verify/tests/data/engine200/history.bin")).unwrap()).unwrap();
         let src = coin_source::Source::Dir(format!("{dir}/../../../prover/testdata/libzync/mainnet").into());
         let t9 = "0437cd7f8525ceed2324359c2d0ba26006d92d856a9c20fa0241106ee5a597c9";
         assert_eq!(answer(&recs, 200, Some(&src), "/tip").1, "{\"tip\":200}");
@@ -250,7 +254,7 @@ mod live_tests {
         assert_eq!(c, 200, "{b}");
         let v: serde_json::Value = serde_json::from_str(&b).unwrap();
         assert_eq!(v["answer"], "spent:170:1:0");
-        let want = std::fs::read_to_string(format!("{dir}/../vectors/b9_0_at200.hex")).unwrap();
+        let want = std::fs::read_to_string(format!("{dir}/../vectors/engine/b9_0_at200.hex")).unwrap();
         assert_eq!(v["proof"].as_str().unwrap(), want.trim());
         let (_, b) = answer(&recs, 200, Some(&src), &format!("/live/169/{t9}/0"));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&b).unwrap()["answer"], "unspent");

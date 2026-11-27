@@ -17,12 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
-bincode = "1"
 serde_json = "1"
 sha2 = "0.10"
-# The assumeutxo checker's ECMH: secp256k1's base field. Already in the tree through risc0-groth16, so no new crate;
-# pure Rust, so it builds for WASM.
+# The assumeutxo checker's ECMH: secp256k1's base field (ark-ff 0.5.0, the version risc0-groth16 brought in before the
+# cutover; pinned here since). Pure Rust, so it builds for WASM.
 ark-ff = { version = "=0.5.0", default-features = false }
 
 [dev-dependencies]
@@ -33,8 +31,6 @@ num-bigint = "0.4"
 # TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): Core's regtest message start for a regtest proof's
 # snapshot. Never in a release or WASM build (compile_error! below, scripts/wasm-build.sh).
 regtest-test = []
-# engine (OpenVM) core proofs (engine/VERIFIER.md)
-engine = ["swiftsync-verify/engine"]
 
 [profile.release]
 opt-level = "z"

@@ -48,7 +48,7 @@ impl<'a> Frame<'a> {
 
 /// `verify_assume(ptr, len)`: the assumevalid and assumeutxo checks (docs/libzync/ASSUME_ZAPPS.md). Input frame
 /// (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image][u64 now]`, then
-/// `[u32 n][receipt]`, `[u32 n][image id hex, n = 0 for the built-in id]`, `[u32 n][expect "<height>:<hash>": OK needs it]`,
+/// `[u32 n][receipt]`, `[u32 n][image id hex]`, `[u32 n][its verifying key file]`, `[u32 32][the key's pin: SHA-256 of that file]`, `[u32 n][expect "<height>:<hash>": OK needs it]`,
 /// `[u32 n][assumevalid: empty = no check, "tip", or a block hash in display order]`, `[u32 n][headers: raw 80-byte
 /// headers ending at the proven tip]`, `[u32 n][a Core dumptxoutset file, n = 0 for no assumeutxo check]`, `[u32 n][tracked
 /// list text]`. From genesis only (no anchor); a receipt, not a bundle. Returns {verdict, image, network, checks,
@@ -64,6 +64,8 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
         let text = |b: &[u8], what: &str| std::str::from_utf8(b).map(|s| s.trim().to_string()).map_err(|_| format!("{what}: not UTF-8"));
         let receipt = f.chunk()?;
         let image_hex = text(f.chunk()?, "image id")?;
+        let vk = f.chunk()?;
+        let pin: [u8; 32] = f.chunk()?.try_into().map_err(|_| "the key's pin is 32 bytes".to_string())?;
         let expect = text(f.chunk()?, "expect")?;
         let av = text(f.chunk()?, "assumevalid")?;
         let headers = f.chunk()?;
@@ -73,7 +75,10 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
             return Err("input frame has trailing bytes".to_string());
         }
         let network = match code & !0x30 { 0 => "mainnet", 1 => "signet", n => return Err(format!("unknown network code {n}")) };
-        let image = zapp_corecheck::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?;
+        if image_hex.is_empty() || vk.is_empty() {
+            return Err("no engine core image is published yet: give the image id, its verifying key and pin".to_string());
+        }
+        let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, Some(&pin))?;
         if receipt.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
             return Err("assume: a proof bundle is not accepted here: give the receipt".to_string());
         }
@@ -85,14 +90,13 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
         if av.is_none() && snapshot.is_empty() {
             return Err("neither an assumevalid block nor a snapshot was given".to_string());
         }
-        Ok((receipt, image, !image_hex.is_empty(), now, expect, av, headers, snapshot, tracked))
+        Ok((receipt, image, now, expect, av, headers, snapshot, tracked))
     })();
-    let (receipt, image, pinned, now, expect, av, headers, snapshot, tracked) = match res {
+    let (receipt, image, now, expect, av, headers, snapshot, tracked) = match res {
         Err(e) => return fail(e),
         Ok(x) => x,
     };
-    // an image id given is the only image the receipt may verify against (pinned)
-    let core = zapp_corecheck::verify_core(receipt, image, pinned, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
+    let core = zapp_corecheck::verify_core(receipt, image, None, now, Some(expect.as_str()).filter(|e| !e.is_empty()));
     let (mut rep, tip_checked, used) = (core.report, core.tip_checked, core.image);
     if rep.checks.iter().any(|(ok, _)| !ok) { rep.verdict = Verdict::Fail; }
     let mut assume = serde_json::json!(null);

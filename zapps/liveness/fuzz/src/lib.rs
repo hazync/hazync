@@ -2,7 +2,7 @@
 //! targets and the stable corpus replay (tests/replay.rs) run the same code. A property that fails panics.
 //!
 //! Three chains a proof is checked against, each with the proofs that are TRUE on it: the real mainnet 1..200 proof
-//! (8888d59c) and vectors/b*.hex; the undo-commitment host run of 1..200 (vectors/undo_dev_*) with proofs made from its
+//! (the engine chain's, swiftsync-verify/vectors/mainnet_1_200_engine.*) and vectors/engine/b*.hex; the undo-commitment host run of 1..200 (vectors/undo_dev_*) with proofs made from its
 //! history by the producer; the regtest 0..232 run (vectors/regtest_*) and regtest_cases.json's proofs.
 //!
 //! - `proof`: any bytes as an LZLV proof: no panic; a decoded proof re-encodes to the input; a proof that verifies on a
@@ -17,13 +17,14 @@ use std::sync::OnceLock;
 use swiftsync_verify::{hex, ChainState, Image, Inputs, Verdict};
 use zapp_liveness::{AskState, LivenessAsk, LivenessFact};
 
-pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
-pub const IMAGE_8888: &str = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4";
+pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+const VK: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+const ID: &str = include_str!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
 
 macro_rules! vector { ($f:literal) => { include_bytes!(concat!("../../vectors/", $f)) } }
 
-pub const MAINNET_PROOFS: [&[u8]; 5] = [vector!("b9_0_at200.hex"), vector!("b9_0_at169.hex"), vector!("b170_0_at200.hex"),
-                                        vector!("b170_1_at200.hex"), vector!("b170_1_at170.hex")];
+pub const MAINNET_PROOFS: [&[u8]; 5] = [vector!("engine/b9_0_at200.hex"), vector!("engine/b9_0_at169.hex"), vector!("engine/b170_0_at200.hex"),
+                                        vector!("engine/b170_1_at200.hex"), vector!("engine/b170_1_at170.hex")];
 const UNDO_HISTORY: &[u8] = vector!("undo_dev_1_200_history.bin");
 const UNDO_STATE: &[u8] = vector!("undo_dev_1_200_state.json");
 const REGTEST_STATE: &[u8] = vector!("regtest_0_232_state.json");
@@ -46,7 +47,10 @@ fn true_on(c: &TrueChain) -> impl Iterator<Item = &Vec<u8>> {
 }
 
 impl TrueChain {
+    /// The chain as the proof checker reads it; sets this thread's node format to the chain's (COINLOG.md §2: the
+    /// mainnet proof is the engine chain's, format 2; the undo and regtest host runs are format 1).
     pub fn chain(&self) -> lv::Chain<'_> {
+        libzync::coinlog::use_format_of(self.cs.profile);
         lv::Chain { height: self.cs.height, utxo_roots: &self.cs.utxo_roots, utxo_leaves: self.cs.utxo_leaves,
                     block_roots: &self.cs.block_roots, block_leaves: self.cs.block_leaves, undo_from: self.undo_from }
     }
@@ -65,7 +69,7 @@ fn question(p: &lv::Proof) -> String {
 pub fn chains() -> &'static Vec<TrueChain> {
     static C: OnceLock<Vec<TrueChain>> = OnceLock::new();
     C.get_or_init(|| {
-        let image = Image::by_id("mainnet", IMAGE_8888).unwrap();
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks);
         let main = TrueChain {
@@ -76,6 +80,7 @@ pub fn chains() -> &'static Vec<TrueChain> {
         let cs: ChainState = serde_json::from_slice(UNDO_STATE).unwrap();
         let uf = swiftsync_verify::undo_from_of(&cs.self_id, &[]);
         let recs = libzync::history::decode_all(UNDO_HISTORY).unwrap();
+        libzync::coinlog::use_format_of(cs.profile);   // the producer builds in that run's node format
         let mut proofs = Vec::new();
         for (f, at) in [(0, 169), (0, 170), (4, 170), (3, 181), (2, 199), (0, 200), (2, 200), (3, 200)] {
             let coin = lv::decode(&file_proof(MAINNET_PROOFS[f])).unwrap().coin;

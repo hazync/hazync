@@ -21,8 +21,13 @@ typedef struct {
     uint64_t n_unspent;
     uint64_t unspent_value;
 } SwiftsyncHints;
+/* receipt: an engine (OpenVM) proof file of the hints image image_hex (64 hex digits), resting on the engine core image
+ * core_image_hex; vk/vk_len: the hints image's verifying key file and vk_pin its 32-byte SHA-256, which you hold as the
+ * image's published pin (or your own build's); a key whose SHA-256 is not vk_pin is FAIL. Engine proofs only since
+ * 27.11.2026; no engine image is published yet, so every one of these is required. */
 int swiftsync_verify_hints(const uint8_t* receipt, size_t receipt_len, const uint8_t* file, size_t file_len,
-                           const uint8_t* undo, size_t undo_len, uint64_t now, const char* expect,
+                           const uint8_t* undo, size_t undo_len, const char* image_hex, const char* core_image_hex,
+                           const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin, uint64_t now, const char* expect,
                            SwiftsyncHints* out, char* msg, size_t msg_len);
 
 #ifdef __cplusplus

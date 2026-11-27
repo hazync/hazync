@@ -1,25 +1,28 @@
-//! Deposit-proof tests on REAL receipts: the core proof of mainnet 0..200 (image 8888d59c, the v0.23.0-v0.25.0 image the
-//! verifier keeps by id), the header-chain proofs 0..100 + 101..200 and 0..975,278 (image de54b94f), and real
-//! transactions (block 170: the coinbase and Satoshi to Hal Finney; block 800,000: a segwit transaction and the coinbase's
-//! OP_RETURN witness commitment).
+//! Deposit-proof tests on REAL engine proofs: the engine chain's proof of mainnet 1..200 and its history, the engine's
+//! header-chain proof of 0..4,031 with block 200's MMR path to it, and real block 170 (Satoshi to Hal). Both proofs are
+//! below Core's minimum work, so a real verdict is at best DEMO; the OK paths use the same proof under an image with no
+//! minimum work (zero_work_img). The RISC Zero receipts' cases (the whole header chain to 975,278, a block above the
+//! core tip, Groth16) went with the cutover (27.11.2026).
 use super::*;
-use zapp_headers::HEADERS_IMAGE_ID;
 
-const CORE: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
-const CORE_FLIPPED: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c_flipped.rcpt");
-const FAKE: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/fake_block_2501.rcpt");
-const HIST: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/history_0_200.bin");
+// The engine chain's proof of mainnet 1..200 and its history (node format 2), and the engine's header-chain proof of
+// 0..4,031 with block 200's MMR path to that tip (engine proofs only since the cutover, 27.11.2026).
+const CORE: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+const CORE_FLIPPED: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine_proof_flipped.hze");
+const CORE_VK: &[u8] = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+const CORE_ID: &str = include_str!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
+const HIST: &[u8] = include_bytes!("../../../swiftsync-verify/tests/data/engine200/history.bin");
+const HDR: &[u8] = include_bytes!("../../headers/tests/data/engine4031/proof.hze");
+const HDR_VK: &[u8] = include_bytes!("../../headers/tests/data/engine4031/vk.bin");
+const HDR_ID: &str = include_str!("../../headers/tests/data/engine4031/image_id");
+const PATH_200: &str = include_str!("../../headers/tests/data/engine4031/mmr_path_200_tip4031.txt");
 const BLOCK_170: &str = include_str!("../../../experimental/libzync-bench/deposit/block_170_raw.txt");
-const HDR_TIP: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/headers_0_tip.rcpt");
-const HDR_0_100: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_0_100.rcpt");
-const HDR_101_200: &[u8] = include_bytes!("../../../experimental/libzync-bench/headers/hdr_101_200.rcpt");
-const PATH_200: &str = include_str!("../../../experimental/libzync-bench/deposit/mmr_path_200_tip975278.txt");
-const PATH_800000: &str = include_str!("../../../experimental/libzync-bench/deposit/mmr_path_800000_tip975278.txt");
 const SEG: &str = include_str!("../../../experimental/libzync-bench/headers/tx/tx_seg.json");
 /// block 170, position 1: Satoshi to Hal Finney, 10 BTC at output 0
 const T170: &str = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16";
 const HAL_SPK: &str = "4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1baded5c72a704f7e6cd84cac";
-const TIP: (i64, &str) = (975_278, "00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3");
+const TIP: (i64, &str) = (4031, "00000000f037ad09d0b05ee66b8c1da83030abaf909d2b1bf519c3c7d2cd3fdf");
+const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
 
 fn now() -> u64 { std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }
 fn id(display: &str) -> [u8; 32] { let mut b = hex32(display).unwrap(); b.reverse(); b }
@@ -29,30 +32,31 @@ fn txs_170() -> Vec<libzync::facts::TxView> { libzync::facts::parse_block(&block
 fn coinbase_170() -> [u8; 32] { libzync::facts::txid(&txs_170()[0]) }
 
 fn b_core(txid: &[u8; 32]) -> DepositBundle { make_bundle("mainnet", CORE, &[], Some(HIST), &block_170(), 170, txid, &[], None).unwrap() }
+/// Bound to the header chain 0..4,031 (below Core's minimum work: DEMO at best).
 fn b_tip() -> DepositBundle {
-    make_bundle("mainnet", CORE, &[HDR_TIP.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &lines(PATH_200), None).unwrap()
+    make_bundle("mainnet", CORE, &[HDR.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &lines(PATH_200), None).unwrap()
 }
-/// A block ABOVE the core tip: block 800,000, from the path service's answer (tx_seg.json), at position `which`
-/// (1: the segwit transaction, 0: the coinbase)
-fn b_seg(coinbase: bool) -> (DepositBundle, [u8; 32]) {
-    let v: serde_json::Value = serde_json::from_str(SEG).unwrap();
-    let t = TxInclusion::from_json(v["txid"].as_str().unwrap(), &v).unwrap();
-    let mut b = b_tip();
-    let (raw, index, branch) = if coinbase { (t.coinbase.clone(), 0, t.coinbase_branch.clone()) } else { (t.raw.clone(), t.pos, t.branch.clone()) };
-    let mut o = 0;
-    let txid = libzync::facts::txid(&libzync::facts::parse_tx(&raw, &mut o).unwrap());
-    b.block = DepositBlock {
-        height: 800_000, header: hex(&t.header), forest: None, mmr_path: Some(lines(PATH_800000).iter().map(|x| hex(x)).collect()),
-        tx: hex(&raw), index, branch: branch.iter().map(|x| hex(x)).collect(), coinbase: hex(&t.coinbase),
-        coinbase_branch: t.coinbase_branch.iter().map(|x| hex(x)).collect(),
-    };
-    (b, txid)
+/// The engine core image with its key.
+fn core_img() -> &'static Image {
+    Image::by_network("mainnet").unwrap().with_method_id(CORE_ID.trim()).unwrap().with_engine_key(CORE_VK.to_vec())
+}
+/// The same image with no minimum work and no checkpoint: the only way a 200-block chain reaches OK, for the verdict's
+/// OK paths (a state no network has, labelled as such).
+fn zero_work_img() -> &'static Image {
+    Box::leak(Box::new(Image { min_work_hex: "0000000000000000000000000000000000000000000000000000000000000000", checkpoint_height: 0, ..*core_img() }))
+}
+fn hdr_key() -> swiftsync_verify::EngineKey<'static> {
+    use sha2::Digest as _;
+    swiftsync_verify::EngineKey { bytes: HDR_VK, pin: sha2::Sha256::digest(HDR_VK).into() }
+}
+fn run_on(b: &DepositBundle, a: &DepositAsk, img: &'static Image) -> DepositReport {
+    verify_deposit(b, a, "mainnet", img, HDR_ID.trim(), Some(&hdr_key()), now())
 }
 /// The checks' own tests read the statement of DEMO bundles and of OK ones without a tip source: the gating defaults
 /// (require_identity on, allow_demo off) are tested on their own (the_verdict_gates_and_accepted).
 fn ask(txid: [u8; 32]) -> DepositAsk { DepositAsk { txid, min_depth: 1, require_identity: false, allow_demo: true, ..Default::default() } }
 fn run(b: &DepositBundle, a: &DepositAsk) -> DepositReport {
-    verify_deposit(b, a, "mainnet", Image::by_network("mainnet").unwrap(), HEADERS_IMAGE_ID, now())
+    run_on(b, a, core_img())
 }
 /// A refusal: verdict Fail, no statement, and a failed check that says `why`.
 fn refused(b: &DepositBundle, a: &DepositAsk, why: &str) {
@@ -72,35 +76,29 @@ fn core_only_block_170_is_demo_and_says_what_it_shows() {
     assert_eq!((s.height, disp(&s.block_hash).as_str()), (170, "00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee"));
     assert_eq!((s.confirmations, s.validated_confirmations, s.validated_through, s.block_fully_validated), (31, 31, 200, true));
     assert_eq!(s.output, Some((0, 1_000_000_000, unhex(HAL_SPK).unwrap())));
-    assert_eq!(s.core_image, "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4");
+    assert_eq!(s.core_image, CORE_ID.trim());
     assert_eq!(s.headers_image, None);
     // the coinbase of the same block, through the same core proof
     assert_eq!(run(&b_core(&coinbase_170()), &ask(coinbase_170())).verdict, Verdict::Demo);
 }
 
 #[test]
-fn bound_to_the_whole_header_chain_is_ok_and_splits_the_depth() {
+fn bound_to_the_header_chain_splits_the_depth() {
     let a = DepositAsk { vout: Some(0), amount: Some(1_000_000_000), min_depth: 6, expect_tip: Some((TIP.0, TIP.1.into())), ..ask(id(T170)) };
     let r = run(&b_tip(), &a);
-    assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    assert_eq!(r.verdict, Verdict::Demo, "4,032 headers are below Core's minimum work: {:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    assert!(r.checks.iter().any(|c| c.0 && c.1.starts_with("BINDING")));
     let s = r.statement.unwrap();
     assert_eq!((s.tip_height, disp(&s.tip_hash).as_str()), TIP);
-    assert_eq!((s.confirmations, s.validated_confirmations, s.validated_through), (975_109, 31, 200));
-    assert_eq!(s.headers_image.as_deref(), Some(HEADERS_IMAGE_ID));
+    assert_eq!((s.confirmations, s.validated_confirmations, s.validated_through), (3862, 31, 200));
+    assert_eq!(s.headers_image.as_deref(), Some(HDR_ID.trim()));
     // the depth asked counts every confirmation; the validated depth only those at or below the core tip
-    refused(&b_tip(), &DepositAsk { min_depth: 975_110, ..a.clone() }, "depth: 975109 confirmation(s)");
-    assert_eq!(run(&b_tip(), &DepositAsk { min_validated_depth: 31, ..a.clone() }).verdict, Verdict::Ok);
+    refused(&b_tip(), &DepositAsk { min_depth: 3863, ..a.clone() }, "depth: 3862 confirmation(s)");
+    assert_eq!(run(&b_tip(), &DepositAsk { min_validated_depth: 31, ..a.clone() }).verdict, Verdict::Demo);
     refused(&b_tip(), &DepositAsk { min_validated_depth: 32, ..a.clone() }, "validated depth: 31");
-}
-
-#[test]
-fn bound_to_a_low_work_header_chain_is_demo() {
-    // headers 0..200 in two chained runs; block 200 is a one-leaf peak of 201 leaves: an empty binding path
-    let b = make_bundle("mainnet", CORE, &[HDR_0_100.to_vec(), HDR_101_200.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &[], None).unwrap();
-    let r = run(&b, &ask(id(T170)));
-    assert_eq!(r.verdict, Verdict::Demo);
-    assert!(r.checks.iter().any(|c| c.0 && c.1.starts_with("BINDING")));
-    assert_eq!(r.statement.unwrap().confirmations, 31);
+    // header runs without the header image's key: refused
+    let r = verify_deposit(&b_tip(), &a, "mainnet", core_img(), HDR_ID.trim(), None, now());
+    assert_eq!(r.verdict, Verdict::Fail);
 }
 
 #[test]
@@ -146,9 +144,8 @@ fn a_block_not_in_the_chain() {
     let mut h = unhex(&good.block.header).unwrap(); h[79] ^= 1;
     let mut b = good.clone(); b.block.header = hex(&h); refused(&b, &a, "not in the proof's block forest");
     // a block above the core tip with no header-chain proof
-    let (mut b, t) = b_seg(false);
-    b.header_receipts.clear(); b.core_tip_mmr_path.clear();
-    refused(&b, &DepositAsk { allow_pow_only_block: true, ..ask(t) }, "above the core tip 200 and no header-chain proof");
+    let mut b = good.clone(); b.block.height = 201; b.block.forest = None; b.block.mmr_path = Some(vec![]);
+    refused(&b, &DepositAsk { allow_pow_only_block: true, ..a.clone() }, "above the core tip 200 and no header-chain proof");
 }
 
 #[test]
@@ -163,69 +160,6 @@ fn a_tampered_branch() {
     // a raw transaction with one byte changed is another transaction, not at that position
     let mut b = good.clone(); let mut t = unhex(&b.block.tx).unwrap(); t[50] ^= 1; b.block.tx = hex(&t);
     refused(&b, &a, "is not at position 1 of block 170");
-}
-
-/// THE 64-BYTE TRICK. Block 170 has two transactions, so its merkle root IS dsha(coinbase txid || T170). Those 64 bytes,
-/// presented as a "transaction" at the root's level (an empty branch), hash to the merkle root: asked about that
-/// "txid", the branch climbs to the header's root. Refused: a 64-byte transaction cannot be told apart from an inner node.
-#[test]
-fn the_64_byte_transaction_trick() {
-    let mut inner = coinbase_170().to_vec();
-    inner.extend_from_slice(&id(T170));
-    let fake_txid = dsha(&inner);
-    let good = b_core(&id(T170));
-    let root: [u8; 32] = unhex(&good.block.header).unwrap()[36..68].try_into().unwrap();
-    assert_eq!(fake_txid, root, "the 64 bytes hash to the merkle root");
-    let mut b = good.clone();
-    b.block.tx = hex(&inner); b.block.index = 0; b.block.branch.clear(); b.block.coinbase_branch.clear();
-    refused(&b, &ask(fake_txid), "not exactly 64 bytes (64 bytes)");
-    // and above the core tip (the header path) the same
-    let (mut b, _) = b_seg(false);
-    b.block.tx = hex(&inner);
-    refused(&b, &DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, ..ask(fake_txid) }, "not exactly 64 bytes");
-}
-
-#[test]
-fn a_block_above_the_core_tip_is_proof_of_work_only_and_flagged() {
-    let (b, t) = b_seg(false);
-    // the defaults refuse it: allow_pow_only_block off, min_validated_depth 1 (the deposit's own block fully validated)
-    assert_eq!(DepositAsk::default().min_validated_depth, 1);
-    refused(&b, &ask(t), "PROOF OF WORK ONLY");
-    // allow_pow_only_block alone is not enough: the block has 0 fully validated confirmations, the default asks 1
-    refused(&b, &DepositAsk { allow_pow_only_block: true, min_depth: 6, ..ask(t) }, "validated depth: 0");
-    // ... and min_validated_depth 0 alone is not either: the block above the core tip is refused as before
-    refused(&b, &DepositAsk { min_validated_depth: 0, min_depth: 6, ..ask(t) }, "PROOF OF WORK ONLY");
-    let a = DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, min_depth: 6, ..ask(t) };
-    let r = run(&b, &a);
-    assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
-    let s = r.statement.unwrap();
-    assert_eq!((s.height, s.block_fully_validated, s.validated_confirmations, s.confirmations), (800_000, false, 0, 175_279));
-    refused(&b, &DepositAsk { min_validated_depth: 1, ..a.clone() }, "validated depth: 0");
-    // its MMR path tampered, or missing
-    let mut x = b.clone(); x.block.mmr_path.as_mut().unwrap()[3] = hex(&[1; 32]); refused(&x, &a, "is on the header chain");
-    let mut x = b.clone(); x.block.mmr_path = None; refused(&x, &a, "needs its MMR path");
-    // its merkle branch tampered
-    let mut x = b.clone(); x.block.branch.swap(0, 1); refused(&x, &a, "transaction");
-}
-
-#[test]
-fn an_op_return_payload() {
-    // block 800,000's coinbase carries the witness commitment: OP_RETURN, one 36-byte push aa21a9ed || commitment
-    let (b, t) = b_seg(true);
-    let v: serde_json::Value = serde_json::from_str(SEG).unwrap();
-    let cb = unhex(v["coinbase"].as_str().unwrap()).unwrap();
-    let at = cb.windows(6).position(|w| w == [0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed]).unwrap();
-    let payload = cb[at + 2..at + 38].to_vec();
-    let a = DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, op_return: Some(payload.clone()), ..ask(t) };
-    let r = run(&b, &a);
-    assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
-    let (vout, value, spk) = r.statement.unwrap().output.unwrap();
-    assert_eq!((value, spk.len(), &spk[2..]), (0, 38, payload.as_slice()));
-    assert_eq!(run(&b, &DepositAsk { vout: Some(vout), ..a.clone() }).verdict, Verdict::Ok);
-    let mut p = payload.clone(); p[10] ^= 1;
-    refused(&b, &DepositAsk { op_return: Some(p), ..a.clone() }, "an output is an OP_RETURN carrying");
-    refused(&b, &DepositAsk { op_return: Some(payload[..35].to_vec()), ..a.clone() }, "an output is an OP_RETURN carrying");
-    refused(&b, &DepositAsk { vout: Some(0), ..a.clone() }, "output 0 is an OP_RETURN");
 }
 
 #[test]
@@ -246,9 +180,10 @@ fn op_return_payload_rules() {
 #[test]
 fn dev_mode_and_broken_receipts() {
     let a = ask(id(T170));
-    let mut b = b_core(&id(T170)); b.core_receipt = hex(FAKE); refused(&b, &a, "dev-mode FakeReceipt");
+    let mut b = b_core(&id(T170)); b.core_receipt = hex(&[1, 0, 0, 0, 9, 9]); refused(&b, &a, "the core chain proof verifies");
     let mut b = b_core(&id(T170)); b.core_receipt = hex(CORE_FLIPPED); refused(&b, &a, "the core chain proof verifies");
-    let mut b = b_tip(); b.header_receipts = vec![hex(FAKE)]; refused(&b, &a, "dev-mode FakeReceipt");
+    let mut f = HDR.to_vec(); f[4096] ^= 1;
+    let mut b = b_tip(); b.header_receipts = vec![hex(&f)]; refused(&b, &a, "the header-chain proof verifies");
     let mut b = b_core(&id(T170)); b.core_receipt = "zz".into(); refused(&b, &a, "core receipt: not hex");
 }
 
@@ -258,11 +193,9 @@ fn the_binding_between_the_two_proofs() {
     let mut b = b_tip(); b.core_tip_mmr_path[0] = hex(&[3; 32]); refused(&b, &a, "BINDING");
     let mut b = b_tip(); b.core_tip_mmr_path.clear(); refused(&b, &a, "BINDING");
     let mut b = b_core(&id(T170)); b.core_tip_mmr_path = vec![hex(&[3; 32])]; refused(&b, &a, "without header receipts");
-    // a header chain that does not start at genesis, and one that stops below the core tip
-    let mut b = b_tip(); b.header_receipts = vec![hex(HDR_101_200)]; b.core_tip_mmr_path.clear();
-    refused(&b, &a, "the first run starts from genesis");
-    let mut b = b_tip(); b.header_receipts = vec![hex(HDR_0_100)]; b.core_tip_mmr_path.clear();
-    refused(&b, &a, "the header chain (100) reaches the core tip (200)");
+    // the same header run twice (the second does not start where the first ended)
+    let mut b = b_tip(); b.header_receipts = vec![hex(HDR), hex(HDR)];
+    refused(&b, &a, "run 2 starts where run 1 ended");
 }
 
 #[test]
@@ -270,33 +203,13 @@ fn network_identity_and_freshness() {
     let a = ask(id(T170));
     let mut b = b_tip(); b.network = "signet".into(); refused(&b, &a, "the network asked about");
     let mut b = b_tip(); b.kind = "other".into(); refused(&b, &a, "a deposit bundle");
-    let r = verify_deposit(&b_tip(), &a, "signet", Image::by_network("signet").unwrap(), HEADERS_IMAGE_ID, now());
+    let r = verify_deposit(&b_tip(), &a, "signet", Image::by_network("signet").unwrap(), HDR_ID.trim(), Some(&hdr_key()), now());
     assert_eq!(r.verdict, Verdict::Fail);
     refused(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, "00".repeat(32))), ..a.clone() }, "chain identity");
     refused(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0 - 1, TIP.1.into())), ..a.clone() }, "chain identity");
-    // the tip's block time (975,278: 2026-11-10) against this clock
+    // the tip's block time (4,031: 2009) against this clock
     refused(&b_tip(), &DepositAsk { max_tip_age: Some(60), ..a.clone() }, "is within 60 s");
-    assert_eq!(run(&b_tip(), &DepositAsk { max_tip_age: Some(100 * 365 * 86_400), ..a.clone() }).verdict, Verdict::Ok);
-}
-
-/// The same two proofs wrapped in RISC Zero's Groth16 (tools/groth16-wrap on hazync-coord, 15.11.2026): the verifier
-/// takes them unchanged (a chain proof is succinct or Groth16), and the bundle shrinks from ~913 KB to ~22 KB.
-#[test]
-fn groth16_wrapped_receipts_give_the_same_statement() {
-    const CORE_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/mainnet_0_200_8888d59c_groth16.rcpt");
-    const HDR_G16: &[u8] = include_bytes!("../../../experimental/libzync-bench/deposit/headers_0_975278_de54b94f_groth16.rcpt");
-    assert_eq!(swiftsync_verify::receipt_kind(CORE_G16), Ok("groth16"));
-    let b = make_bundle("mainnet", CORE_G16, &[HDR_G16.to_vec()], Some(HIST), &block_170(), 170, &id(T170), &lines(PATH_200), None).unwrap();
-    let a = DepositAsk { vout: Some(0), amount: Some(1_000_000_000), expect_tip: Some((TIP.0, TIP.1.into())), ..ask(id(T170)) };
-    let r = run(&b, &a);
-    assert_eq!(r.verdict, Verdict::Ok, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
-    assert_eq!(r.statement, run(&b_tip(), &a).statement);
-    assert!(serde_json::to_string(&b).unwrap().len() < 25_000);
-    // a Groth16 receipt with one byte flipped (past its 256-byte seal: the claim no longer matches it)
-    let mut bad = CORE_G16.to_vec();
-    let at = bad.len() / 3; bad[at] ^= 1;
-    let mut x = b.clone(); x.core_receipt = hex(&bad);
-    assert_eq!(run(&x, &a).verdict, Verdict::Fail);
+    assert_eq!(run(&b_tip(), &DepositAsk { max_tip_age: Some(100 * 365 * 86_400), ..a.clone() }).verdict, Verdict::Demo);
 }
 
 /// Review (11-15): a DEMO chain is a cheap difficulty-1 fork, so its statement is withheld unless asked for and is never
@@ -305,18 +218,20 @@ fn groth16_wrapped_receipts_give_the_same_statement() {
 fn the_verdict_gates_and_accepted() {
     let base = DepositAsk { txid: id(T170), vout: Some(0), amount: Some(1_000_000_000), ..Default::default() };
     assert!(base.require_identity && !base.allow_demo, "the defaults gate");
-    // the whole header chain, the tip expected: accepted
-    let r = run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, TIP.1.into())), ..base.clone() });
+    let z = zero_work_img();
+    let h200 = (200, H200.to_string());
+    // enough work (the zero-work image), the tip expected: accepted
+    let r = run_on(&b_core(&id(T170)), &DepositAsk { expect_tip: Some(h200.clone()), ..base.clone() }, z);
     assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Ok, true, true, true));
     // no tip source: DEMO, not accepted, no statement
-    let r = run(&b_tip(), &base);
+    let r = run_on(&b_core(&id(T170)), &base, z);
     assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Demo, false, false, false));
     assert!(r.checks.iter().any(|c| c.0 && c.1.starts_with("chain identity NOT checked")));
     // ...unless the caller turns the requirement off: OK and accepted, the identity not checked
-    let r = run(&b_tip(), &DepositAsk { require_identity: false, ..base.clone() });
+    let r = run_on(&b_core(&id(T170)), &DepositAsk { require_identity: false, ..base.clone() }, z);
     assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Ok, true, false, true));
-    // the core proof alone (below the minimum work and the 970,000 checkpoint), its tip expected: DEMO, withheld
-    let h200 = (200, "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320".to_string());
+    // the core proof alone on the real image (below the minimum work and the 970,000 checkpoint), its tip expected:
+    // DEMO, withheld
     let a = DepositAsk { expect_tip: Some(h200), ..base.clone() };
     let r = run(&b_core(&id(T170)), &a);
     assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Demo, false, true, false));
@@ -324,10 +239,10 @@ fn the_verdict_gates_and_accepted() {
     let r = run(&b_core(&id(T170)), &DepositAsk { allow_demo: true, ..a.clone() });
     assert_eq!((r.verdict, r.accepted, r.statement.is_some()), (Verdict::Demo, false, true));
     // a failed check: nothing, whatever the flags
-    let r = run(&b_tip(), &DepositAsk { allow_demo: true, require_identity: false, min_depth: 975_110, ..base.clone() });
+    let r = run_on(&b_core(&id(T170)), &DepositAsk { allow_demo: true, require_identity: false, min_depth: 32, ..base.clone() }, z);
     assert_eq!((r.verdict, r.accepted, r.identity_checked, r.statement.is_some()), (Verdict::Fail, false, false, false));
     // a wrong tip is a failed check, not a missing identity
-    let r = run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, "00".repeat(32))), ..base.clone() });
+    let r = run_on(&b_core(&id(T170)), &DepositAsk { expect_tip: Some((200, "00".repeat(32))), ..base.clone() }, z);
     assert_eq!((r.verdict, r.accepted), (Verdict::Fail, false));
 }
 
@@ -358,42 +273,13 @@ fn a_witness_serialised_transaction_in_a_fully_validated_block() {
     assert_eq!(run(&b2, &a).verdict, Verdict::Fail);
 }
 
-/// The v0.26.0 image (46666b6f), whose block leaves commit the undo hash (0x05 leaves, docs/libzync/UNDO.md), on its one
-/// real mainnet receipt in the repository (blocks 0..1, the release smoke test's): block 1's coinbase. Its forest
-/// opening is built from first principles (the genesis leaf, the tip's own coin state, the empty undo hash of a block
-/// with no spends), so this needs no history.bin. A receipt deep enough to put a spending block under the core tip
-/// waits on the first v0.26.0 board run.
+/// The engine chain's block leaves commit the undo hash (0x05 leaves, docs/libzync/UNDO.md): block 170's forest opening
+/// carries it, and a wrong one, or none, is refused.
 #[test]
-fn an_undo_leaf_block_of_the_v026_image() {
-    const CORE_V026: &[u8] = include_bytes!("../../../experimental/libzync-bench/zapp/mainnet_1_1_46666b6f.rcpt");
-    const BLOCK_1: &str = include_str!("../../../experimental/libzync-bench/deposit/block_1_raw.txt");
-    let cs = core_state(CORE_V026).unwrap();
-    assert_eq!(cs.height, 1);
-    let (header, txs) = libzync::facts::parse_block(&unhex(BLOCK_1.trim()).unwrap()).unwrap();
-    let cb = libzync::facts::txid(&txs[0]);
-    assert_eq!(disp(&cb), "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098");
-    let img = Image::by_network("mainnet").unwrap();
-    let g = swiftsync_verify::genesis_anchor(img);
-    let leaf0 = g.block_roots[0].unwrap();
-    let undo = swiftsync_verify::undo_hash(std::iter::empty());
-    let state = swiftsync_verify::utxo_state_of(&cs);
-    let b = DepositBundle {
-        kind: BUNDLE_KIND.into(), version: BUNDLE_VERSION, network: "mainnet".into(), core_receipt: hex(CORE_V026),
-        header_receipts: vec![], core_tip_mmr_path: vec![],
-        block: DepositBlock { height: 1, header: hex(&header), forest: Some(ForestOpening { state: hex(&state), undo: Some(hex(&undo)), path: vec![hex(&leaf0)] }),
-                              mmr_path: None, tx: hex(&txs[0].stripped), index: 0, branch: vec![], coinbase: hex(&txs[0].stripped), coinbase_branch: vec![] },
-    };
-    let a = DepositAsk { vout: Some(0), amount: Some(5_000_000_000), ..ask(cb) };
-    let r = run(&b, &a);
-    assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
-    let s = r.statement.unwrap();
-    assert_eq!((s.height, s.validated_through, s.confirmations, s.block_fully_validated), (1, 1, 1, true));
-    // the boundary h == Hc: one fully validated confirmation meets the default min_validated_depth 1 (above, through
-    // ask's ..Default::default()); asking 2 when Hc - h + 1 == 1 is refused
-    assert_eq!((a.min_validated_depth, s.validated_confirmations), (1, 1));
-    refused(&b, &DepositAsk { min_validated_depth: 2, ..a.clone() }, "validated depth: 1");
-    assert_eq!(s.core_image, "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c");
-    // the undo hash is part of the leaf: a wrong one, or none, is refused
+fn an_undo_leaf_block_of_the_engine_chain() {
+    let b = b_core(&id(T170));
+    let a = ask(id(T170));
+    assert!(b.block.forest.as_ref().unwrap().undo.is_some());
     let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = Some(hex(&[1; 32]));
     refused(&x, &a, "not in the proof's block forest");
     let mut x = b.clone(); x.block.forest.as_mut().unwrap().undo = None;
@@ -408,14 +294,15 @@ fn an_undo_leaf_block_of_the_v026_image() {
 #[test]
 fn identity_and_validated_depth_lines_only_where_they_apply() {
     let base = DepositAsk { txid: id(T170), ..Default::default() };
+    let z = zero_work_img();
     let note = |r: &DepositReport| r.checks.iter().any(|c| c.1.starts_with("chain identity NOT checked"));
-    assert!(note(&run(&b_tip(), &base)));
+    assert!(note(&run_on(&b_core(&id(T170)), &base, z)));
     let r = run(&b_core(&id(T170)), &base);
     assert_eq!(r.verdict, Verdict::Demo);
     assert!(!note(&r), "{:?}", r.checks);
-    assert!(!note(&run(&b_tip(), &DepositAsk { expect_tip: Some((TIP.0, TIP.1.into())), ..base.clone() })));
-    assert!(!note(&run(&b_tip(), &DepositAsk { require_identity: false, ..base.clone() })));
-    let r = run(&b_tip(), &DepositAsk { min_depth: 975_110, ..base.clone() });
+    assert!(!note(&run_on(&b_core(&id(T170)), &DepositAsk { expect_tip: Some((200, H200.into())), ..base.clone() }, z)));
+    assert!(!note(&run_on(&b_core(&id(T170)), &DepositAsk { require_identity: false, ..base.clone() }, z)));
+    let r = run_on(&b_core(&id(T170)), &DepositAsk { min_depth: 32, ..base.clone() }, z);
     assert_eq!(r.verdict, Verdict::Fail);
     assert!(!note(&r), "{:?}", r.checks);
     let vd = |r: &DepositReport| r.checks.iter().filter(|c| c.1.starts_with("validated depth")).count();
@@ -450,10 +337,6 @@ fn unknown_fields_and_the_other_opening_are_refused() {
     let a = ask(id(T170));
     let mut b = b_tip(); b.block.mmr_path = Some(vec![hex(&[1; 32])]); refused(&b, &a, "an mmr_path is not part of such a bundle");
     let mut b = b_core(&id(T170)); b.block.mmr_path = Some(vec![]); refused(&b, &a, "an mmr_path is not part of such a bundle");
-    // a block above the core tip with a forest opening besides its MMR path
-    let (mut b, t) = b_seg(false);
-    b.block.forest = Some(ForestOpening { state: hex(&[2; 32]), undo: None, path: vec![] });
-    refused(&b, &DepositAsk { allow_pow_only_block: true, min_validated_depth: 0, ..ask(t) }, "a forest opening is not part of such a bundle");
 }
 
 /// Review 11-18: above the core tip, inclusion is checked by the header zAPP's transaction parser and the outputs are

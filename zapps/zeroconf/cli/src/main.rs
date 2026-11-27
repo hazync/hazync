@@ -69,8 +69,8 @@ fn main() {
     let (file, key) = (rd(&files[0]), rd(&vk));
     let pin: [u8; 32] = { use sha2::Digest as _; sha2::Sha256::digest(&key).into() };
     let key = EngineKey { bytes: &key, pin };
-    // the trusted core image: the network's record re-pointed at --core-image, as an engine build (node format 2)
-    let img = zapp_corecheck::image_for(&network, &core, true, true).unwrap_or_else(|e| fail(&e)).with_node2();
+    // the trusted core image: the network's record re-pointed at --core-image (an engine build: node format 2)
+    let img = zapp_corecheck::image_for(&network, &core, true, true).unwrap_or_else(|e| fail(&e));
     let anchor: Option<ChainState> = anchor.map(|p| serde_json::from_slice(&rd(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p)))));
     let run = |tip: Option<(u32, &str)>| zapp_zeroconf::verify_zeroconf(&file, &image, &key, img, anchor.as_ref(), now, &txid, tip);
     // chain identity (zapp-common): the sources are asked about the tip height the proof has SHOWN (it verified first)

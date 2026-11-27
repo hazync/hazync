@@ -1,7 +1,7 @@
 //! The tip statement's verdict as a pure function of the statement (judge_tip_statement, UTREEXO_ZAPP.md §10.7): OK
 //! from a statement built here (no real receipt reaches it: all are below minimum work), and each check failing alone.
 #![cfg(feature = "tip")]
-use swiftsync_verify::{hex32, words, Image, Verdict};
+use swiftsync_verify::{hex, hex32, words, Image, Verdict};
 use zapp_utreexo::*;
 
 const NOW: u64 = 1_800_000_000;
@@ -24,8 +24,8 @@ fn good(net: &str) -> TipStatement {
     w.reverse();
     TipStatement {
         kind: KIND_UTREEXO_TIP,
-        self_id: words(&risc0_zkvm::sha::Digest::from_bytes(TIP)),
-        base_id: words(&risc0_zkvm::sha::Digest::from_bytes(BASE)),
+        self_id: words(&TIP),
+        base_id: words(&BASE),
         network: if net == "signet" { 4 } else { 0 },
         base_height: 100,
         base_core_id: words(&i.method_id()),
@@ -101,13 +101,6 @@ fn demo_paths() {
     let z = good("mainnet");
     let r = judge_tip_statement(z, &TIP, &BASE, i, NOW, None, None);
     assert_eq!(r.report.verdict, Verdict::Demo);
-    // the built-in base image: OK once it is pinned, DEMO while it is not
-    let base = hex32(UTREEXO_IMAGE_ID).unwrap();
-    let mut z = good("mainnet");
-    z.base_id = words(&risc0_zkvm::sha::Digest::from_bytes(base));
-    let a = (z.height, disp(&z.block_hash));
-    let want = if UTREEXO_IMAGE_PINNED { Verdict::Ok } else { Verdict::Demo };
-    assert_eq!(judge_tip_statement(z, &TIP, &base, i, NOW, Some((a.0, a.1.as_str())), None).report.verdict, want);
 }
 
 #[test]
@@ -117,14 +110,13 @@ fn the_value_view_is_floresta_s() {
     assert!(f.contains("BitcoinNodeHash::Empty,") && f.contains("leaves: 3,"), "{f}");
 }
 
-/// The built-in ids are the published ones (reproduce/LIBZYNC_IDS, the reproducible container's output), and pinned.
+/// No built-in ids until the engine images are published (engine/CUTOVER.md C3): every id is the caller's.
 #[test]
-fn built_in_ids_are_the_published_ones() {
-    let ids = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../reproduce/LIBZYNC_IDS")).unwrap();
-    let id = |name: &str| ids.lines().find(|l| l.starts_with(&format!("{name} mainnet METHOD_ID "))).map(|l| l.split_whitespace().nth(3).unwrap().to_string());
-    assert_eq!(id("zyncapp-utreexo").as_deref(), Some(UTREEXO_IMAGE_ID));
-    assert_eq!(id("zyncapp-utreexo-tip").as_deref(), Some(UTREEXO_TIP_IMAGE_ID));
-    assert!(UTREEXO_IMAGE_PINNED && UTREEXO_TIP_IMAGE_PINNED);
+fn no_built_in_ids_yet() {
+    assert!(UTREEXO_IMAGE_ID.is_empty() && UTREEXO_TIP_IMAGE_ID.is_empty());
+    assert!(!UTREEXO_IMAGE_PINNED && !UTREEXO_TIP_IMAGE_PINNED);
+    assert_eq!(image_source(&TIP), IMAGE_CALLER);
+    assert_eq!(tip_image_source(&TIP), IMAGE_CALLER);
 }
 
 /// Review H1: a composite receipt nested 300,000 levels deep (each level: no segments, one assumption receipt that is
@@ -143,8 +135,10 @@ pub fn nested_composite(levels: usize) -> Vec<u8> {
 fn a_deeply_nested_composite_receipt_is_refused_without_decoding() {
     let r = nested_composite(300_000);
     assert_eq!(journal_kind(&r), None);
-    let rep = verify_utreexo_tip_on("mainnet", &r, UTREEXO_TIP_IMAGE_ID, UTREEXO_IMAGE_ID, None, NOW, None, None);
+    // not an engine proof file: refused before any decoding
+    let key = swiftsync_verify::EngineKey { bytes: &[], pin: [0; 32] };
+    let rep = verify_utreexo_tip_on("mainnet", &r, &hex(&TIP), &key, &hex(&BASE), &hex(&BASE), NOW, None, None);
     assert_eq!(rep.report.verdict, Verdict::Fail);
-    assert!(rep.report.checks.iter().any(|c| !c.0 && c.1.contains("composite")), "{:?}", rep.report.checks);
-    assert_eq!(verify_utreexo(&r, UTREEXO_IMAGE_ID, None, NOW, None, None).verdict, Verdict::Fail);
+    assert!(rep.report.checks.iter().any(|c| !c.0 && c.1.contains("not an engine proof file")), "{:?}", rep.report.checks);
+    assert_eq!(verify_utreexo(&r, &hex(&TIP), &key, &hex(&BASE), NOW, None, None).verdict, Verdict::Fail);
 }

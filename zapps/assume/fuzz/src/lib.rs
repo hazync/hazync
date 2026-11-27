@@ -9,22 +9,25 @@
 //! - `side_inputs`: the headers file, the tracked list and the assumevalid block against the real proof: a header run
 //!   that is accepted is a suffix of the real headers, an assumevalid answer names the real block at that height, and a
 //!   snapshot accepted with a tracked list never has a listed outpoint among its coins (none is tracked at 200).
-//! - `core_receipt`: mutations of the real core receipt through zapp_corecheck::verify_core: a verdict other than FAIL
-//!   only for the real receipt (followed by any bytes: those are accepted, see `core_receipt`).
+//! - `core_receipt`: mutations of the real core proof (the engine chain's, mainnet 1..200) through
+//!   zapp_corecheck::verify_core: a verdict other than FAIL only for exactly the real file.
 
 use std::sync::OnceLock;
 use swiftsync_verify::{ChainState, Image, Inputs, Verdict};
 use zapp_assume::{HeaderChain, SnapCoin, SnapshotMeta};
 
-pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt");
+pub const RCPT: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.hze");
+const VK: &[u8] = include_bytes!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk");
+const ID: &str = include_str!("../../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id");
 pub const SNAP_200: &[u8] = include_bytes!("../../vectors/utxo_200.dat");
 pub const HDRS: &[u8] = include_bytes!("../../vectors/headers_0_200.bin");
-pub const IMAGE_8888: &str = "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4";
 pub const TIP_200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320";
 pub const NOW: u64 = 1_800_000_000;
 
+/// The engine chain's mainnet 1..200 image with its key, once.
 pub fn image() -> &'static Image {
-    Image::by_id("mainnet", IMAGE_8888).expect("the 8888d59c image")
+    static I: OnceLock<&'static Image> = OnceLock::new();
+    I.get_or_init(|| Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec()))
 }
 
 /// The real proof's verified state (DEMO: below minimum work), once.
@@ -212,12 +215,9 @@ pub fn side_inputs(data: &[u8]) {
 
 pub fn core_receipt(data: &[u8]) {
     let expect = format!("200:{TIP_200}");
-    let c = zapp_corecheck::verify_core(data, image(), false, None, NOW, Some(&expect));
+    let c = zapp_corecheck::verify_core(data, image(), None, NOW, Some(&expect));
     if c.report.verdict != Verdict::Fail {
-        // Bytes after the receipt were accepted until #758 (reported from round 1, probe results/probe/rcpt_trailing0);
-        // the core's strict decoder now refuses them. What is compared is the receipt the bytes decode to, with it.
-        let canon = swiftsync_verify::decode_receipt(data).ok().map(|r| bincode::serialize(&r).unwrap());
-        assert!(canon.as_deref() == Some(RCPT) && data.starts_with(RCPT),
-                "WRONG-OK: a receipt other than the real one verifies ({:?}, {} bytes)", c.report.verdict, data.len());
+        // an engine proof file has no slack: bytes after it are journal bytes, which the public values refuse
+        assert!(data == RCPT, "WRONG-OK: a file other than the real proof verifies ({:?}, {} bytes)", c.report.verdict, data.len());
     }
 }

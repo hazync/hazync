@@ -106,9 +106,6 @@ pub struct DepositAsk {
     pub allow_pow_only_block: bool,
     /// The tip (height, hash as explorers print it) from a source the caller trusts.
     pub expect_tip: Option<(i64, String)>,
-    /// The core image was named by the caller (`--image`): the core receipt may verify against that image only, not
-    /// against an earlier built-in image of the chain it names (zapp_corecheck::verify_core, pinned; review 11-16).
-    pub pin_core_image: bool,
     /// The tip's block time must be within this many seconds of `now` (a stale proof is refused).
     pub max_tip_age: Option<u64>,
     /// The verdict can be Ok only when the tip was compared with a source the caller trusts (`expect_tip`). On by
@@ -124,7 +121,7 @@ impl Default for DepositAsk {
     fn default() -> Self {
         DepositAsk { txid: [0; 32], vout: None, amount: None, script: None, op_return: None, min_depth: 0,
                      min_validated_depth: 1, allow_pow_only_block: false, expect_tip: None, max_tip_age: None,
-                     require_identity: true, allow_demo: false, pin_core_image: false }
+                     require_identity: true, allow_demo: false }
     }
 }
 
@@ -203,18 +200,12 @@ pub fn op_return_payload(spk: &[u8]) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// Check a deposit bundle against the caller's question. `network`, `core_image` and `headers_image` are the
-/// caller's (the bundle's own `network` must agree); `now` is the caller's clock (unix seconds).
+/// Check a deposit bundle against the caller's question. `network`, `core_image` (the engine core image with its key,
+/// zapp_corecheck::with_key) and `headers_image` / `headers_key` (the header-chain image and its pinned key, needed when
+/// the bundle carries header runs) are the caller's (the bundle's own `network` must agree); `now` is the caller's
+/// clock (unix seconds). Engine (OpenVM) proofs only since the cutover (engine/CUTOVER.md).
 pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_image: &'static Image, headers_image: &str,
-                      now: u64) -> DepositReport {
-    verify_deposit_with(b, ask, network, core_image, headers_image, None, now)
-}
-
-/// [`verify_deposit`] with the header-chain image's engine key: the bundle's header runs are then engine (OpenVM) proofs
-/// of that image, checked under the pinned key (zapp_headers::verify_headers_with; engine/VERIFIER.md). The core proof
-/// is an engine proof whenever `core_image`'s record carries its key.
-pub fn verify_deposit_with(b: &DepositBundle, ask: &DepositAsk, network: &str, core_image: &'static Image, headers_image: &str,
-                           headers_key: Option<&swiftsync_verify::EngineKey>, now: u64) -> DepositReport {
+                      headers_key: Option<&swiftsync_verify::EngineKey>, now: u64) -> DepositReport {
     let mut rep = DepositReport { checks: Vec::new(), verdict: Verdict::Fail, accepted: false, identity_checked: false, statement: None };
     if !rep.check(b.kind == BUNDLE_KIND && b.version == BUNDLE_VERSION,
                   format!("a deposit bundle, version {BUNDLE_VERSION} (kind {:?}, version {})", b.kind, b.version)) {
@@ -227,7 +218,7 @@ pub fn verify_deposit_with(b: &DepositBundle, ask: &DepositAsk, network: &str, c
 
     // 1. The core chain proof: full validation 0..=Hc.
     let Some(core_bytes) = unhex(&b.core_receipt) else { return rep.fail("core receipt: not hex") };
-    let core = zapp_corecheck::verify_core(&core_bytes, core_image, ask.pin_core_image, None, now, None);
+    let core = zapp_corecheck::verify_core(&core_bytes, core_image, None, now, None);
     let (cr, core_used) = (core.report, core.image);
     for (ok, w) in &cr.checks { rep.checks.push((*ok, format!("core: {w}"))); }
     let (cs, undo_from) = match (&cr.verdict, &cr.state) {
@@ -245,7 +236,10 @@ pub fn verify_deposit_with(b: &DepositBundle, ask: &DepositAsk, network: &str, c
             return rep.fail("header receipts: not hex");
         };
         let refs: Vec<&[u8]> = bytes.iter().map(|x| x.as_slice()).collect();
-        let hr = headers::verify_headers_with(&refs, headers_image, headers_key, now, None, None);
+        let Some(hk) = headers_key else {
+            return rep.fail("header runs given: give the header-chain image's verifying key (no engine image is published yet)");
+        };
+        let hr = headers::verify_headers(&refs, headers_image, hk, now, None, None);
         for (ok, w) in &hr.checks { rep.checks.push((*ok, format!("headers: {w}"))); }
         let s = match (&hr.verdict, hr.state) {
             (Verdict::Fail, _) | (_, None) => return rep.fail("the header-chain proof verifies (see the headers: checks)"),
@@ -467,8 +461,7 @@ pub fn make_bundle(network: &str, core: &[u8], header_receipts: &[Vec<u8>], hist
 
 /// The core tip's state, for a tool that builds a bundle (it must already have verified the receipt).
 pub fn core_state(receipt: &[u8]) -> Result<ChainState, String> {
-    // the core's strict decoders (#758): no trailing bytes, no word risc0 asserts on, a journal of whole words
-    // a RISC Zero receipt or an engine proof file (swiftsync_verify::proof_journal)
+    // an engine proof file's journal by its framing (swiftsync_verify::proof_journal), decoded as whole words
     let j = swiftsync_verify::proof_journal(receipt).map_err(|e| format!("core receipt: {e}"))?;
     let cs: ChainState = swiftsync_verify::decode_journal(&j).map_err(|e| format!("core journal: {e}"))?;
     // the history replay and every path below are in this proof's node format (COINLOG.md §2)

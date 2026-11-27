@@ -6,7 +6,10 @@
 //!                [--min-validated-depth <n>] [--allow-pow-only-block] [--expect <height>:<hash>] [--mempool | --mempool-url <base>]
 //!                [--bitcoin-cli "<cmd>"] [--max-tip-age <s>]
 //!                [--no-require-identity] [--allow-demo]
-//!                [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>
+//!                [--now <s>] [--network <name>] --image <hex> --vk <key file> [--headers-image <hex> --headers-vk <key file>]
+//!                <deposit.json>
+//! `--image` / `--vk`: the engine core image id and its key; `--headers-image` / `--headers-vk`: the header-chain image and
+//! its key, for a bundle with header runs. No engine image is published yet: every key is taken as your own build's.
 //!       check a deposit proof against YOUR expectations. Exit 0 ACCEPTED (verdict OK: every check passed, the tip
 //!       proof has Core's minimum chain work, and the tip was compared with --expect / --mempool / --bitcoin-cli),
 //!       2 DEMO (valid, but below the minimum work or the core checkpoint, or the tip not compared: NOT a deposit to
@@ -14,7 +17,8 @@
 //!       source (a caller that compares the tip by other means says so explicitly). --min-validated-depth: default 1 (the
 //!       deposit's own block fully validated, its burial may be proof of work only); a block above the core tip takes
 //!       --allow-pow-only-block AND --min-validated-depth 0.
-//!   zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>]
+//!   zapp-deposit build --core <core.hze> --image <hex> --vk <key file> --history <history.bin> [--headers <proof.hze>]...
+//!                      [--headers-image <hex> --headers-vk <key file>] [--headers-file <file>]
 //!                --height <h> --txid <txid> (--block <raw block hex file> | --bitcoin-cli "<cmd>")
 //!                [--tip-path <file>] [--network mainnet|signet] -o <deposit.json>
 //!       build a bundle (was zync-deposit; holds no secrets, proves nothing: it runs the verifier on what it built)
@@ -30,11 +34,11 @@ use std::process::exit;
 use swiftsync_verify::{hex, hex32, Verdict};
 use zapp_deposit::{core_state, make_bundle, verify_deposit, DepositAsk};
 use zapp_common::{Identity, IDENTITY_USAGE};
-use zapp_headers::{HeaderState, HEADERS_IMAGE_ID};
+use zapp_headers::HeaderState;
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n> (default 1)] [--allow-pow-only-block (needs --min-validated-depth 0)] {IDENTITY_USAGE} [--no-require-identity] [--allow-demo] [--max-tip-age <s>] [--now <s>] [--network <name>] [--image <hex>] [--headers-image <hex>] <deposit.json>");
+    eprintln!("usage: zapp-deposit --txid <txid> [--vout <n>] [--amount <sat>] [--script <hex>] [--op-return <hex>] [--min-depth <n>] [--min-validated-depth <n> (default 1)] [--allow-pow-only-block (needs --min-validated-depth 0)] {IDENTITY_USAGE} [--no-require-identity] [--allow-demo] [--max-tip-age <s>] [--now <s>] [--network <name>] --image <hex> --vk <key file> [--headers-image <hex> --headers-vk <key file>] <deposit.json>");
     eprintln!("       zapp-deposit build --core <core.rcpt> --history <history.bin> [--headers <rcpt>]... [--headers-file <file>] --height <h> --txid <txid> (--block <file> | --bitcoin-cli \"<cmd>\") [--tip-path <file>] [--network <name>] -o <deposit.json>");
     eprintln!("       zapp-deposit mmr-path <headers file> <tip height> <height>");
     exit(1);
@@ -133,8 +137,8 @@ fn build_main(a: Vec<String>) {
     };
     // the header chain's tip, from its last receipt's journal (the verifier checks the receipts)
     let htip: Option<HeaderState> = headers.last().map(|b| {
-        let r = swiftsync_verify::decode_receipt(b).unwrap_or_else(|e| die(&format!("header receipt: {e}")));
-        swiftsync_verify::decode_journal::<([u8; 32], HeaderState)>(&r.journal).unwrap_or_else(|e| die(&format!("header journal: {e}"))).1
+        let j = swiftsync_verify::proof_journal(b).unwrap_or_else(|e| die(&format!("header proof: {e}")));
+        swiftsync_verify::decode_journal::<([u8; 32], HeaderState)>(&j).unwrap_or_else(|e| die(&format!("header journal: {e}"))).1
     });
     // --tip-path <file>: the core tip's MMR path, already made (`mmr-path`), instead of reading the headers file
     let read_path = |f: &str| -> Vec<[u8; 32]> {
@@ -154,11 +158,12 @@ fn build_main(a: Vec<String>) {
         .unwrap_or_else(|e| die(&e));
     // self-check with the verifier: the transaction at depth >= 1, a block above the core tip allowed (it is flagged)
     // as every zAPP resolves it (zapp_corecheck::image_for; "regtest" only under the tests-only regtest-test feature)
-    let img = zapp_corecheck::image_for(&network, "", false, false).unwrap_or_else(|e| die(&e));
+    let (img, hk) = keys(&network, get("--image"), get("--vk"), get("--headers-vk")).unwrap_or_else(|e| die(&e));
+    let himage = get("--headers-image").unwrap_or_default();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     // (a self-check of the bundle's parts: the chain identity is the verifier's caller's, not the builder's)
     let ask = DepositAsk { txid, min_depth: 1, min_validated_depth: 0, allow_pow_only_block: true, require_identity: false, allow_demo: true, ..Default::default() };
-    let rep = verify_deposit(&b, &ask, &network, img, HEADERS_IMAGE_ID, now);
+    let rep = verify_deposit(&b, &ask, &network, img, &himage, hk.as_ref().map(|(b, p)| swiftsync_verify::EngineKey { bytes: b, pin: *p }).as_ref(), now);
     if rep.verdict == Verdict::Fail {
         for (_, w) in rep.checks.iter().filter(|c| !c.0) { eprintln!("  [FAIL] {w}"); }
         die("the bundle does not verify: not written");
@@ -181,7 +186,8 @@ fn verify_main(a: Vec<String>) -> ! {
     use zapp_deposit::{disp, verify_deposit, DepositAsk, DepositBundle};
     let mut ask = DepositAsk::default();
     let (mut network, mut image_hex, mut himage, mut now, mut file, mut txid) =
-        ("mainnet".to_string(), None, zapp_headers::HEADERS_IMAGE_ID.to_string(), None, None, None);
+        ("mainnet".to_string(), None, String::new(), None, None, None);
+    let (mut vk, mut hvk): (Option<String>, Option<String>) = (None, None);
     let mut it = a.into_iter();
     let mut id = Identity::default();
     let num = |v: Option<String>, k: &str| -> u64 { v.and_then(|x| x.parse().ok()).unwrap_or_else(|| fail(&format!("{k}: not a number"))) };
@@ -203,6 +209,8 @@ fn verify_main(a: Vec<String>) -> ! {
             "--network" => network = it.next().unwrap_or_else(|| usage()),
             "--image" => image_hex = it.next(),
             "--headers-image" => himage = it.next().unwrap_or_else(|| usage()),
+            "--vk" => vk = it.next(),
+            "--headers-vk" => hvk = it.next(),
             f if id.take(f, &mut || it.next()).unwrap_or_else(|e| fail(&e)) => {}
             f if f.starts_with("--") => fail(&format!("unknown flag {}", esc(f))),
             f if file.is_none() => file = Some(f.to_string()),
@@ -214,11 +222,9 @@ fn verify_main(a: Vec<String>) -> ! {
     t.reverse();
     ask.txid = t;
     let file = file.unwrap_or_else(|| usage());
-    // the image as every zAPP resolves it (zapp_corecheck::image_for); a given --image is the only one the core receipt
-    // may verify against (review 11-16)
-    let image = zapp_corecheck::image_for(&network, image_hex.as_deref().unwrap_or(""), false, false)
-        .unwrap_or_else(|e| fail(&format!("--image: {e}")));
-    ask.pin_core_image = image_hex.as_deref().is_some_and(|h| !h.trim().is_empty());
+    // the images as every zAPP resolves them (zapp_corecheck::image_for), with their keys (your own builds')
+    let (image, hk) = keys(&network, image_hex, vk, hvk).unwrap_or_else(|e| fail(&e));
+    let hkey = hk.as_ref().map(|(b, p)| swiftsync_verify::EngineKey { bytes: b, pin: *p });
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let b: DepositBundle = serde_json::from_slice(&std::fs::read(&file).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&file)))))
@@ -234,14 +240,14 @@ fn verify_main(a: Vec<String>) -> ! {
     if id.needs_lookup() {
         // the tip to ask the sources about (read only for that: the statement is not used)
         let pre = verify_deposit(&b, &DepositAsk { expect_tip: None, require_identity: false, allow_demo: true, ..ask.clone() },
-                                 &network, image, &himage, now);
+                                 &network, image, &himage, hkey.as_ref(), now);
         if let Some(s) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
             let (x, c) = zapp_common::expect_at(&id, &network, s.tip_height as u32, Some(&s.tip_work));
             ask.expect_tip = x.as_deref().map(parse);
             extra = c;
         }
     }
-    let mut rep = verify_deposit(&b, &ask, &network, image, &himage, now);
+    let mut rep = verify_deposit(&b, &ask, &network, image, &himage, hkey.as_ref(), now);
     if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; rep.accepted = false; rep.statement = None; }
     rep.checks.splice(0..0, extra);
     // a report on the tests-only regtest image says so on its FIRST line (zapps/corecheck's TEST_IMAGE_LINE, which the
@@ -273,4 +279,18 @@ fn verify_main(a: Vec<String>) -> ! {
             println!("SWIFTSYNC_VERIFY_DEMO: NOT accepted (below Core's minimum chain work or the checkpoint, or the tip not compared): {what}"); exit(2)
         }
     }
+}
+
+/// The core image with its key, and the header-chain key (bytes, pin), from the flags: no engine image is published yet,
+/// so the core image id and key are required and each key is taken as your own build's (pinned as given).
+fn keys(network: &str, image: Option<String>, vk: Option<String>, hvk: Option<String>)
+        -> Result<(&'static swiftsync_verify::Image, Option<(Vec<u8>, [u8; 32])>), String> {
+    use sha2::Digest as _;
+    let (Some(image), Some(vk)) = (image, vk) else {
+        return Err("no engine core image is published yet: give --image <hex> and --vk <key file> (your own build's)".into());
+    };
+    let rd = |f: &str| std::fs::read(f).map_err(|e| format!("{f}: {e}"));
+    let img = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image, false, false)?, &rd(&vk)?, None)?;
+    let hk = match hvk { Some(f) => { let b = rd(&f)?; let p: [u8; 32] = sha2::Sha256::digest(&b).into(); Some((b, p)) } None => None };
+    Ok((img, hk))
 }

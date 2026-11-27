@@ -13,6 +13,7 @@ crate-type = ["staticlib", "cdylib"]
 [dependencies]
 zapp-hints = { path = ".." }
 swiftsync-verify = { path = "../../../swiftsync-verify" }
+sha2 = "0.10"
 
 [profile.release]
 opt-level = "z"
