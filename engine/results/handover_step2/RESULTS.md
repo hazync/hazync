@@ -14,4 +14,13 @@ forced through the cross-version path: the mechanism, not yet two versions (step
 - **Its state = the predecessor chain's own block 200 in every field but self_id and lineage** (the new image's
   id; the lineage digest of the pinned handover, 73b0a5ff...); anchor_id carried unchanged.
 
-Negative controls (hv_neg.sh): see below.
+Negative controls (hv_neg.sh, hv_neg.out): each refused IN THE GUEST by the cross-version check (main.rs's
+"predecessor chain proof invalid (cross-version)", the handover block's collect pass), with its own reason:
+
+| predecessor input | the guest's reason |
+|---|---|
+| the proof with one byte flipped | "the predecessor proof does not verify" |
+| the journal's cum_work changed (the host does not check it; the proof's public values bind it) | "the predecessor proof is not of this journal" |
+| another real proof (block 200's) given for block 199's journal | "the predecessor proof is not of this journal" |
+
+(The pin, the image id and a non-pinned key are refused by verify-core itself: its own test and engine/VERIFIER.md.)
