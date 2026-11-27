@@ -25,6 +25,16 @@ set +e; "$T/release/zapp-headers" "${K[@]}" --bitcoin-cli "$T/nowork" $D/proof.h
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node that gives no chainwork: exit $e, want 1"; exit 1; }
 set +e; "$T/release/zapp-headers" "${K[@]}" --bitcoin-cli "$T/badnode" $D/proof.hze > "$T/id.out"; e=$?; set -e
 [ $e = 1 ] || { cat "$T/id.out"; echo "::error::--bitcoin-cli, a node naming another block: exit $e, want 1"; exit 1; }
+# the whole chain 0..975,278 (tests/data/engine975278, proved 27.11.2026): above Core's minimum work, so OK with the
+# tip from an identity source; another tip hash FAIL
+D=tests/data/engine975278; K=(--image "$(cat "$D/image_id")" --vk "$D/vk.bin")
+TIP=00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+set +e; "$T/release/zapp-headers" "${K[@]}" --expect 975278:$TIP $D/proof.hze > "$T/id.out"; e=$?; set -e
+[ $e = 0 ] && grep -q "SWIFTSYNC_VERIFY_OK: header chain from genesis to 975278 $TIP" "$T/id.out" \
+  && grep -q "MMR root bb22154abf3cf886ebcb512fc0901401fb9ae8362b9f40e6c7b09711a8ceb29a" "$T/id.out" \
+  || { cat "$T/id.out"; echo "::error::the whole chain with its tip: exit $e, want 0 (OK, RISC Zero's MMR root)"; exit 1; }
+set +e; "$T/release/zapp-headers" "${K[@]}" --expect 975278:${TIP%3}4 $D/proof.hze > "$T/id.out"; e=$?; set -e
+[ $e = 1 ] || { cat "$T/id.out"; echo "::error::the whole chain, another tip hash: exit $e, want 1"; exit 1; }
 ./wasm/build.sh
 wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_headers_wasm.wasm wasm/README.md
 node wasm/test-headers.mjs

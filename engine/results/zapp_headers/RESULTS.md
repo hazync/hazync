@@ -51,3 +51,11 @@ Pod guq4qpuihtefl7 (nvidia-smi: "NVIDIA RTX PRO 6000 Blackwell Workstation Editi
 | end hash / chainwork / MMR root | node's / node's / bb22154a | the same |
 
 Pod cost: $1.03 (22 min: most of it a slow CUDA download, 4 MB/s, before the proof).
+
+## RTX A6000, the proof kept (27.11.2026)
+
+Pod gbk6ztfwyododf (1x RTX A6000), the same bundle, HARVEST_PROOFS=1: **prove 722.0 s** (job 743 s), GPU busy 65%,
+peak 23,856 MiB; `hzengine verify` OK, journal sha256 20bb754b... (identical). The proof is kept, packed (HZE1,
+323,287 bytes), as zapps/headers/tests/data/engine975278: `zapp-headers` gives OK with the tip from hazync-coord's
+node, MMR root bb22154a... (zapps/headers/test.sh). Not the reference card: the timing check of the 266.2 s is the
+PRO 6000 Workstation Edition re-run below.
