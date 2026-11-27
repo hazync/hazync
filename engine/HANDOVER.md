@@ -98,6 +98,13 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    against v2.0.2's verifier crate (a second OpenVM in the guest's graph: openvm-verify-stark-host v2.0.2 renamed,
    with its own stark-backend v2.0.1), since an upgrade's xver must run the PREDECESSOR's verifier; (c) the handover
    at the chain's next height with the negative controls.
+   **cargo check of hzengine retagged to v2.0.2 / stark-backend v2.0.1 (scratch copy):** 6 errors, all from ONE layout
+   change: v2.0.2's VerificationBaseline holds a single `app_exe_commit` FIELD (v2.1.0: program_commit, initial_state,
+   initial_pc, and app_exe_commit() computed), and v2.0.2's proof decodes through the codec `Decode` trait (no vk).
+   segpar.rs builds the baseline from its parts; engine.rs calls app_exe_commit() and decode_using_vk. So: a small host
+   port; and the predecessor's key file is NOT the same struct across versions, so xver must use the PREDECESSOR's
+   verify crate and types (one verify-core flavour per OpenVM version, e.g. a v2.0.2 copy with these two calls).
+   Untested yet: the platform crate and the guest build on v2.0.2.
    A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).
