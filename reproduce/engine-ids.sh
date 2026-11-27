@@ -1,5 +1,5 @@
 #!/bin/bash
-# engine-ids.sh [--out DIR]: the ENGINE (OpenVM) image ids of this checkout's COMMIT, built in reproduce/engine.Dockerfile
+# engine-ids.sh [--out DIR] [--rev REV]: the ENGINE (OpenVM) image ids of this checkout's COMMIT, built in reproduce/engine.Dockerfile
 # (engine/ROADMAP.md 4.1, engine/results/reproduce_engine). Prints, for each image, the exe commitment, the vm commitment
 # and the image id SHA-256(exe || vm), and writes them with each image.json, baseline.json and guest.vmexe hash to DIR
 # (default reproduce/out-engine). Images: core (the production core guest, mainnet, default features) and zeroconf.
@@ -24,9 +24,9 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
     for v in $(compgen -e | grep "^HAZYNC_\|^HZ_"); do [ "$v" = HAZYNC_ENGINE_IN_CONTAINER ] || unset "$v"; done
     t0=$(date +%s); say(){ echo "[$(( $(date +%s)-t0 )) s] $*"; }
     K=/root/engine-kit; rm -rf /hz $K && mkdir -p /hz $K
-    git -c safe.directory='*' -C /src archive HEAD | tar -x -C $K
-    commit=$(git -c safe.directory='*' -C /src rev-parse HEAD)
-    say "commit $commit (git archive HEAD); rustc $(rustc --version | cut -d' ' -f2), guest $(rustc +nightly-2026-02-28 --version | cut -d' ' -f2-4)"
+    tar -x -f /in/src.tar -C $K
+    commit=$COMMIT
+    say "commit $commit (git archive); rustc $(rustc --version | cut -d' ' -f2), guest $(rustc +nightly-2026-02-28 --version | cut -d' ' -f2-4)"
     cd $K/engine/host && cargo build --release --locked -q 2>&1 | grep -v '^warning' | tail -3 || true
     E=$K/engine/host/target/release/hzengine; [ -x $E ] || { echo "hzengine did not build" >&2; exit 1; }
     say "hzengine built"
@@ -55,15 +55,19 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
     chown -R "${OUT_UID:-0}:${OUT_GID:-0}" /out
     exit 0
 fi
-OUT=$REPO/reproduce/out-engine
-while [ $# -gt 0 ]; do case $1 in --out) OUT=$(realpath -m "$2"); shift 2;; *) echo "usage: $0 [--out DIR]" >&2; exit 1;; esac; done
-[ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ] || echo "note: the checkout has uncommitted changes; the build uses the commit (git archive HEAD)" >&2
+OUT=$REPO/reproduce/out-engine; REV=HEAD
+while [ $# -gt 0 ]; do case $1 in --out) OUT=$(realpath -m "$2"); shift 2;; --rev) REV=$2; shift 2;; *) echo "usage: $0 [--out DIR] [--rev REV]" >&2; exit 1;; esac; done
+[ -z "$(git -C "$REPO" status --porcelain --untracked-files=no)" ] || echo "note: the checkout has uncommitted changes; the build uses the commit ($REV, git archive)" >&2
+# the archive is made HERE, not in the container: a worktree's .git points outside the mounted checkout
+COMMIT=$(git -C "$REPO" rev-parse --verify "$REV^{commit}")
+IN=$(mktemp -d); trap 'rm -rf "$IN"' EXIT
+git -C "$REPO" archive --format=tar "$COMMIT" > "$IN/src.tar"
 TAG=hazync-engine-repro:$(sha256sum "$REPO/reproduce/engine.Dockerfile" | cut -c1-16)
 docker image inspect "$TAG" > /dev/null 2>&1 || docker build -t "$TAG" -f "$REPO/reproduce/engine.Dockerfile" "$REPO/reproduce" >&2
 VOL=hazync-engine-cargo
 [ "${HAZYNC_ENGINE_FRESH:-0}" = 1 ] && { docker volume rm -f "$VOL" > /dev/null; }
 rm -rf "$OUT" && mkdir -p "$OUT"
-docker run --rm -e HAZYNC_ENGINE_IN_CONTAINER=1 -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
-    -v "$REPO":/src:ro -v "$OUT":/out -v "$VOL":/root/.cargo/registry \
+docker run --rm -e HAZYNC_ENGINE_IN_CONTAINER=1 -e COMMIT="$COMMIT" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
+    -v "$REPO":/src:ro -v "$IN":/in:ro -v "$OUT":/out -v "$VOL":/root/.cargo/registry \
     "$TAG" bash /src/reproduce/engine-ids.sh
 cat "$OUT/ENGINE_IDS"
