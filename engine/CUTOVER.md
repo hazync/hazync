@@ -41,3 +41,9 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
   REQUIRE_CLEAN + REQUIRE_PUBLISHED: equal; READMEs pinned. Core 423,774 bytes (1,241,166 with RISC Zero). Node tests
   ported to engine proofs, all pass (counts in VERIFIER.md). Not done: the site and deploy.sh (with the release),
   swiftsync-verify-wasm/zapp/check.mjs (needs the RISC Zero board's live server), the page in a browser.
+- 27.11.2026 C7 done: `--node-format` goes from zync-path, zync-serve and zapp-liveness (and `take_node_format_flag`):
+  producers build paths in node format 2, the thread default. Readers still take each proof's format from its profile
+  (`use_format_of`), so liveness's format-1 test chains (the regtest harness's host data) still check. swiftsync-verify
+  lib 22 passed + test.sh rc 0, liveness test.sh rc 0 (wasm 30/30), the core wasm rebuilt: still 1f6ebed9 (the helper
+  sat at the end of lib.rs). Also 27.11: prover/host's RISC Zero receipt tests read tests/data/risc0_vectors (101
+  passed); zyncapp builds against the engine-only verifiers.

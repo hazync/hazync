@@ -170,12 +170,7 @@ fn serve(addr: &str, mut handle: impl FnMut(&str) -> (u16, String)) {
 }
 
 fn main() {
-    let mut a: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(e) = swiftsync_verify::take_node_format_flag(&mut a) {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
-    let a = a;
+    let a: Vec<String> = std::env::args().skip(1).collect();
     if a.first().map(String::as_str) == Some("--tip") {
         #[cfg(not(feature = "tip"))]
         {
@@ -202,7 +197,7 @@ fn main() {
         }
     }
     if a.len() != 2 && a.len() != 3 {
-        eprintln!("usage: zync-serve [--node-format 1|2] <history.bin> <addr:port> [state_<tip>.trie]");
+        eprintln!("usage: zync-serve <history.bin> <addr:port> [state_<tip>.trie]");
         std::process::exit(1);
     }
     let recs = decode_all(&std::fs::read(&a[0]).unwrap_or_else(|e| panic!("{}: {e}", a[0]))).unwrap_or_else(|e| panic!("{e}"));

@@ -9,8 +9,7 @@
 //!   zync-path journey <history.bin> <tip> <position> --bitcoin-cli "<cmd>"
 //!                                                            created-by tx, state at the tip, spent-by tx
 //!
-//! `--node-format 1|2` (anywhere): the chain's coin log / trie node format, 2 (the default, the engine chain) or 1
-//! (the RISC Zero chain); a path in the other format never verifies.
+//! Paths are in node format 2 (COINLOG.md §2), the engine chain's; format 1 was the RISC Zero chain's (cutover C7).
 //! ⚠ Replays the whole history in memory (C1's disk-backed store replaces this for mainnet).
 
 use libzync::history::{block_path, decode_all, replay};
@@ -22,12 +21,7 @@ fn die(m: &str) -> ! {
 }
 
 fn main() {
-    let mut a: Vec<String> = std::env::args().skip(1).collect();
-    if let Err(e) = swiftsync_verify::take_node_format_flag(&mut a) {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
-    let a = a;
+    let a: Vec<String> = std::env::args().skip(1).collect();
     let num = |i: usize| -> u64 { a.get(i).and_then(|x| x.parse().ok()).unwrap_or_else(|| die("usage: see the source header")) };
     let hist = || decode_all(&std::fs::read(a.get(1).unwrap_or_else(|| die("history.bin?"))).unwrap_or_else(|e| die(&e.to_string())))
         .unwrap_or_else(|e| die(e));

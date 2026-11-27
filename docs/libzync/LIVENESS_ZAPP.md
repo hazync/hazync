@@ -105,7 +105,7 @@ Not proven, or left to the caller:
 # producer: the history of a proving run, and the coin's fields from block files or your own node
 zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
 zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
-# both take --node-format 1|2: the history's chain's coin log node format (2, the default: the engine chain; 1: the RISC Zero chain)
+# paths in node format 2, the engine chain's (format 1 was the RISC Zero chain's; its flag went at the cutover, C7)
 # verifier: YOUR question, then the proof (the core receipt is verified by the core verifier's library)
 zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <receipt>
 ```
