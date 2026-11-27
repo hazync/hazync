@@ -114,7 +114,10 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
      `links` value: openvm-circuit-primitives, cuda-common); verify-core for v2.0.2 as hazync-engine-verify-v2-0-2
      (make_verify.sh). A native binary with BOTH verifiers builds (openvm-circuit 2.0.2 and 2.1.0 side by side).
    - Successor side: xver keys tagged by version; the v2.1.0 guest with v2.0.2's verifier (ovm-xver-v2_0_2)
-     BUILDS (exe 0065e63a). The handover block: running (results/handover_step3).
+     BUILDS (exe 0065e63a).
+   - **The handover block PROVED: block 200 from v2.0.2's proof of 199, 5,754 s on CPU**, verified. Its coin log and
+     trie are byte-identical to the native chain's. Three negatives were refused in the guest: a flipped byte, a
+     changed journal, and a v2.1.0 proof of the same block. Details in results/handover_step3.
    A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).

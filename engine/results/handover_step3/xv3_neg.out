@@ -1,0 +1,4 @@
+refused  the predecessor proof with one byte flipped (rc 101): thread 'main' (2682887) panicked at host/src/engine_backend.rs:178:17: engine: execute of b200_agg_collect failed: "VM error: execution error: program exit code 1: execution error: program exit code 1: program exit code 1"; guest 
+refused  the predecessor's journal with cum_work changed (rc 101): thread 'main' (2683097) panicked at host/src/engine_backend.rs:178:17: engine: execute of b200_agg_collect failed: "VM error: execution error: program exit code 1: execution error: program exit code 1: program exit code 1"; guest 
+refused  keys-ch's v2.1.0 proof of 199 where the v2.0.2 one belongs (rc 101): thread 'main' (2683433) panicked at host/src/engine_backend.rs:178:17: engine: execute of b200_agg_collect failed: "VM error: execution error: program exit code 1: execution error: program exit code 1: program exit code 1"; guest 
+XV3_NEG_DONE
