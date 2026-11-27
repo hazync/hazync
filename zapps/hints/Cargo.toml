@@ -15,6 +15,10 @@ publish = false
 name = "zapp_hints"
 path = "src/lib.rs"
 
+[features]
+# engine (OpenVM) hints proofs: verify_hints_with + a key (engine/VERIFIER.md)
+engine = ["swiftsync-verify/engine"]
+
 [dependencies]
 swiftsync-verify = { path = "../../swiftsync-verify" }
 libzync = { path = "../../libzync", default-features = false, features = ["hints"] }

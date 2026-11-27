@@ -142,14 +142,15 @@ carrying the key; inputs made from the ENGINE chain where they depend on the nod
 | headers | the header zAPP's engine proof of headers 0..4,031 (`verify_headers_with` + key) | accepted, tip = block 4,031's hash, chainwork 0xfc00fc00fc0 (4,032 headers); refused: another tip, a journal bit, another pin, another image, a repeated run, an engine file without the key, a non-engine file |
 | deposit, header-bound | the core tip 200 placed in the engine header chain 0..4,031 (MMR path, 11 hashes) | every check ok: 3,862 confirmations (31 fully validated, 3,831 proof of work only); one more refused; the header run without its key refused |
 | utreexo (27.11) | the utreexo zAPP's own engine proofs: the base (roots after block 100, core tip 200) and a tip step 100 -> 150 on it (`verify_utreexo_with` / `verify_utreexo_tip_with` + the utreexo image's key; CLI `--vk`) | both accepted, DEMO (below minimum work), blocks 100 / 150 / 200 matched; 12 refusals (another block or core tip, a journal bit, a proof byte, another image id, a pin not the key's, another image's key, a tip proof as a base, another core image, signet, the engine file read as a RISC Zero receipt, a tip step under another base) |
+| hints (27.11) | the hints zAPP's own engine proof for H = 200 with the host's hints and undo files (`verify_hints_with` + key; CLI `--vk`) | accepted, DEMO, block 200 matched: 209 outputs indexed, 204 unspent, 10,000 BTC; refused: a hints byte, an undo byte, another block 200, a journal bit, a proof byte, another image id, a pin not the key's, another core image, the file without a key |
 | statement | two fresh keys' zero balances (absence proofs) on the engine chain's trie at 200 (native prep; its state = the engine-proven one but self_id), BIP-322 signed | holds; a claimed 1 sat refused; the format-1 trie file refused by the store (OldRoot) |
 
 | core facts | trie facts on the engine chain's trie at 200 (Hal's coin unspent with its origin, its script's balance and complete history, an absent outpoint) and Hal's coin journey (zync-path journey) | all hold; a wrong claim on each trie fact refused |
 
 Each zAPP's default suite unchanged (deposit 23, statement 20, corecheck 6, headers 17 passed; swiftsync-verify 33 default,
-39 with `engine`; utreexo 3 + 10, and 6 with `tip`).
+39 with `engine`; utreexo 3 + 10, and 6 with `tip`; hints 2).
 
-With a key, utreexo trusts the named core image as an ENGINE build (`Image::with_node2`, profile bit 7): an engine zAPP
+With a key, utreexo and hints trust the named core image as an ENGINE build (`Image::with_node2`, profile bit 7): an engine zAPP
 proof can only rest on an engine core proof, because its child is verified in the same VM. Its wasm module has no
 engine build yet (like the other zAPP modules: only swiftsync-verify-wasm has one).
 

@@ -68,6 +68,17 @@ fn disp(b: &[u8; 32]) -> String {
 #[allow(clippy::too_many_arguments)]
 pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex: &str, core_image_hex: Option<&str>, now: u64,
                     expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
+    verify_hints_with(receipt, file, undo, image_hex, None, core_image_hex, now, expect, expect_tip)
+}
+
+/// [`verify_hints`] with the hints image's engine key: `receipt` is then an ENGINE (OpenVM) proof file of image
+/// `image_hex`, verified under the pinned key (engine/VERIFIER.md: the key, not the image id, authenticates it), and
+/// the core image is trusted as an engine build (node format 2: an engine zAPP proof can only rest on an engine core
+/// proof, its child verified in the same VM). Every check after the journal is the same.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_hints_with(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex: &str,
+                         engine_key: Option<&swiftsync_verify::EngineKey>, core_image_hex: Option<&str>, now: u64,
+                         expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
     let mut rep = HintsReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false };
     // as the core verify(): RISC0_DEV_MODE never makes this verifier accept anything (review H3)
     if !rep.check(!swiftsync_verify::dev_mode_env(), "RISC0_DEV_MODE is not set (unset it to verify)") {
@@ -77,18 +88,29 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
         rep.check(false, format!("the hints image id is 32 bytes of hex ({image_hex})"));
         return rep;
     };
-    if let Err(e) = receipt_kind(receipt) {
-        rep.check(false, format!("the receipt is a single succinct or Groth16 proof ({e})"));
-        return rep;
-    }
-    let r: risc0_zkvm::Receipt = match bincode::deserialize(receipt) {
-        Ok(r) => r,
-        Err(e) => { rep.check(false, format!("the receipt decodes ({e})")); return rep; }
+    let journal = if let Some(k) = engine_key {
+        match engine_run(receipt, k, &id) {
+            Ok(j) => {
+                rep.check(true, format!("the engine proof verifies against the hints image {image_hex} under the pinned key {}", hex(&k.pin)));
+                j
+            }
+            Err(e) => { rep.check(false, format!("the engine proof verifies against the hints image {image_hex}: {e}")); return rep; }
+        }
+    } else {
+        if let Err(e) = receipt_kind(receipt) {
+            rep.check(false, format!("the receipt is a single succinct or Groth16 proof ({e})"));
+            return rep;
+        }
+        let r: risc0_zkvm::Receipt = match bincode::deserialize(receipt) {
+            Ok(r) => r,
+            Err(e) => { rep.check(false, format!("the receipt decodes ({e})")); return rep; }
+        };
+        rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof");
+        let v = r.verify(Digest::from_bytes(id));
+        rep.check(v.is_ok(), format!("the receipt verifies against the hints image {image_hex}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default()));
+        r.journal
     };
-    rep.check(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "the receipt is a real proof");
-    let v = r.verify(Digest::from_bytes(id));
-    rep.check(v.is_ok(), format!("the receipt verifies against the hints image {image_hex}{}", v.err().map(|e| format!(": {e}")).unwrap_or_default()));
-    let z: HintsStatement = match r.journal.decode() {
+    let z: HintsStatement = match journal.decode() {
         Ok(z) => z,
         Err(e) => { rep.check(false, format!("the journal is a hints statement ({e})")); return rep; }
     };
@@ -117,6 +139,9 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     if let Some(h) = core_image_hex {
         match img.with_method_id(&h.to_lowercase()) { Some(i) => img = i, None => { rep.check(false, "--core-image is 64 hex digits"); return rep; } }
     }
+    if engine_key.is_some() {
+        img = img.with_node2();
+    }
     rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
     // the whole profile, as the core verifier compares it (review H5): network, scripts checked, coin log, trie, live hash
     rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
@@ -140,6 +165,19 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok { Verdict::Ok } else { Verdict::Demo };
     rep.statement = Some(z);
     rep
+}
+
+#[cfg(feature = "engine")]
+fn engine_run(file: &[u8], key: &swiftsync_verify::EngineKey, id: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    if !swiftsync_verify::is_engine_proof(file) {
+        return Err("not an engine proof file".into());
+    }
+    swiftsync_verify::engine_proof_journal(file, key, id)
+}
+
+#[cfg(not(feature = "engine"))]
+fn engine_run(_: &[u8], _: &swiftsync_verify::EngineKey, _: &[u8; 32]) -> Result<risc0_zkvm::Journal, String> {
+    Err("this build has no engine support (feature `engine`)".into())
 }
 
 #[cfg(test)]
