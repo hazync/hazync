@@ -78,7 +78,7 @@ pub extern "C" fn verify_assume(ptr: *mut u8, len: usize) -> *const u8 {
         if image_hex.is_empty() || vk.is_empty() {
             return Err("no engine core image is published yet: give the image id, its verifying key and pin".to_string());
         }
-        let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, Some(&pin))?;
+        let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, &pin)?;
         if receipt.starts_with(swiftsync_verify::BUNDLE_MAGIC) {
             return Err("assume: a proof bundle is not accepted here: give the receipt".to_string());
         }

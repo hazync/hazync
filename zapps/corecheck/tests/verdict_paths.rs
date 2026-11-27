@@ -20,7 +20,7 @@ fn an_image_id_is_the_networks_record_re_pointed() {
 fn a_refused_expect_names_the_proofs_tip() {
     let rd = |f: &str| std::fs::read(format!("{V}{f}")).unwrap();
     let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
-    let img = with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &rd("mainnet_1_200_engine.vk"), None).unwrap();
+    let img = with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &rd("mainnet_1_200_engine.vk"), &{ use sha2::Digest as _; <[u8; 32]>::from(sha2::Sha256::digest(rd("mainnet_1_200_engine.vk"))) }).unwrap();
     let c = verify_core(&rd("mainnet_1_200_engine.hze"), img, None, 1_800_000_000, Some(&format!("200:{}", "00".repeat(32))));
     assert_eq!((c.report.verdict, c.tip_checked), (Verdict::Fail, false));
     let line = c.report.checks.iter().find(|x| !x.0).unwrap();

@@ -124,7 +124,7 @@ fn run(data: &[u8]) -> Option<bool> {
     use sha2::Digest as _;
     // once: with_engine_key leaks an Image per call
     static IMG: OnceLock<&'static Image> = OnceLock::new();
-    let img = *IMG.get_or_init(|| Image::by_network("mainnet").unwrap().with_method_id(CORE_ID.trim()).unwrap().with_engine_key(CORE_VK.to_vec()));
+    let img = *IMG.get_or_init(|| Image::by_network("mainnet").unwrap().with_method_id(CORE_ID.trim()).unwrap().with_engine_key_unchecked(CORE_VK.to_vec()));
     let hk = swiftsync_verify::EngineKey { bytes: HDR_VK, pin: sha2::Sha256::digest(HDR_VK).into() };
     let rep = zapp_deposit::verify_deposit(&b, &r.asks[n as usize], "mainnet", img, HDR_ID.trim(), Some(&hk), NOW);
     assert!(rep.statement.is_none() || rep.verdict != Verdict::Fail, "a statement with a FAIL verdict");

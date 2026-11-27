@@ -11,7 +11,7 @@ const H200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eee
 fn state() -> ChainState {
     let rd = |f: &str| std::fs::read(format!("{}/../../swiftsync-verify/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap();
     let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
-    let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd("mainnet_1_200_engine.vk"));
+    let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(rd("mainnet_1_200_engine.vk"));
     verify(&Inputs { receipt: &rd("mainnet_1_200_engine.hze"), image: img, anchor: None, now: 1_800_000_000 }).state.unwrap()
 }
 

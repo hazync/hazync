@@ -156,11 +156,8 @@ fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), Str
         Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
     };
     if let Some((vk, pin)) = key {
-        use sha2::Digest as _;
-        if <[u8; 32]>::from(sha2::Sha256::digest(vk)) != pin {
-            return Err("the verifying key is not the image's pinned key (its SHA-256 is not the pin)".into());
-        }
-        image = image.with_engine_key(vk.to_vec());
+        image = image.with_pinned_engine_key(vk.to_vec(), &pin)
+            .map_err(|_| String::from("the verifying key is not the image's pinned key (its SHA-256 is not the pin)"))?;
     } else if image.engine_key.is_none() {
         return Err("no engine image is published yet: give the image id, its verifying key and pin (network bit 0x40)".into());
     }

@@ -95,7 +95,7 @@ fn engine_negatives() {
     assert!(is_engine_proof(&file));
     let r = verify(&Inputs { receipt: &file, image: Image::by_network("mainnet").unwrap(), anchor: None, now: 1_800_000_000 });
     fails(&r, "no engine image is published for mainnet yet");
-    let r = verify(&Inputs { receipt: &[1, 0, 0, 0, 7, 7, 7, 7], image: img.with_engine_key(vk.clone()), anchor: None, now: 1_800_000_000 });
+    let r = verify(&Inputs { receipt: &[1, 0, 0, 0, 7, 7, 7, 7], image: img.with_engine_key_unchecked(vk.clone()), anchor: None, now: 1_800_000_000 });
     fails(&r, "v0.27.1");
 }
 
@@ -136,7 +136,7 @@ fn engine_coin_facts() {
 #[test]
 fn engine_key_in_the_record() {
     let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
-    let img = image().with_engine_key(vk.clone());
+    let img = image().with_engine_key_unchecked(vk.clone());
     assert_eq!(img.engine_key.unwrap().pin_hex, hex(&pin()), "the record's pin is the key file's SHA-256");
     let r = verify(&Inputs { receipt: &file, image: img, anchor: None, now: 1_800_000_000 });
     assert!(failed(&r).is_empty(), "failed: {:?}", failed(&r));
@@ -150,7 +150,7 @@ fn engine_key_in_the_record() {
     let mut k2 = vk.clone();
     let n = k2.len() - 1;
     k2[n] ^= 1;
-    let r = verify(&Inputs { receipt: &file, image: image().with_engine_key(k2), anchor: None, now: 1_800_000_000 });
+    let r = verify(&Inputs { receipt: &file, image: image().with_engine_key_unchecked(k2), anchor: None, now: 1_800_000_000 });
     assert_eq!(r.verdict, Verdict::Fail);
     eprintln!("  record with another key: {}", failed(&r)[0]);
 }
@@ -206,7 +206,7 @@ fn engine_trie_facts_and_journey() {
 #[test]
 fn malformed_files_are_a_fail() {
     let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
-    let img = image().with_engine_key(vk);
+    let img = image().with_engine_key_unchecked(vk);
     let v = |b: &[u8]| verify(&Inputs { receipt: b, image: img, anchor: None, now: 1_800_000_000 });
     assert!(failed(&v(&file)).is_empty(), "the control verifies");
     let mut cases: Vec<(&str, Vec<u8>)> = Vec::new();
@@ -255,4 +255,22 @@ fn manifest_reference_values_are_the_engine_states() {
     let want: Vec<(usize, String)> = u["roots"].as_object().unwrap().iter().map(|(k, v)| (k.parse().unwrap(), v.as_str().unwrap().to_string())).collect();
     assert_eq!(roots, want);
     assert_eq!(hex(&empty_smt_root()), m["reference_values"]["empty_smt_root"].as_str().unwrap());
+}
+
+/// Review R2-5 #1: the reader's constructor takes the caller's pin and refuses any other key bytes; before, the only
+/// public constructor (now `with_engine_key_unchecked`) pinned a key to its own SHA-256, so a key that arrived with the
+/// proof passed.
+#[test]
+fn the_pinned_constructor_refuses_another_key() {
+    use sha2::Digest as _;
+    let vk = rd("vk.bin");
+    let pin: [u8; 32] = sha2::Sha256::digest(&vk).into();
+    let file = rd("proof.hze");
+    let img = image().with_pinned_engine_key(vk.clone(), &pin).expect("the fixture key under its own pin");
+    assert_ne!(verify(&Inputs { receipt: &file, image: img, anchor: None, now: 1_800_000_000 }).verdict, Verdict::Fail);
+    let mut other = vk.clone();
+    other[100] ^= 1;
+    let e = image().with_pinned_engine_key(other, &pin).err().expect("another key under the pin is refused");
+    assert!(e.contains("not the image's pinned key"), "{e}");
+    assert!(image().with_pinned_engine_key(vk, &[7u8; 32]).is_err(), "the key under another pin");
 }

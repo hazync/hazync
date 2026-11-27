@@ -452,7 +452,7 @@ mod tests {
         use swiftsync_verify::{verify, Image, Inputs};
         let rd = |f: &str| std::fs::read(format!("{}/../../swiftsync-verify/vectors/{f}", env!("CARGO_MANIFEST_DIR"))).unwrap();
         let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
-        let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd("mainnet_1_200_engine.vk"));
+        let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(rd("mainnet_1_200_engine.vk"));
         let cs = verify(&Inputs { receipt: &rd("mainnet_1_200_engine.hze"), image: img, anchor: None, now: 1_800_000_000 }).state.unwrap();
         let id = Identity { expect: Some(format!("200:{H200}")), ..Default::default() };
         assert!(check_core_tip(&id, "mainnet", &cs).1);

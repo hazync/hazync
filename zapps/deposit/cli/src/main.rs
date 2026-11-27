@@ -295,7 +295,7 @@ fn keys(network: &str, image: Option<String>, vk: Option<String>, vk_pin: Option
     };
     let pin = |p: &Option<String>| swiftsync_verify::hex32(p.as_deref().unwrap_or_default().trim()).unwrap_or_default();
     let b = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk")?;
-    let img = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image, false, false)?, &b, Some(&pin(&vk_pin)))?;
+    let img = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image, false, false)?, &b, &pin(&vk_pin))?;
     let hk = match hvk {
         Some(f) => Some((swiftsync_verify::read_pinned_key(&f, hvk_pin.as_deref(), "--headers-vk")?, pin(&hvk_pin))),
         None => None,

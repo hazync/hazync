@@ -25,7 +25,7 @@ fn receipt_1_200() -> Vec<u8> {
 
 fn image_1_200() -> &'static Image {
     let id = String::from_utf8(core_file("mainnet_1_200_engine.image_id")).unwrap();
-    zapp_corecheck::with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &core_file("mainnet_1_200_engine.vk"), None).unwrap()
+    zapp_corecheck::with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &core_file("mainnet_1_200_engine.vk"), &{ use sha2::Digest as _; <[u8; 32]>::from(sha2::Sha256::digest(core_file("mainnet_1_200_engine.vk"))) }).unwrap()
 }
 
 /// A proof file's bytes as the C ABI and WASM take them: lower-case hex.

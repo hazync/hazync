@@ -18,7 +18,7 @@ pub const TIP_200: &str = "000000008f1a7008320c16b8402b7f11e82951f44ca2663caf686
 pub fn state() -> &'static ChainState {
     static S: OnceLock<ChainState> = OnceLock::new();
     S.get_or_init(|| {
-        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key_unchecked(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo);
         r.state.unwrap()

@@ -19,7 +19,7 @@ fn state() -> ChainState {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     let id = include_str!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.image_id").trim();
     let vk = include_bytes!("../../../swiftsync-verify/vectors/mainnet_1_200_engine.vk").to_vec();
-    let image = swiftsync_verify::Image::by_network("mainnet").unwrap().with_method_id(id).unwrap().with_engine_key(vk);
+    let image = swiftsync_verify::Image::by_network("mainnet").unwrap().with_method_id(id).unwrap().with_engine_key_unchecked(vk);
     let rep = swiftsync_verify::verify(&swiftsync_verify::Inputs { receipt: RCPT, image, anchor: None, now });
     assert_eq!(rep.verdict, swiftsync_verify::Verdict::Demo, "{:?}", rep.checks);
     rep.state.unwrap()

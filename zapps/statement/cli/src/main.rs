@@ -122,7 +122,7 @@ fn produce(a: Vec<String>) {
             let vk = swiftsync_verify::read_pinned_key(&vkp, pin.as_deref(), "--vk").unwrap_or_else(|e| die(&e));
             let pinb = swiftsync_verify::hex32(pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
             let image = zapp_corecheck::image_for(&network, &ih, false, false)
-                .and_then(|i| zapp_corecheck::with_key(i, &vk, Some(&pinb))).unwrap_or_else(|e| die(&e));
+                .and_then(|i| zapp_corecheck::with_key(i, &vk, &pinb)).unwrap_or_else(|e| die(&e));
             let receipt = std::fs::read(&rp).unwrap_or_else(|e| die(&format!("{rp}: {e}")));
             let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
             let rep = verify(&Inputs { receipt: &receipt, image, anchor: None, now });
@@ -242,7 +242,7 @@ fn check(a: Vec<String>) {
     // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
     let vk = swiftsync_verify::read_pinned_key(vkp, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&e));
     let pinb = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
-    let image = zapp_corecheck::image_for(&network, ih, false, false).and_then(|i| zapp_corecheck::with_key(i, &vk, Some(&pinb)))
+    let image = zapp_corecheck::image_for(&network, ih, false, false).and_then(|i| zapp_corecheck::with_key(i, &vk, &pinb))
         .unwrap_or_else(|e| fail(&format!("--image: {e}")));
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_secs();
     let now = match now_arg.map(|v| v.parse::<u64>()) {

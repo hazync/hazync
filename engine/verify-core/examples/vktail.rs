@@ -25,7 +25,7 @@ fn main() {
                 let what = match diff { None if od.len() == d.len() => "decoded key IDENTICAL".to_string(),
                     _ => { let p = diff.unwrap_or(od.len().min(d.len())); let s = p.saturating_sub(80);
                            format!("differs near: ...{}", &d[s..(p + 40).min(d.len())]) } };
-                let v = ev::verify_full_pinned(&k, proof, journal, &id);
+                let v = ev::verify_full_trusted_key(&k, proof, journal, &id);
                 format!("{what} | verify: {}", if v.is_ok() { "OK" } else { "refused" })
             }
         };

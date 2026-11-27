@@ -140,7 +140,8 @@ fn main() {
         (Some(_), Some(vk)) => {
             let bytes = swiftsync_verify::read_pinned_key(vk, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
             println!("  verifying key {} matches the pin you gave ({})", esc(vk), vk_pin.as_deref().unwrap_or_default().trim().to_lowercase());
-            image = image.with_engine_key(bytes);
+            let pin = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
+            image = image.with_pinned_engine_key(bytes, &pin).unwrap_or_else(|e| fail(&esc(&e)));
         }
         (None, Some(_)) => fail("--vk needs --image: the id of the image you rebuilt, whose key it is"),
         (Some(_), None) if image.engine_key.is_none() => fail("--image needs --vk: the verifying key from that image's build"),

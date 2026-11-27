@@ -146,7 +146,7 @@ pub extern "C" fn verify_deposit(ptr: *const u8, len: usize) -> *const u8 {
     if core.is_empty() || cvk.is_empty() {
         return fail("no engine core image is published yet: give the core image id, its verifying key and pin".into());
     }
-    let image = match zapp_corecheck::image_for(&network, &core, false, false).and_then(|i| zapp_corecheck::with_key(i, cvk, Some(&cpin))) {
+    let image = match zapp_corecheck::image_for(&network, &core, false, false).and_then(|i| zapp_corecheck::with_key(i, cvk, &cpin)) {
         Ok(i) => i,
         Err(e) => return fail(e),
     };

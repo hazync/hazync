@@ -68,7 +68,7 @@ pub unsafe extern "C" fn swiftsync_verify_assume(receipt: *const u8, receipt_len
     }
     let pin: [u8; 32] = slice(vk_pin, 32).try_into().unwrap();
     let image = match zapp_corecheck::image_for(base.network, &image_hex, network & 0x10 != 0, network & 0x20 != 0)
-        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), Some(&pin))) {
+        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), &pin)) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };

@@ -12,7 +12,7 @@ fn rd(n: &str) -> Vec<u8> {
 
 fn image() -> &'static Image {
     let id = String::from_utf8(rd("image_id")).unwrap();
-    Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd("vk.bin"))
+    Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(rd("vk.bin"))
 }
 
 #[test]

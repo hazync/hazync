@@ -95,24 +95,22 @@ fn image_for_uncached(network: &str, image_hex: &str, coinlog: bool, product: bo
     Ok(image)
 }
 
-/// `image` with its engine verifying key `vk` (engine/VERIFIER.md): accepted only as exactly the bytes `pin` names. A
-/// reader always gives the pin (published, or its own build's vk.sha256; every CLI requires it: review R1-6 #1); `None`
-/// pins the key to itself, which binds nothing: tests only. Cached, as [`image_for`]: one Image per (image, key).
-pub fn with_key(image: &'static Image, vk: &[u8], pin: Option<&[u8; 32]>) -> Result<&'static Image, String> {
+/// `image` with its engine verifying key `vk` (engine/VERIFIER.md): accepted only as exactly the bytes `pin` names (the
+/// published pin, or the reader's own build's vk.sha256; review R1-6 #1, R2-5 #1: no unpinned form). Cached, as
+/// [`image_for`]: one Image per (image, key).
+pub fn with_key(image: &'static Image, vk: &[u8], pin: &[u8; 32]) -> Result<&'static Image, String> {
     use sha2::Digest as _;
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     let got: [u8; 32] = sha2::Sha256::digest(vk).into();
-    if let Some(p) = pin {
-        if *p != got {
-            return Err("the verifying key is not the image's pinned key (its SHA-256 is not the pin)".into());
-        }
+    if *pin != got {
+        return Err("the verifying key is not the image's pinned key (its SHA-256 is not the pin)".into());
     }
     static CACHE: OnceLock<Mutex<HashMap<(usize, [u8; 32]), &'static Image>>> = OnceLock::new();
     let key = (image as *const Image as usize, got);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(*c.entry(key).or_insert_with(|| image.with_engine_key(vk.to_vec())))
+    Ok(*c.entry(key).or_insert_with(|| image.with_engine_key_unchecked(vk.to_vec())))
 }
 
 /// A core proof (or .sspf bundle) verified by the core verifier, and its tip compared with `expect` ("<height>:<hash>",
@@ -186,7 +184,7 @@ mod tests {
     /// The engine chain's mainnet 1..200 image, with its key.
     fn img() -> &'static Image {
         let id = String::from_utf8(rd("mainnet_1_200_engine.image_id")).unwrap();
-        with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &rd("mainnet_1_200_engine.vk"), None).unwrap()
+        with_key(image_for("mainnet", id.trim(), false, false).unwrap(), &rd("mainnet_1_200_engine.vk"), &{ use sha2::Digest as _; <[u8; 32]>::from(sha2::Sha256::digest(rd("mainnet_1_200_engine.vk"))) }).unwrap()
     }
 
     /// The engine chain's real mainnet 1..200 proof: DEMO (low work); its tip expected, and another block, refused.
@@ -220,10 +218,10 @@ mod tests {
         let i = image_for("mainnet", &"ab".repeat(32), false, false).unwrap();
         use sha2::Digest as _;
         let pin: [u8; 32] = sha2::Sha256::digest(&vk).into();
-        assert!(std::ptr::eq(with_key(i, &vk, Some(&pin)).unwrap(), with_key(i, &vk, None).unwrap()));
+        assert!(std::ptr::eq(with_key(i, &vk, &pin).unwrap(), with_key(i, &vk, &pin).unwrap()));
         let mut p2 = pin;
         p2[0] ^= 1;
-        assert!(with_key(i, &vk, Some(&p2)).err().unwrap().contains("pinned key"));
+        assert!(with_key(i, &vk, &p2).err().unwrap().contains("pinned key"));
     }
 
     /// A tip that matches in a FAILED report (this clock is before the chain's blocks: time-too-new) is not a checked tip.

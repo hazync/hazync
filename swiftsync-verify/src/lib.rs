@@ -19,7 +19,7 @@ pub use hazync_journal::Journal;
 /// One record per network: its parameters, and the engine image a proof of its chain is checked against. No engine
 /// image is published until the Stage 4 freeze (engine/VERIFIER.md: a development image must not become what every
 /// default caller checks against), so `method_id_hex` is empty and there is no key: a reader gives the image id and its
-/// key ([`Image::with_method_id`], [`Image::with_engine_key`]). The published records then append here, with their
+/// key ([`Image::with_method_id`], [`Image::with_pinned_engine_key`]). The published records then append here, with their
 /// keys embedded, after the network's parameters record (or replace it).
 pub const IMAGES: &[Image] = &[
     Image {
@@ -101,7 +101,7 @@ pub struct Image {
     /// An engine (OpenVM) image's verifying key and its pin; None until one is published or given. With it, [`verify`] checks an
     /// engine proof file itself (engine/VERIFIER.md), so every caller (corecheck and the zAPPs) gets engine proofs from
     /// the record alone. A published engine image embeds its key here; a reader's own rebuild sets it with
-    /// [`Image::with_engine_key`].
+    /// [`Image::with_pinned_engine_key`].
     pub engine_key: Option<EngineVk>,
 }
 
@@ -142,9 +142,9 @@ impl Image {
     pub fn with_product(&'static self) -> &'static Image {
         Box::leak(Box::new(Image { profile: self.profile | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH, ..*self }))
     }
-    /// The same image as an engine build with this verifying key: node format 2 (profile bit 7, what every engine guest
-    /// computes) and the key, pinned as given. For a reader who rebuilt the image: the key file comes from that build.
-    pub fn with_engine_key(&'static self, bytes: Vec<u8>) -> &'static Image {
+    /// The same image with this verifying key, TRUSTED AS GIVEN (pinned to its own SHA-256, which binds nothing): only
+    /// for bytes the caller already authenticated, or tests. A reader uses [`Image::with_pinned_engine_key`] (review R2-5 #1).
+    pub fn with_engine_key_unchecked(&'static self, bytes: Vec<u8>) -> &'static Image {
         use sha2::Digest as _;
         let pin = hex(&sha2::Sha256::digest(&bytes));
         let k = EngineVk { bytes: Box::leak(bytes.into_boxed_slice()), pin_hex: Box::leak(pin.into_boxed_str()) };
@@ -486,7 +486,7 @@ pub fn decode_journal<T: serde::de::DeserializeOwned>(j: &Journal) -> Result<T, 
 }
 
 /// Checks a proof file against the image record `inp.image`: an engine (OpenVM) proof under the key the record holds
-/// (published, or the reader's own build's, [`Image::with_engine_key`]), then steps 2-12. Anything else is a FAIL with
+/// (published, or the reader's own build's, [`Image::with_pinned_engine_key`]), then steps 2-12. Anything else is a FAIL with
 /// the reason: a RISC Zero receipt (v0.27.1's verifier checks those), a record with no image, or no key.
 pub fn verify(inp: &Inputs) -> Report {
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
@@ -2034,4 +2034,19 @@ pub fn read_pinned_key(path: &str, pin_hex: Option<&str>, what: &str) -> Result<
         return Err(format!("{what} {path}: its SHA-256 is {}, not the pin {}: not the pinned key", hex(&got), hex(&want)));
     }
     Ok(bytes)
+}
+
+// At the end of the file on purpose: every line above keeps its number (the wasm modules embed panic locations).
+impl Image {
+    /// The same image as an engine build with this verifying key: node format 2 (profile bit 7, what every engine guest
+    /// computes) and the key, accepted only as exactly the bytes `pin` names (SHA-256 of the key file, from the image's
+    /// record or the reader's own build): the image id does not bind the key (engine/VERIFIER.md; review R2-5 #1).
+    pub fn with_pinned_engine_key(&'static self, bytes: Vec<u8>, pin: &[u8; 32]) -> Result<&'static Image, String> {
+        use sha2::Digest as _;
+        let got: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+        if got != *pin {
+            return Err(format!("the verifying key is not the image's pinned key (its SHA-256 is {}, the pin {})", hex(&got), hex(pin)));
+        }
+        Ok(self.with_engine_key_unchecked(bytes))
+    }
 }

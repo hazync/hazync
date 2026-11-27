@@ -111,13 +111,8 @@ pub fn decode_vk(vk: &[u8]) -> Result<VmStarkVerifyingKey, Refusal> {
     bitcode::deserialize::<VmStarkVerifyingKey>(vk).map_err(|_| Refusal::Vk)
 }
 
-/// The STARK alone (no image or journal check) on a plain-encoded proof: 1 valid, 0 invalid, 2 bad vk bytes, 3 the
-/// proof does not decode.
-pub fn verify_stark_bytes(vk: &[u8], proof: &[u8]) -> u32 {
-    let Ok(vk) = decode_vk(vk) else { return 2 };
-    let Ok(p) = VmStarkProof::decode_from_bytes_using_vk(&vk.mvk, &vk.baseline, proof) else { return 3 };
-    verify_vm_stark_proof_decoded(&vk, &p).is_ok() as u32
-}
+// (verify_stark_bytes, the STARK alone under an UNPINNED key with no image or journal check, removed 27.11.2026: review
+// R2-5 #1; nothing called it, and a forged key plus a forged proof passed it.)
 
 /// openvm-recursion's poseidon2_hash_slice (crates/recursion/src/utils.rs): absorb CHUNK field elements at a time
 /// into the first CHUNK lanes (overwrite), permute after each full chunk and after a partial last one.
@@ -165,9 +160,9 @@ pub fn image_id_of(vk: &VmStarkVerifyingKey) -> [u8; 32] {
     h.finalize().into()
 }
 
-/// The checks after the pin, on a decoded key: ONLY for a key the caller already holds as trusted (decoded from bytes
-/// whose SHA-256 it checked against the pin, or built from its own keys). Use `verify_full_bytes` otherwise.
-pub fn verify_full_pinned(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
+/// The checks after the pin, on a decoded key the caller ALREADY AUTHENTICATED (decoded from bytes whose SHA-256 it
+/// checked against the pin, or built from its own keys): it trusts the key. Readers use `verify_full_bytes` (R2-1 #2).
+pub fn verify_full_trusted_key(vk: &VmStarkVerifyingKey, proof: &[u8], journal: &[u8], image_id: &[u8]) -> Result<(), Refusal> {
     if image_id.len() != 32 {
         return Err(Refusal::IdLength);
     }
@@ -189,5 +184,5 @@ pub fn verify_full_bytes(vk: &[u8], vk_sha256: &[u8], proof: &[u8], journal: &[u
     if vk_sha256.len() != 32 || Sha256::digest(vk)[..] != vk_sha256[..] {
         return Err(Refusal::VkPin);
     }
-    verify_full_pinned(&decode_vk(vk)?, proof, journal, image_id)
+    verify_full_trusted_key(&decode_vk(vk)?, proof, journal, image_id)
 }

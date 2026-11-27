@@ -106,11 +106,10 @@ unsafe fn verify_inner(receipt: *const u8, receipt_len: usize, network: u8, now:
     // exactly the bytes its pin names, else the record's; no engine image is published yet, so without the caller's
     // key every proof is refused, with the reason.
     if let Some((vk, pin)) = key {
-        use sha2::Digest as _;
-        if <[u8; 32]>::from(sha2::Sha256::digest(vk)) != pin {
-            return fail("the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)");
-        }
-        image = image.with_engine_key(vk.to_vec());
+        image = match image.with_pinned_engine_key(vk.to_vec(), &pin) {
+            Ok(i) => i,
+            Err(_) => return fail("the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)"),
+        };
     } else if swiftsync_verify::is_engine_proof(receipt) && image.engine_key.is_none() {
         return fail("no engine image is published yet: call swiftsync_verify_engine_facts with the image id, its verifying key and pin");
     }

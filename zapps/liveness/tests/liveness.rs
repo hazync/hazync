@@ -40,7 +40,7 @@ fn verified(file: &str) -> Report {
     let receipt = std::fs::read(vec_path(file)).unwrap();
     let id = std::fs::read_to_string(vec_path("mainnet_1_200_engine.image_id")).unwrap();
     let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap()
-        .with_engine_key(std::fs::read(vec_path("mainnet_1_200_engine.vk")).unwrap());
+        .with_engine_key_unchecked(std::fs::read(vec_path("mainnet_1_200_engine.vk")).unwrap());
     verify(&Inputs { receipt: &receipt, image, anchor: None, now: 1_800_000_000 })
 }
 

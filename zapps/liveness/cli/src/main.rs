@@ -115,7 +115,7 @@ fn check_main(a: Vec<String>) -> ! {
         .and_then(|i| {
             // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
             let b = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk")?;
-            zapp_corecheck::with_key(i, &b, Some(&swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default()))
+            zapp_corecheck::with_key(i, &b, &swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default())
         }).unwrap_or_else(|e| fail(&e));
     println!("  image id given on the command line: {}; its key {} matches the pin you gave", image.method_id_hex, esc(&vk));
     let anchor: Option<ChainState> = anchor.map(|p| serde_json::from_slice(&rd(&p)).unwrap_or_else(|e| fail(&format!("{}: not a ChainState: {e}", esc(&p)))));

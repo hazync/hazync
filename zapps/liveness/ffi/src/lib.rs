@@ -51,7 +51,7 @@ pub unsafe extern "C" fn zapp_liveness_verify(receipt: *const u8, receipt_len: u
     }
     let pin: [u8; 32] = slice(vk_pin, 32).try_into().unwrap();
     let image = match zapp_liveness::image_for(net, image_hex.unwrap_or(""), network & 0x10 != 0, network & 0x20 != 0)
-        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), Some(&pin))) {
+        .and_then(|i| zapp_corecheck::with_key(i, slice(vk, vk_len), &pin)) {
         Ok(i) => i,
         Err(e) => return fail(&e),
     };

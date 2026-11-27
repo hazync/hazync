@@ -13,7 +13,7 @@ fn rd(p: String) -> Vec<u8> {
 
 fn state() -> (ChainState, u32) {
     let id = String::from_utf8(rd(format!("{E}/image_id"))).unwrap();
-    let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd(format!("{E}/vk.bin")));
+    let img = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(rd(format!("{E}/vk.bin")));
     let r = verify(&Inputs { receipt: &rd(format!("{E}/proof.hze")), image: img, anchor: None, now: 1_800_000_000 });
     assert_eq!(r.verdict, Verdict::Demo);
     (r.state.unwrap(), r.undo_from)

@@ -242,3 +242,13 @@ in-guest) every one of the 20 is refused. OpenVM v2.1.0 crates/verify/src/lib.rs
 flag 0 (no deferrals) the proof's own def_hook_commit must be unset and the key's value is never compared; with flag 2
 it must equal the key's. So a proof without deferrals does not depend on that field. Nothing to fix: the pin
 (SHA-256 of the whole key file) binds every byte a reader takes, and a deferral-carrying proof binds the field itself.
+
+## Every consumer checks the anchor (review R2-2 L1, 27.11.2026)
+
+A chain proof's base step accepts ANY anchor state: the guest takes the state before its first block from the input
+and commits `anchor_id = link_digest(that state)` (prover/methods/guest/src/main.rs, is_base == 1). Everything a reader
+learns from a proof therefore rests on the reader comparing `anchor_id` with the network's PINNED genesis anchor
+(`Image.genesis_anchor_hex`; swiftsync-verify's statement checks do), or with a state it trusts for itself (then the
+verdict is at most DEMO). A join keeps the left child's anchor and never re-checks it. Any new consumer of a ChainState
+(a zAPP reader, a C ABI, a service) must make the same comparison; one that skips it accepts an invented chain whose
+every other field the guest checked faithfully.

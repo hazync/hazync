@@ -29,7 +29,7 @@ pub const REFERENCE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus/stateme
 pub fn state() -> &'static (ChainState, u32) {
     static S: OnceLock<(ChainState, u32)> = OnceLock::new();
     S.get_or_init(|| {
-        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key_unchecked(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks);
         (r.state.unwrap(), r.undo_from)

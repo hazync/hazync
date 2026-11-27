@@ -21,7 +21,7 @@ fn txid(display: &str) -> [u8; 32] {
 
 fn image() -> &'static Image {
     let id = String::from_utf8(rd(format!("{E}/image_id"))).unwrap();
-    Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(rd(format!("{E}/vk.bin")))
+    Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(rd(format!("{E}/vk.bin")))
 }
 
 #[test]

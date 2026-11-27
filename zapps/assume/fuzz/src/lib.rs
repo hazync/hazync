@@ -27,7 +27,7 @@ pub const NOW: u64 = 1_800_000_000;
 /// The engine chain's mainnet 1..200 image with its key, once.
 pub fn image() -> &'static Image {
     static I: OnceLock<&'static Image> = OnceLock::new();
-    I.get_or_init(|| Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec()))
+    I.get_or_init(|| Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key_unchecked(VK.to_vec()))
 }
 
 /// The real proof's verified state (DEMO: below minimum work), once.

@@ -81,7 +81,7 @@ fn run(input: &[u8]) -> Result<serde_json::Value, String> {
     if image_hex.trim().is_empty() || vk.is_empty() {
         return Err("no engine core image is published yet: give the image id, its verifying key and pin".into());
     }
-    let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, false, false)?, vk, Some(&pin))?;
+    let image = zapp_corecheck::with_key(zapp_corecheck::image_for(network, &image_hex, false, false)?, vk, &pin)?;
     let core = zapp_corecheck::verify_core(receipt, image, None, now, None);
     let (mut rep, image) = (core.report, core.image);
     let mut why: Vec<&str> = Vec::new();

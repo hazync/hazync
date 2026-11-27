@@ -78,7 +78,7 @@ pub extern "C" fn verify_liveness(ptr: *mut u8, len: usize) -> *const u8 {
         if image_hex.trim().is_empty() || vk.is_empty() {
             return Err("no engine core image is published yet: give the image id, its verifying key and pin".to_string());
         }
-        let image = zapp_corecheck::with_key(zapp_liveness::image_for(network, image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, Some(&pin))?;
+        let image = zapp_corecheck::with_key(zapp_liveness::image_for(network, image_hex, code & 0x10 != 0, code & 0x20 != 0)?, vk, &pin)?;
         let anchor: Option<ChainState> = if anchor_json.is_empty() { None } else {
             Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
         };

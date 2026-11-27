@@ -38,7 +38,7 @@ fn b_tip() -> DepositBundle {
 }
 /// The engine core image with its key.
 fn core_img() -> &'static Image {
-    Image::by_network("mainnet").unwrap().with_method_id(CORE_ID.trim()).unwrap().with_engine_key(CORE_VK.to_vec())
+    Image::by_network("mainnet").unwrap().with_method_id(CORE_ID.trim()).unwrap().with_engine_key_unchecked(CORE_VK.to_vec())
 }
 /// The same image with no minimum work and no checkpoint: the only way a 200-block chain reaches OK, for the verdict's
 /// OK paths (a state no network has, labelled as such).

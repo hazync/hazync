@@ -69,7 +69,7 @@ fn question(p: &lv::Proof) -> String {
 pub fn chains() -> &'static Vec<TrueChain> {
     static C: OnceLock<Vec<TrueChain>> = OnceLock::new();
     C.get_or_init(|| {
-        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key(VK.to_vec());
+        let image = Image::by_network("mainnet").unwrap().with_method_id(ID.trim()).unwrap().with_engine_key_unchecked(VK.to_vec());
         let r = swiftsync_verify::verify(&Inputs { receipt: RCPT, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks);
         let main = TrueChain {

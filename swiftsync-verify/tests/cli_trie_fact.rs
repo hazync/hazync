@@ -11,8 +11,10 @@ fn run(fact: &serde_json::Value) -> (i32, String) {
     let p = dir.join("fact.json");
     std::fs::write(&p, serde_json::to_vec(fact).unwrap()).unwrap();
     let id = std::fs::read_to_string(format!("{DIR}/image_id")).unwrap();
+    // the key's pin, as a reader gives it (review R1-6 #1: a key is never pinned to itself)
+    let pin = std::fs::read_to_string(format!("{DIR}/vk.sha256")).unwrap();
     let o = Command::new(env!("CARGO_BIN_EXE_swiftsync-verify"))
-        .args(["--network", "mainnet", "--image", id.trim(), "--vk", &format!("{DIR}/vk.bin"), "--trie"])
+        .args(["--network", "mainnet", "--image", id.trim(), "--vk", &format!("{DIR}/vk.bin"), "--vk-sha256", pin.split_whitespace().next().unwrap(), "--trie"])
         .arg(&p)
         .arg(format!("{DIR}/proof.hze"))
         .output()

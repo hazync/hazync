@@ -483,7 +483,7 @@ mod tests {
     fn real() -> (ChainState, u32) {
         let r = vector("mainnet_1_200_engine.hze");
         let id = String::from_utf8(vector("mainnet_1_200_engine.image_id")).unwrap();
-        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(vector("mainnet_1_200_engine.vk"));
+        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(vector("mainnet_1_200_engine.vk"));
         let rep = verify(&Inputs { receipt: &r, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(rep.verdict, Verdict::Demo, "1..200 is a real proof below the minimum work");
         (rep.state.unwrap(), rep.undo_from)
@@ -760,7 +760,7 @@ mod tests {
         // a proof with one bit flipped: verify() fails it before any journal is read (the CLI then checks no statement)
         let r = vector("mainnet_1_200_engine_proof_flipped.hze");
         let id = String::from_utf8(vector("mainnet_1_200_engine.image_id")).unwrap();
-        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key(vector("mainnet_1_200_engine.vk"));
+        let image = Image::by_network("mainnet").unwrap().with_method_id(id.trim()).unwrap().with_engine_key_unchecked(vector("mainnet_1_200_engine.vk"));
         let rep = verify(&Inputs { receipt: &r, image, anchor: None, now: 1_800_000_000 });
         assert_eq!(rep.verdict, Verdict::Fail);
         assert!(rep.state.is_none(), "{:?}", rep.checks);

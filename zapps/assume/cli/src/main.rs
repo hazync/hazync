@@ -81,7 +81,7 @@ fn main() {
     // the key pinned by the CALLER (review R1-6 #1): never pinned to itself
     let vkb = swiftsync_verify::read_pinned_key(&vk, vk_pin.as_deref(), "--vk").unwrap_or_else(|e| fail(&esc(&e)));
     let pin = swiftsync_verify::hex32(vk_pin.as_deref().unwrap_or_default().trim()).unwrap_or_default();
-    let image = zapp_corecheck::with_key(image_for(&network, &image_hex, false, false).unwrap_or_else(|e| fail(&e)), &vkb, Some(&pin))
+    let image = zapp_corecheck::with_key(image_for(&network, &image_hex, false, false).unwrap_or_else(|e| fail(&e)), &vkb, &pin)
         .unwrap_or_else(|e| fail(&e));
     println!("  image id given on the command line: {}; its key {} matches the pin you gave", image.method_id_hex, esc(&vk));
     let rb = std::fs::read(&receipt).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(&receipt))));
