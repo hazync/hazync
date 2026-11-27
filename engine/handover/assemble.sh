@@ -23,4 +23,8 @@ sed -e "s|@ENGINE@|$ENGINE|g" -e "s|@OVM@|$OUT/openvm|g" "$HERE/verifier-guest/C
   find "$OUT/stark-backend/crates" -name Cargo.toml -not -path "*/target/*" -not -path "*/tests/*" -not -path "*/benches/*" | sort |
   while read -r f; do n=$(sed -n '/^\[package\]/,/^\[/{s/^name = "\(.*\)"/\1/p}' "$f" | head -1); [ -n "$n" ] && echo "$n = { path = \"$(dirname "$f")\" }"; done
 } >> "$OUT/guest/Cargo.toml"
+# The pinned lock (reproduce/engine-locks, engine/ROADMAP.md 4.1): without it every build re-resolves crates.io and an
+# id can move with a crate release. HZ_UNPINNED_LOCK=1 leaves it out (a manifest change that needs a new lock: make it,
+# check the id, and pin it there).
+[ "${HZ_UNPINNED_LOCK:-0}" = 1 ] || { cp "$ENGINE/../reproduce/engine-locks/handover-verifier.Cargo.lock" "$OUT/guest/Cargo.lock"; echo "  lock: reproduce/engine-locks/handover-verifier.Cargo.lock (pinned)"; }
 echo "assembled $OUT/guest (OpenVM from $SRC, patched; $(grep -c 'path = ' "$OUT/guest/Cargo.toml") path entries)"

@@ -69,4 +69,9 @@ $EXTRA
 # metering only (hzengine build HZ_GUEST_FEATURES=bench-noverify): env::verify accepts without proofs; never shipped
 bench-noverify = ["risc0-zkvm/bench-noverify"]
 EOF
+# The pinned lock (reproduce/engine-locks, engine/ROADMAP.md 4.1): without it every build re-resolves crates.io and an
+# id can move with a crate release. HZ_UNPINNED_LOCK=1 leaves it out (a manifest change that needs a new lock: make it,
+# check the id, and pin it there).
+L=$REPO/reproduce/engine-locks/$Z.Cargo.lock
+if [ -f "$L" ] && [ "${HZ_UNPINNED_LOCK:-0}" != 1 ]; then cp "$L" "$OUT/Cargo.lock"; echo "  lock: reproduce/engine-locks/$Z.Cargo.lock (pinned)"; fi
 echo "assembled $OUT ($Z)"

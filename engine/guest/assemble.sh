@@ -85,4 +85,10 @@ PY
     fi
     echo "  ovm-xver: $(grep -c include_bytes "$G/src/xver_keys.rs") predecessor key(s) embedded; OpenVM from $OVM (patched)"
 fi
+# The pinned lock (reproduce/engine-locks, engine/ROADMAP.md 4.1): without it every build re-resolves crates.io and an
+# id can move with a crate release. HZ_UNPINNED_LOCK=1 leaves it out (a manifest change that needs a new lock: make it,
+# check the id, and pin it there).
+if [ -z "${HZ_OVM_XVER_KEYS:-}" ] && [ "${HZ_UNPINNED_LOCK:-0}" != 1 ]; then
+    cp "$R/reproduce/engine-locks/core.Cargo.lock" "$G/Cargo.lock"; echo "  lock: reproduce/engine-locks/core.Cargo.lock (pinned)"
+fi   # (an ovm-xver build has its own manifest: no pinned lock for it)
 echo "assembled $G (product $(git -C "$R" rev-parse --short HEAD))"

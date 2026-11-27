@@ -24,4 +24,8 @@ rep("risc0_zkvm::guest::entry!(main);\n", "")
 rep("    env::commit(&(input_digest, s));\n}", "    env::commit(&(input_digest, s));\n    env::finalize();   // ENGINE: sha256(journal) as the public values\n}")
 open(p, "w").write(s)
 PY
+# The pinned lock (reproduce/engine-locks, engine/ROADMAP.md 4.1): without it every build re-resolves crates.io and an
+# id can move with a crate release. HZ_UNPINNED_LOCK=1 leaves it out (a manifest change that needs a new lock: make it,
+# check the id, and pin it there).
+[ "${HZ_UNPINNED_LOCK:-0}" = 1 ] || { cp "$REPO/reproduce/engine-locks/headers.Cargo.lock" "$OUT/Cargo.lock"; echo "  lock: reproduce/engine-locks/headers.Cargo.lock (pinned)"; }
 echo "assembled $OUT from $SRC"
