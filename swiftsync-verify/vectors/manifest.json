@@ -1,177 +1,197 @@
 {
- "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. The mainnet_1_200_8888d59c receipts are a real GPU proof of mainnet 1..200 under the frozen product image 8888d59c (risc0 3.1.0). The r4_* receipts are from the retired round-4 design-B signet image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae: every one must FAIL (the journal format and the hints file are both gone). `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
+ "about": "Test vectors for the libzync chain-proof verifier (swiftsync-verify, its C ABI and WASM), engine (OpenVM) proofs only since the cutover (27.11.2026). Each case gives the verifier arguments (swiftsync-verify syntax) and the exit code a correct verifier must give: 0 OK, 2 DEMO, 1 FAIL. mainnet_1_200_engine.hze is the engine chain's real proof of mainnet 1..200 (swiftsync-verify/tests/data/engine200), with its image id and verifying key (.vk, pinned as given: no engine image is published yet); make_vectors.py writes every file here from it. `cli_only` cases test the CLI's argument handling and are skipped by the C and WASM harnesses.",
  "cases": [
   {
-   "name": "retired_design_b",
-   "description": "A real round-4 design-B receipt, given as a coin-log image: refused (its journal is not today's ChainState, and its image keeps no coin log).",
-   "args": [
-    "--network",
-    "signet",
-    "--coinlog",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "retired_design_b_product",
-   "description": "The same receipt as the product image: refused.",
-   "args": [
-    "--network",
-    "signet",
-    "--product",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "wrong_image",
-   "description": "The same receipt against the built-in image id: refused.",
-   "args": [
-    "--network",
-    "signet",
-    "--product",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_block_2600.rcpt"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "fake_receipt",
-   "description": "A dev-mode FakeReceipt: never a proof.",
-   "args": [
-    "--network",
-    "signet",
-    "--product",
-    "fake_block_2501.rcpt"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "bundle_v1",
-   "description": "A version-1 bundle (it carried a hints-file hash): refused.",
-   "args": [
-    "--network",
-    "signet",
-    "--product",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "r4_2600.sspf"
-   ],
-   "expect_exit": 1
-  },
-  {
-   "name": "bundle_header_lies",
-   "description": "A bundle whose header disagrees with its receipt: refused.",
-   "args": [
-    "--network",
-    "signet",
-    "--product",
-    "--image",
-    "c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae",
-    "--anchor",
-    "r4_anchor_2500.json",
-    "bad_bundle_header.sspf"
-   ],
-   "expect_exit": 1
-  },
-  {
    "name": "mainnet_1_200_demo",
-   "description": "A real GPU proof of mainnet blocks 1..200 under the frozen product image 8888d59c (risc0 3.1.0): valid, but below Core's minimum chainwork, so DEMO.",
+   "description": "The engine chain's proof of mainnet 1..200 under its image and pinned key: valid, but below Core's minimum chainwork, so DEMO.",
    "args": [
     "--network",
     "mainnet",
-    "--product",
-    "mainnet_1_200_8888d59c.rcpt"
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 2
   },
   {
    "name": "mainnet_1_200_as_signet",
-   "description": "The same receipt checked as signet: refused (another network's image and genesis).",
+   "description": "The same proof checked as signet: refused (another network's genesis and profile).",
    "args": [
     "--network",
     "signet",
-    "--product",
-    "mainnet_1_200_8888d59c.rcpt"
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "mainnet_1_200_old_image",
-   "description": "The same receipt against 863c9ce3, the same guest built on risc0 3.0.5: refused (the image id commits to the toolchain).",
+   "name": "other_image_id",
+   "description": "The same proof against another image id: refused (the image id is SHA-256 of the exe and the VM config).",
    "args": [
     "--network",
     "mainnet",
     "--image",
-    "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
-    "mainnet_1_200_8888d59c.rcpt"
+    "abababababababababababababababababababababababababababababababab",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "mainnet_1_200_flipped",
-   "description": "The same receipt with one bit flipped at byte 5000 (inside the seal): refused.",
+   "name": "no_image_given",
+   "description": "No image id or key: no engine image is published yet, so there is nothing to check against: refused.",
    "args": [
     "--network",
     "mainnet",
-    "--product",
-    "mainnet_1_200_8888d59c_flipped.rcpt"
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "risc0_305_receipt",
-   "description": "A real risc0 3.0.5 proof of mainnet 1..200 by 863c9ce3 (v0.23.0's image), checked against that same image: refused, because a 3.1.0 verifier refuses every 3.0.x receipt (its verifier parameters digest differs).",
+   "name": "key_flipped",
+   "description": "A verifying key with one bit flipped (its last byte), pinned as given: refused (the image id is recomputed from the key).",
    "args": [
     "--network",
     "mainnet",
     "--image",
-    "863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5",
-    "mainnet_1_200_863c9ce3_risc0_305.rcpt"
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine_key_flipped.vk",
+    "mainnet_1_200_engine.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "mainnet_1_200_ctrl_unreduced",
-   "description": "The real 1..200 proof with word 3 of its first control-inclusion-proof digest set to 0xffffffff (not a BabyBear field element): refused as a malformed receipt. risc0 3.1.0 PANICS on it (Poseidon2 hash_pair asserts elem.is_reduced): an abort before the pre-check (fuzz round 11-17).",
+   "name": "proof_flipped",
+   "description": "One bit flipped inside the proof (byte 1008): refused.",
    "args": [
     "--network",
     "mainnet",
-    "--product",
-    "mainnet_1_200_8888d59c_ctrl_unreduced.rcpt"
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine_proof_flipped.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "mainnet_1_200_trailing_byte",
-   "description": "The real 1..200 proof with one zero byte appended: refused (a receipt file is exactly its bincode encoding; it verified DEMO before strict decoding, fuzz round 11-17).",
+   "name": "journal_flipped",
+   "description": "One bit flipped in the journal (40 bytes from the end): refused (the public values are SHA-256 of the journal).",
    "args": [
     "--network",
     "mainnet",
-    "--product",
-    "mainnet_1_200_8888d59c_trailing_byte.rcpt"
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine_journal_flipped.hze"
    ],
    "expect_exit": 1
   },
   {
-   "name": "mainnet_1_200_journal_not_words",
-   "description": "The real 1..200 proof with a byte appended to its journal (not whole words): refused. risc0 serde's from_slice PANICS on a word-aligned journal that is not whole words, and the journal is decoded even when the receipt does not verify.",
+   "name": "trailing_byte",
+   "description": "A zero byte appended: refused (it becomes part of the journal, which is then not whole words and not the committed one).",
    "args": [
     "--network",
     "mainnet",
-    "--product",
-    "mainnet_1_200_8888d59c_journal_not_words.rcpt"
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine_trailing_byte.hze"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "truncated",
+   "description": "Cut halfway through the proof: refused, no panic.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine_truncated.hze"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "length_past_end",
+   "description": "A proof length field of 0xffffffff: refused, no panic.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine_length_past_end.hze"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "time_too_new",
+   "description": "The clock set back to the genesis time: block 200's time is more than 2 h ahead of it: refused.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "--now",
+    "1231006505",
+    "mainnet_1_200_engine.hze"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle",
+   "description": "A version-2 bundle of the proof (swiftsync-verify bundle): its header equals the verified result: DEMO.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.sspf"
+   ],
+   "expect_exit": 2
+  },
+  {
+   "name": "bundle_header_lies",
+   "description": "The bundle with its stop height changed to 201: refused.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "bundle_header_lies.sspf"
+   ],
+   "expect_exit": 1
+  },
+  {
+   "name": "bundle_v1",
+   "description": "The bundle marked version 1 (that version carried a hints-file hash): refused.",
+   "args": [
+    "--network",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "bundle_v1.sspf"
    ],
    "expect_exit": 1
   },
@@ -180,9 +200,12 @@
    "description": "A hints-file argument (the retired design B): the CLI refuses it rather than ignore it.",
    "args": [
     "--network",
-    "signet",
-    "--product",
-    "r4_block_2600.rcpt",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze",
     "signet2600.hints"
    ],
    "expect_exit": 1,
@@ -193,9 +216,12 @@
    "description": "The old '-' (no hints file) argument: refused.",
    "args": [
     "--network",
-    "signet",
-    "--product",
-    "r4_block_2600.rcpt",
+    "mainnet",
+    "--image",
+    "c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9",
+    "--vk",
+    "mainnet_1_200_engine.vk",
+    "mainnet_1_200_engine.hze",
     "-"
    ],
    "expect_exit": 1,
@@ -208,16 +234,17 @@
    "signet (every image, pinned)": "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827"
   },
   "empty_smt_root": "507d86c51845c467583449a973898eff681f18e74aa6d62b206da023cbcaec32",
-  "utreexo_mainnet_200": {
-   "leaves": 204,
+  "coin_log_mainnet_200": {
+   "about": "The engine chain's verified state at mainnet height 200 (node format 2): utxo_leaves, utxo_value and the coin forest roots by index (ChainState.utxo_roots).",
+   "leaves": 209,
    "utxo_value": 1000000000000,
    "roots": {
-    "2": "ac7ca14570ba4972538dfe1587a44d87fc1e7a6d2f24f9ffef0a113afa5c189d",
-    "3": "7ced478f2fdebea9ce3293a479b092618073fe5c89045085ec312b7854ea9a9a",
-    "6": "94ed3b428abfc24c6261ac76dfab9cad07ca35bc28a39bd9109a5288a6886e51",
-    "7": "339752865cc905092ec186b4dae9902e4951bd182855b61d80003867f4cbb452"
+    "0": "70d43a0c91f8bbc58e8554ac2492fda2059176064a95f51b4c8ab43a0b2c9a78",
+    "4": "c34c270609b79e1ceeb814ec294bc18121256fcb94a040db571e01c860a5e744",
+    "6": "de27fb954a7f0e8372415df35dcfba39b1db2d69e5b8e2ac8ef66421459ebd25",
+    "7": "c7c8b7ba4a7939697587ebc03694017f0157361d4cd3825eebbe5a27c7268ed2"
    }
   }
  },
- "status": "Hints-file cases removed in E2 (11-05: no proof takes a hints file). OK / DEMO cases need receipts of the product image: regenerate from the first GPU proofs of the frozen image (experimental/libzync-bench/gpu/COINLOG_GPU_PLAN.md)."
+ "status": "Rebuilt on the engine proof at the cutover (27.11.2026, engine/CUTOVER.md C2); the RISC Zero receipts went with the RISC Zero front (v0.27.1's verifier checks them)."
 }

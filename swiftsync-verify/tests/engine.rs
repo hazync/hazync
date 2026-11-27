@@ -1,7 +1,6 @@
 //! `verify_engine` on a real engine proof (engine/VERIFIER.md step 4): the engine chain 1..200 from genesis, its proof
 //! of block 200 (keys-ch: node format 2 + C heap; `hzengine wasm-inputs` wrote proof.hze, vk.bin and the key's pin),
-//! checked by the same statement checks as a RISC Zero receipt; then the negatives.
-#![cfg(feature = "engine")]
+//! checked by the statement checks; then the negatives, and the malformed files the receipt tests covered.
 use swiftsync_verify::*;
 
 const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/engine200");
@@ -10,15 +9,14 @@ fn rd(n: &str) -> Vec<u8> {
     std::fs::read(format!("{DIR}/{n}")).unwrap_or_else(|e| panic!("{DIR}/{n}: {e}"))
 }
 
-/// The engine image as a record: today's mainnet record with the engine image's id and the node-format-2 profile
-/// (no engine image is published yet; Stage 4 adds the real record).
+/// The engine image as a record: the mainnet record (no image until the Stage 4 freeze) with this engine image's id.
 fn image() -> &'static Image {
     let m = Image::by_network("mainnet").unwrap();
     let id = String::from_utf8(rd("image_id")).unwrap().trim().to_string();
     Box::leak(Box::new(Image {
         network: m.network,
         method_id_hex: Box::leak(id.into_boxed_str()),
-        profile: m.profile | PROFILE_NODE2,
+        profile: m.profile,
         genesis_hash_hex: m.genesis_hash_hex,
         genesis_time: m.genesis_time,
         genesis_bits: m.genesis_bits,
@@ -87,15 +85,18 @@ fn engine_negatives() {
     let mut pin2 = pin();
     pin2[0] ^= 1;
     fails(&run(&file, img, &vk, pin2), "not the image's pinned key");
-    // another image's record (today's RISC Zero mainnet image)
-    fails(&run(&file, Image::by_network("mainnet").unwrap(), &vk, pin()), "not the published image's");
+    // another image id
+    fails(&run(&file, Image::by_network("mainnet").unwrap().with_method_id(&"ab".repeat(32)).unwrap(), &vk, pin()),
+          "not the published image's");
     // not an engine proof file: a RISC Zero receipt's first bytes, and a truncated file
     fails(&run(&[1, 0, 0, 0, 7, 7, 7, 7, 7], img, &vk, pin()), "the file is an engine proof");
     fails(&run(&file[..6], img, &vk, pin()), "the file is an engine proof");
-    // and the RISC Zero front refuses an engine file without decoding it as a receipt
+    // plain verify on the network record (no image) and on a RISC Zero receipt's bytes: refused, with the reason
     assert!(is_engine_proof(&file));
-    let r = verify(&Inputs { receipt: &file, image: img, anchor: None, now: 1_800_000_000 });
-    assert_eq!(r.verdict, Verdict::Fail);
+    let r = verify(&Inputs { receipt: &file, image: Image::by_network("mainnet").unwrap(), anchor: None, now: 1_800_000_000 });
+    fails(&r, "no engine image is published for mainnet yet");
+    let r = verify(&Inputs { receipt: &[1, 0, 0, 0, 7, 7, 7, 7], image: img.with_engine_key(vk.clone()), anchor: None, now: 1_800_000_000 });
+    fails(&r, "v0.27.1");
 }
 
 /// Coin facts (zync-path from the engine chain's history.bin) checked against the verified engine state, as
@@ -197,4 +198,61 @@ fn engine_trie_facts_and_journey() {
     let ok = check_coin_journey(cs, r.undo_from, &j);
     eprintln!("  journey: {ok:?}");
     assert!(ok.is_ok());
+}
+
+/// Malformed files, each a FAIL from `verify` and never a panic (a panic is an abort in the CLI, the C ABI and WASM:
+/// panic = "abort"). The engine counterparts of the RISC Zero receipt cases (fuzz round 11-17): bytes appended, a
+/// journal that is not whole words, a truncated file, and lengths that run past the file.
+#[test]
+fn malformed_files_are_a_fail() {
+    let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
+    let img = image().with_engine_key(vk);
+    let v = |b: &[u8]| verify(&Inputs { receipt: b, image: img, anchor: None, now: 1_800_000_000 });
+    assert!(failed(&v(&file)).is_empty(), "the control verifies");
+    let mut cases: Vec<(&str, Vec<u8>)> = Vec::new();
+    let mut t = file.clone();
+    t.push(0);
+    cases.push(("a byte appended (the journal is then not whole words)", t));
+    let mut t = file.clone();
+    t.extend_from_slice(&[0, 0, 0, 0]);
+    cases.push(("a word appended", t));
+    cases.push(("the last byte cut", file[..file.len() - 1].to_vec()));
+    cases.push(("cut inside the proof", file[..file.len() / 2].to_vec()));
+    cases.push(("the magic alone", b"HZE1".to_vec()));
+    let mut t = file.clone();
+    t[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    cases.push(("a proof length past the file", t));
+    let mut t = file.clone();
+    t[4..8].copy_from_slice(&0u32.to_le_bytes());
+    cases.push(("a zero proof length", t));
+    let n = u32::from_le_bytes(file[4..8].try_into().unwrap()) as usize;
+    cases.push(("no journal", file[..8 + n].to_vec()));
+    for (what, b) in &cases {
+        let r = v(b);
+        assert_eq!(r.verdict, Verdict::Fail, "{what}");
+        assert!(r.state.is_none(), "{what}: no statement from a file that did not verify");
+        eprintln!("  {what}: {}", failed(&r)[0]);
+    }
+    // the framing reader agrees: a journal not whole words decodes to an error, not a panic
+    let mut t = file.clone();
+    t.push(0);
+    let j = proof_journal(&t).unwrap();
+    assert!(decode_journal::<ChainState>(&j).unwrap_err().contains("not whole words"));
+}
+
+/// vectors/manifest.json's reference values for a second implementation: the coin forest at mainnet height 200 is the
+/// engine proof's verified state.
+#[test]
+fn manifest_reference_values_are_the_engine_states() {
+    let m: serde_json::Value = serde_json::from_slice(&std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/vectors/manifest.json")).unwrap()).unwrap();
+    let u = &m["reference_values"]["coin_log_mainnet_200"];
+    let (file, vk) = (rd("proof.hze"), rd("vk.bin"));
+    let r = run(&file, image(), &vk, pin());
+    let cs = r.state.as_ref().unwrap();
+    assert_eq!(cs.utxo_leaves, u["leaves"].as_u64().unwrap());
+    assert_eq!(cs.utxo_value, u["utxo_value"].as_u64().unwrap());
+    let roots: Vec<(usize, String)> = cs.utxo_roots.iter().enumerate().filter_map(|(i, r)| r.map(|r| (i, hex(&r)))).collect();
+    let want: Vec<(usize, String)> = u["roots"].as_object().unwrap().iter().map(|(k, v)| (k.parse().unwrap(), v.as_str().unwrap().to_string())).collect();
+    assert_eq!(roots, want);
+    assert_eq!(hex(&empty_smt_root()), m["reference_values"]["empty_smt_root"].as_str().unwrap());
 }

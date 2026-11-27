@@ -1,19 +1,20 @@
 //! `swiftsync-verify --trie`: a trie fact with an unknown field is refused, not read with the field ignored (a misspelled
-//! `expect` would otherwise turn a claim into a question that cannot fail). Real receipt mainnet 1..200 (image 8888d59c)
-//! and the real block-9 balance fact; the unmodified fact is the control (it holds, verdict DEMO).
+//! `expect` would otherwise turn a claim into a question that cannot fail). The engine chain's proof of mainnet 1..200
+//! (tests/data/engine200) and its balance fact for Hal's script; the unmodified fact is the control (it holds, DEMO).
 use std::process::Command;
 
+const DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/engine200");
+
 fn run(fact: &serde_json::Value) -> (i32, String) {
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/..");
     let dir = std::env::temp_dir().join(format!("cli_trie_fact_{}_{}", std::process::id(), fact.as_object().unwrap().len()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join("fact.json");
     std::fs::write(&p, serde_json::to_vec(fact).unwrap()).unwrap();
+    let id = std::fs::read_to_string(format!("{DIR}/image_id")).unwrap();
     let o = Command::new(env!("CARGO_BIN_EXE_swiftsync-verify"))
-        .args(["--network", "mainnet", "--product", "--trie"])
+        .args(["--network", "mainnet", "--image", id.trim(), "--vk", &format!("{DIR}/vk.bin"), "--trie"])
         .arg(&p)
-        .arg(format!("{root}/swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt"))
-        .env_remove("RISC0_DEV_MODE")
+        .arg(format!("{DIR}/proof.hze"))
         .output()
         .unwrap();
     std::fs::remove_dir_all(&dir).ok();
@@ -22,10 +23,7 @@ fn run(fact: &serde_json::Value) -> (i32, String) {
 
 #[test]
 fn an_unknown_field_in_a_trie_fact_is_refused() {
-    let f: serde_json::Value = serde_json::from_slice(
-        &std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../experimental/libzync-bench/zapp/fact_balance_block9_200.json")).unwrap(),
-    )
-    .unwrap();
+    let f: serde_json::Value = serde_json::from_slice(&std::fs::read(format!("{DIR}/trie_balance_hal.json")).unwrap()).unwrap();
     // control: the real fact holds (DEMO: 200 blocks are below Core's minimum chainwork)
     let (rc, out) = run(&f);
     assert_eq!(rc, 2, "{out}");

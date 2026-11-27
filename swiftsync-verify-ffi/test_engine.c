@@ -1,6 +1,6 @@
 /* test_engine.c <swiftsync-verify/tests/data/engine200>: swiftsync_verify_engine_facts on the engine chain's proof of
- * block 200 (a library built with --features engine), a coin fact on it, and refusals (engine/VERIFIER.md).
- *   cargo build --release --features engine && cc -O2 -Iinclude test_engine.c target/release/libswiftsync_verify.a \
+ * block 200, a coin fact on it, and refusals (engine/VERIFIER.md).
+ *   cargo build --release && cc -O2 -Iinclude test_engine.c target/release/libswiftsync_verify.a \
  *     -lpthread -ldl -lm -o test_engine && ./test_engine ../swiftsync-verify/tests/data/engine200 */
 #include <stdio.h>
 #include <stdlib.h>

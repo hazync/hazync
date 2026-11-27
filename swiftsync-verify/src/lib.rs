@@ -2,29 +2,30 @@
 //! counting trie) checked against the state it proves. One implementation, shared by the CLI, the C ABI and WASM.
 //! (The name is historical: the SwiftSync hints file, design B, was retired in E2. The proofs need none.)
 //!
-//! Given a receipt R, the network, and optionally a trusted anchor state, [`verify`] checks the receipt, its
-//! journal, the profile, the anchor, the block forest and time-too-new, and returns every check with its result,
+//! Given an engine (OpenVM) proof file R, the network's record with an image id and its pinned key, and optionally a
+//! trusted anchor state, [`verify`] checks the proof, its journal, the profile, the anchor, the block forest and time-too-new, and returns every check with its result,
 //! the proven chain's tip and work (whose identity with the network's chain a caller checks against a source it
 //! trusts), and one of three verdicts:
 //!   - `Ok`:   a genesis-anchored proof of a chain with enough work;
 //!   - `Demo`: every check passed, but against a SUPPLIED anchor, or below the minimum work / checkpoint;
 //!   - `Fail`: anything else, including unreadable inputs.
 //!
-//! It never panics on input: a malformed receipt, file or anchor is a failed check.
+//! It never panics on input: a malformed proof file or anchor is a failed check. Engine proofs only since the cutover
+//! (27.11.2026, engine/CUTOVER.md): the RISC Zero chain's receipts are checked with v0.27.1's verifier.
 
-use risc0_zkvm::sha::Digest;
 use serde::{Deserialize, Serialize};
+pub use hazync_journal::Journal;
 
-/// The libzync images this verifier accepts, one per network (scripts and signatures checked). These are
-/// the published image ids M of §5 step 1; a reader should rebuild them (§5 step 9) rather than take them
-/// from this file.
+/// One record per network: its parameters, and the engine image a proof of its chain is checked against. No engine
+/// image is published until the Stage 4 freeze (engine/VERIFIER.md: a development image must not become what every
+/// default caller checks against), so `method_id_hex` is empty and there is no key: a reader gives the image id and its
+/// key ([`Image::with_method_id`], [`Image::with_engine_key`]). The published records then append here, with their
+/// keys embedded, after the network's parameters record (or replace it).
 pub const IMAGES: &[Image] = &[
-    // v0.23.0-v0.25.0 (RISC Zero 3.1.0): the board's image until the v0.26.0 re-baseline. Kept so its proofs verify by
-    // id. Its block leaves carry no undo hash (pin::PRE_UNDO_IMAGES).
     Image {
         network: "mainnet",
-        method_id_hex: "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4",
-        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        method_id_hex: "",
+        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH | PROFILE_NODE2,
         genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
         genesis_time: 1_231_006_505,
         genesis_bits: 0x1d00_ffff,
@@ -37,46 +38,10 @@ pub const IMAGES: &[Image] = &[
         lineage: &[],
         engine_key: None,
     },
-    // v0.26.0 (pinned from ca482bf5): the per-block undo-data commitment (docs/libzync/UNDO.md), a new chain from genesis.
-    // The CURRENT mainnet image; the entry above stays so its proofs verify by id.
-    Image {
-        network: "mainnet",
-        method_id_hex: "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c",
-        profile: PROFILE_LIBZYNC | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
-        genesis_hash_hex: "000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f",
-        genesis_time: 1_231_006_505,
-        genesis_bits: 0x1d00_ffff,
-        genesis_work: 4_295_032_833,
-        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (mainnet; assumevalid 966143).
-        min_work_hex: "000000000000000000000000000000000000000145ec036acc5ba740052af1a0",
-        genesis_anchor_hex: "852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167",
-        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 970000 = 000000000000000000014e6a9bad5f954f266cfb3e8f63f8c2fb7967f29b5a07.
-        checkpoint_height: 970_000,
-        lineage: &[],
-        engine_key: None,
-    },
-    // v0.23.0-v0.25.0 signet. Kept so its proofs verify by id. No undo hash in its leaves (pin::PRE_UNDO_IMAGES).
     Image {
         network: "signet",
-        method_id_hex: "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387",
-        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
-        genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
-        genesis_time: 1_598_918_400,
-        genesis_bits: 0x1e03_77ae,
-        genesis_work: 4_838_420,
-        // Bitcoin Core v32.1 src/kernel/chainparams.cpp, consensus.nMinimumChainWork (default signet; assumevalid 321295).
-        min_work_hex: "00000000000000000000000000000000000000000000000000001090e9dc1520",
-        genesis_anchor_hex: "3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827",
-        // The guest's pinned checkpoint (prover/methods/guest/src/checkpoint.rs): block 325000 = 000000057a363b7d1d713167191e272744532b507d919c81ec5a2c57e306fcd4.
-        checkpoint_height: 325_000,
-        lineage: &[],
-        engine_key: None,
-    },
-    // v0.26.0 signet (pinned from 63ab228a): the undo-data commitment, from genesis. The CURRENT signet image.
-    Image {
-        network: "signet",
-        method_id_hex: "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7",
-        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH,
+        method_id_hex: "",
+        profile: PROFILE_LIBZYNC | PROFILE_SIGNET | PROFILE_COINLOG | PROFILE_TRIE | PROFILE_UTXOHASH | PROFILE_NODE2,
         genesis_hash_hex: "00000008819873e925422c1ff0f99f7cc9bbb232af63a077a480a3633bee1ef6",
         genesis_time: 1_598_918_400,
         genesis_bits: 0x1e03_77ae,
@@ -133,7 +98,7 @@ pub struct Image {
     /// The handovers this image's source pins, oldest first (HANDOVER.md). A proof by this image carries either a
     /// zero lineage (one image since genesis) or the digest of exactly this list.
     pub lineage: &'static [Handover],
-    /// An engine (OpenVM) image's verifying key and its pin; None for a RISC Zero image. With it, [`verify`] checks an
+    /// An engine (OpenVM) image's verifying key and its pin; None until one is published or given. With it, [`verify`] checks an
     /// engine proof file itself (engine/VERIFIER.md), so every caller (corecheck and the zAPPs) gets engine proofs from
     /// the record alone. A published engine image embeds its key here; a reader's own rebuild sets it with
     /// [`Image::with_engine_key`].
@@ -189,8 +154,13 @@ impl Image {
     pub fn with_node2(&'static self) -> &'static Image {
         Box::leak(Box::new(Image { profile: self.profile | PROFILE_NODE2, ..*self }))
     }
-    pub fn method_id(&self) -> Digest {
-        Digest::from_bytes(hex32(self.method_id_hex).expect("IMAGES holds valid hex"))
+    /// The image id's 32 bytes; all zero for a network record with no image (no proof verifies against it).
+    pub fn method_id(&self) -> [u8; 32] {
+        hex32(self.method_id_hex).unwrap_or([0; 32])
+    }
+    /// Does the record name an image (a published one, or the id a reader gave)?
+    pub fn has_image(&self) -> bool {
+        hex32(self.method_id_hex).is_some()
     }
     /// The first height whose block leaf carries an undo hash (docs/libzync/UNDO.md) in a chain this image proved with
     /// its whole lineage, or [`pin::NO_UNDO`]: from the image that proved each block (`pin::leaf_has_undo`). A proof by
@@ -206,7 +176,7 @@ pub fn undo_from_of(image: &[u32; 8], list: &[Handover]) -> u32 {
 }
 
 /// The libzync guest's committed state, field for field and in order (§3 of the proposal). The journal is
-/// risc0's serde encoding of exactly this struct.
+/// the guests' word encoding (hazync-journal: RISC Zero's serde format) of exactly this struct.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct ChainState {
     pub kind: u32,
@@ -453,23 +423,22 @@ pub fn is_engine_proof(file: &[u8]) -> bool {
 }
 
 /// The journal a proof file carries, NOT verified: for a tool that builds on a proof it has already verified (a zAPP
-/// bundle builder). A RISC Zero receipt through the strict decoder; an engine proof file (engine/verify-core's layout:
-/// `HZE1`, the proof's length u32 LE, the proof, then the journal) by its framing alone, so no build needs OpenVM for it.
-pub fn proof_journal(file: &[u8]) -> Result<risc0_zkvm::Journal, String> {
-    if is_engine_proof(file) {
-        let n = file.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize).ok_or("engine proof: truncated")?;
-        let rest = &file[8..];
-        if n == 0 || n > rest.len() {
-            return Err("engine proof: the proof length runs past the file".into());
-        }
-        return Ok(risc0_zkvm::Journal::new(rest[n..].to_vec()));
+/// bundle builder). An engine proof file (engine/verify-core's layout: `HZE1`, the proof's length u32 LE, the proof,
+/// then the journal), by its framing alone.
+pub fn proof_journal(file: &[u8]) -> Result<Journal, String> {
+    if !is_engine_proof(file) {
+        return Err("not an engine proof file (HZE1)".into());
     }
-    Ok(decode_receipt(file)?.journal)
+    let n = file.get(4..8).map(|b| u32::from_le_bytes(b.try_into().unwrap()) as usize).ok_or("engine proof: truncated")?;
+    let rest = &file[8..];
+    if n == 0 || n > rest.len() {
+        return Err("engine proof: the proof length runs past the file".into());
+    }
+    Ok(Journal::new(rest[n..].to_vec()))
 }
 
 /// [`verify`] for an engine (OpenVM) proof file: steps 1 and 8 by OpenVM's verifier under the pinned key (the STARK,
 /// the image id recomputed from the key, the public values = SHA-256(journal)), then the same statement checks.
-#[cfg(feature = "engine")]
 pub fn verify_engine(inp: &Inputs, key: &EngineKey) -> Report {
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
     let m = inp.image.method_id();
@@ -480,40 +449,15 @@ pub fn verify_engine(inp: &Inputs, key: &EngineKey) -> Report {
     statement_checks(inp, &m, &journal, rep)
 }
 
-/// An engine proof file, under the key the image record holds.
-fn verify_engine_by_record(inp: &Inputs) -> Report {
-    let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
-    let Some(k) = inp.image.engine_key else {
-        rep.check(false, format!("an engine (OpenVM) proof, but image {} ({}) has no engine verifying key: not an engine \
-                                  image (or give your own build's key)", inp.image.method_id_hex, inp.image.network));
-        return rep;
-    };
-    let Some(pin) = hex32(k.pin_hex) else {
-        rep.check(false, "the image's engine key pin is not 64 hex digits");
-        return rep;
-    };
-    #[cfg(feature = "engine")]
-    {
-        verify_engine(inp, &EngineKey { bytes: k.bytes, pin })
-    }
-    #[cfg(not(feature = "engine"))]
-    {
-        let _ = pin;
-        rep.check(false, "an engine (OpenVM) proof: this verifier was built without engine support (feature `engine`)");
-        rep
-    }
-}
-
 /// Steps 1 and 8 for an engine proof file. Returns the journal only when the proof verified: unlike a RISC Zero
 /// receipt, whose journal is part of the proof object, the file's journal is just bytes next to the proof until the
 /// public values are checked against it.
-#[cfg(feature = "engine")]
-fn engine_front(inp: &Inputs, m: &Digest, key: &EngineKey, rep: &mut Report) -> Option<risc0_zkvm::Journal> {
+fn engine_front(inp: &Inputs, m: &[u8; 32], key: &EngineKey, rep: &mut Report) -> Option<Journal> {
     if let Err(e) = hazync_engine_verify::unpack(inp.receipt) {
         rep.check(false, format!("the file is an engine proof ({e})"));
         return None;
     }
-    let r = engine_proof_journal(inp.receipt, key, m.as_bytes());
+    let r = engine_proof_journal(inp.receipt, key, m);
     let ok = rep.check(r.is_ok(), format!("engine proof verifies against image {} ({}) under the pinned key {}{}",
                        inp.image.method_id_hex, inp.image.network, hex(&key.pin),
                        r.as_ref().err().map(|e| format!(": {e}")).unwrap_or_default()));
@@ -524,167 +468,51 @@ fn engine_front(inp: &Inputs, m: &Digest, key: &EngineKey, rep: &mut Report) -> 
 /// journal when it verifies (OpenVM's STARK under the pinned key, the image id from the key, the public values =
 /// SHA-256(journal)), else why not. What engine/VERIFIER.md calls the engine front, for callers with their own
 /// statement type (the header-chain zAPP).
-#[cfg(feature = "engine")]
-pub fn engine_proof_journal(file: &[u8], key: &EngineKey, image_id: &[u8]) -> Result<risc0_zkvm::Journal, String> {
+pub fn engine_proof_journal(file: &[u8], key: &EngineKey, image_id: &[u8]) -> Result<Journal, String> {
     use hazync_engine_verify as ev;
     let (proof, journal) = ev::unpack(file).map_err(|e| e.to_string())?;
     ev::verify_full_bytes(key.bytes, &key.pin, proof, journal, image_id).map_err(|e| e.to_string())?;
-    Ok(risc0_zkvm::Journal::new(journal.to_vec()))
+    Ok(Journal::new(journal.to_vec()))
 }
 
-/// Steps 1 and 8 for a RISC Zero receipt: a single succinct or Groth16 proof, real (not a FakeReceipt), verified
-/// against image `m`. Returns the journal, for the prover-independent checks; None (after recording why) when
-/// there is no journal to read. A failed `verify` is recorded and the journal still returned, so the report also says
-/// what the receipt claims (the verdict is Fail either way).
-fn risc0_front(inp: &Inputs, m: &risc0_zkvm::sha::Digest, rep: &mut Report) -> Option<risc0_zkvm::Journal> {
-    if let Err(e) = receipt_kind(inp.receipt) {
-        rep.check(false, format!("the receipt file is a single succinct or Groth16 proof ({e})"));
-        return None;
-    }
-    let receipt: risc0_zkvm::Receipt = match decode_receipt(inp.receipt) {
-        Ok(r) => r,
-        Err(e) => {
-            rep.check(false, format!("the receipt file decodes ({e})"));
-            return None;
-        }
-    };
-    rep.check(!matches!(receipt.inner, risc0_zkvm::InnerReceipt::Fake(_)),
-              "receipt is a real proof (not a dev-mode FakeReceipt)");
-    // Not past this point under it: risc0 built with disable-dev-mode PANICS in Receipt::verify when RISC0_DEV_MODE is
-    // 1 / true / yes ("Inconsistent settings"; risc0-zkvm 3.1.0 lib.rs:213), an abort here. dev_mode_env() is true for
-    // every value risc0 reads as set (review 11-18).
-    if !rep.check(!dev_mode_env(), "RISC0_DEV_MODE is not set in this verifier's environment") {
-        return None;
-    }
-    let v = receipt.verify(*m);
-    rep.check(v.is_ok(), format!("receipt verifies against image {} ({}){}", inp.image.method_id_hex,
-              inp.image.network, v.err().map(|e| format!(": {e}")).unwrap_or_default()));
-    Some(receipt.journal)
-}
-
-/// The receipt's kind, from its first bytes, BEFORE it is decoded: a chain proof is succinct or Groth16. A composite
-/// receipt holds assumption receipts that may themselves be composite, without bound, so decoding a hostile one ~50k
-/// levels deep (~1 MB) overflowed the stack (an abort in the C ABI, a trap in WASM, no verdict line in the CLI; cold
-/// review 11-06). Succinct and Groth16 claims nest to a fixed depth. bincode writes the InnerReceipt variant first, as
-/// a u32 LE: 0 Composite, 1 Succinct, 2 Groth16, 3 Fake (risc0-zkvm 3.0.5; unchanged in 3.1.0, checked 11-11).
-pub fn receipt_kind(receipt: &[u8]) -> Result<&'static str, String> {
-    match receipt.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
-        Some(1) => Ok("succinct"),
-        Some(2) => Ok("groth16"),
-        Some(0) => Err("a composite receipt: a chain proof is succinct or Groth16 (composite receipts nest without bound, so they are refused before decoding)".into()),
-        Some(3) => Err("a dev-mode FakeReceipt, not a proof".into()),
-        Some(k) => Err(format!("not a receipt (kind tag {k})")),
-        None => Err("not a receipt (too short)".into()),
-    }
-}
-
-/// The BabyBear prime, 15 * 2^27 + 1: every word of a Poseidon2 digest and of a Poseidon2 STARK seal is a field element below it.
-pub const BABYBEAR_P: u32 = 15 * (1 << 27) + 1;
-
-/// A receipt file decoded for verification, or why it is not one. One decoder for every entry point (CLI, WASM, C ABI,
-/// the zAPPs through [`verify`]), so all of them refuse the same inputs:
-/// - the kind gate first ([`receipt_kind`]): a succinct or Groth16 receipt only;
-/// - bincode as `bincode::deserialize` reads it (fixed-width integers, little-endian, no size limit), but with
-///   trailing bytes REFUSED: a receipt file is exactly `bincode::serialize(&receipt)`, which is what every producer
-///   writes (prover/host lz.rs, seg.rs) and what a .sspf bundle carries (its length field is exact). Fuzz round 11-17:
-///   a receipt with bytes appended verified;
-/// - [`receipt_well_formed`]: no word risc0 would assert on.
-pub fn decode_receipt(bytes: &[u8]) -> Result<risc0_zkvm::Receipt, String> {
-    use bincode::Options as _;
-    receipt_kind(bytes)?;
-    let r: risc0_zkvm::Receipt = bincode::DefaultOptions::new()
-        .with_fixint_encoding()
-        .reject_trailing_bytes()
-        .deserialize(bytes)
-        .map_err(|e| format!("not a receipt: {e}"))?;
-    receipt_well_formed(&r)?;
-    Ok(r)
-}
-
-/// A malformed receipt that risc0-zkvm 3.1.0 / risc0-zkp 3.0.6 would PANIC on instead of refusing (an abort here:
-/// panic = "abort"; the C ABI's host process dies, WASM traps). From their sources (fuzz round 11-17):
-/// - `SuccinctReceipt::verify_integrity_with_context` checks the control inclusion proof with
-///   `MerkleProof::verify` -> `root` -> `Poseidon2HashFn::hash_pair`, which `assert!`s every word of both digests is
-///   below P. The leaf is `control_id`, the siblings are `control_inclusion_proof.digests`: neither is checked first.
-/// - The seal (risc0-zkp `verify::verify`) is read through `ReadIOP`: field elements are checked (an error), digests are
-///   checked with `is_digest_valid` before any `hash_pair` (an error), so no panic; but `MerkleTreeVerifier::new`
-///   returning that error leaks the digests it already hashed (~32 bytes each). Every word a Poseidon2 seal holds is a
-///   field element or a Poseidon2 digest, so all are below P: refusing any other word here stops that path too.
-/// Only the Poseidon2 suite asserts: SHA-256 and Blake2b accept any digest word. A Groth16 receipt has no BabyBear
-/// words (its seal is BN254 points, parsed with errors by risc0-groth16). Composite and Fake receipts never get here
-/// ([`receipt_kind`]). A word refused here is one no valid receipt holds, so no valid receipt is refused.
-pub fn receipt_well_formed(r: &risc0_zkvm::Receipt) -> Result<(), String> {
-    let s = match &r.inner {
-        risc0_zkvm::InnerReceipt::Succinct(s) => s,
-        _ => return Ok(()),
-    };
-    if s.hashfn != "poseidon2" {
-        return Ok(());
-    }
-    let bad = |what: &str, w: &[u32]| match w.iter().position(|&x| x >= BABYBEAR_P) {
-        Some(i) => Err(format!("malformed receipt: {what} word {i} is 0x{:08x}, not a BabyBear field element", w[i])),
-        None => Ok(()),
-    };
-    bad("control_id", s.control_id.as_words())?;
-    for (j, d) in s.control_inclusion_proof.digests.iter().enumerate() {
-        bad(&format!("control inclusion proof digest {j}"), d.as_words())?;
-    }
-    bad("seal", &s.seal)
-}
-
-/// The journal decoded as `T` (risc0 serde, words). risc0's `from_slice` PANICS on a byte length that is not a whole
-/// number of words when the bytes are word-aligned ("failed to cast or read slice as [u32]"), and the journal is
-/// decoded whether or not the receipt verified, so the length is checked first.
-pub fn decode_journal<T: serde::de::DeserializeOwned>(j: &risc0_zkvm::Journal) -> Result<T, String> {
+/// The journal decoded as `T` (the guests' word encoding, hazync-journal). Its `from_slice` PANICS on a byte length
+/// that is not a whole number of words when the bytes are word-aligned ("failed to cast or read slice as [u32]"), so
+/// the length is checked first.
+pub fn decode_journal<T: serde::de::DeserializeOwned>(j: &Journal) -> Result<T, String> {
     if j.bytes.len() % 4 != 0 {
         return Err(format!("the journal is {} bytes, not whole words", j.bytes.len()));
     }
     j.decode().map_err(|e| e.to_string())
 }
 
-/// The earlier built-in image a receipt names, when the caller asked for its network's CURRENT built-in image (by id): after a
-/// handover or a re-baseline the table keeps the earlier image (v0.26.0 keeps 8888d59c, the board before the reset), and that
-/// image's proofs (the chain below the handover) must keep verifying with no `--image`. Only images in the built-in
-/// table are ever substituted: an id the caller supplied, or one not in the table, is left to fail on its own.
-pub fn earlier_image_named_by(receipt: &risc0_zkvm::Receipt, asked: &'static Image) -> Option<&'static Image> {
-    let current = Image::by_network(asked.network)?;
-    // By id, not by pointer: `--product` / `--coinlog` hand verify() a modified copy of the current image.
-    if asked.method_id_hex != current.method_id_hex {
-        return None;
-    }
-    use risc0_zkvm::sha::Digestible;
-    let claim = receipt.claim().ok()?;
-    let pre = claim.as_value().ok()?.pre.digest();
-    let hex: String = pre.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-    IMAGES.iter().find(|i| i.network == asked.network && i.method_id_hex == hex && !std::ptr::eq(*i, current))
-}
-
+/// Checks a proof file against the image record `inp.image`: an engine (OpenVM) proof under the key the record holds
+/// (published, or the reader's own build's, [`Image::with_engine_key`]), then steps 2-12. Anything else is a FAIL with
+/// the reason: a RISC Zero receipt (v0.27.1's verifier checks those), a record with no image, or no key.
 pub fn verify(inp: &Inputs) -> Report {
-    if is_engine_proof(inp.receipt) {
-        return verify_engine_by_record(inp);
-    }
-    if let Ok(r) = decode_receipt(inp.receipt) {
-        if let Some(e) = earlier_image_named_by(&r, inp.image) {
-            let mut rep = verify(&Inputs { receipt: inp.receipt, image: e, anchor: inp.anchor.clone(), now: inp.now });
-            rep.checks.insert(0, (true, format!("the receipt names {} ({}), an earlier built-in image of this chain; \
-                                                 verified as that image", e.method_id_hex, e.network)));
-            return rep;
-        }
-    }
     let mut rep = Report { checks: Vec::new(), state: None, verdict: Verdict::Fail, low_work: false, undo_from: pin::NO_UNDO };
-    let m = inp.image.method_id();
-    // Steps 1 and 8, which depend on the prover (engine/VERIFIER.md): the journal, or why there is none to read.
-    let journal = match risc0_front(inp, &m, &mut rep) {
-        Some(j) => j,
-        None => return rep,
+    if !is_engine_proof(inp.receipt) {
+        rep.check(false, "the file is an engine (OpenVM) proof (HZE1); a RISC Zero receipt is checked with v0.27.1's verifier");
+        return rep;
+    }
+    if !inp.image.has_image() {
+        rep.check(false, format!("no engine image is published for {} yet: give the image id and its key", inp.image.network));
+        return rep;
+    }
+    let Some(k) = inp.image.engine_key else {
+        rep.check(false, format!("image {} ({}) has no engine verifying key: give that build's key", inp.image.method_id_hex,
+                                 inp.image.network));
+        return rep;
     };
-
-    statement_checks(inp, &m, &journal, rep)
+    let Some(pin) = hex32(k.pin_hex) else {
+        rep.check(false, "the image's engine key pin is not 64 hex digits");
+        return rep;
+    };
+    verify_engine(inp, &EngineKey { bytes: k.bytes, pin })
 }
 
 /// Steps 2-12, which do not depend on the prover: the journal (from a verified proof of image `m`) as the image's
 /// ChainState, and everything checked on it (engine/VERIFIER.md). `rep` already holds the proof's own checks.
-fn statement_checks(inp: &Inputs, m: &Digest, journal: &risc0_zkvm::Journal, mut rep: Report) -> Report {
+fn statement_checks(inp: &Inputs, m: &[u8; 32], journal: &Journal, mut rep: Report) -> Report {
     let m = *m;
     // Step 2: the journal is this image's ChainState.
     let cs: ChainState = match decode_journal(journal) {
@@ -759,11 +587,6 @@ fn statement_checks(inp: &Inputs, m: &Digest, journal: &risc0_zkvm::Journal, mut
     rep
 }
 
-/// RISC0_DEV_MODE as risc0 reads it: set and not empty / "0" / "false". A FakeReceipt "verifies" under it.
-pub fn dev_mode_env() -> bool {
-    std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0" && v != "false").unwrap_or(false)
-}
-
 pub fn describe_profile(p: u32) -> String {
     format!("{}, {}, {}{}",
             if p & PROFILE_LIBZYNC != 0 { "libzync" } else { "canonical" },
@@ -831,7 +654,7 @@ pub fn anchor_id(s: &ChainState) -> [u8; 32] {
     use sha2::{Digest as _, Sha256};
     let mut z = s.clone();
     z.anchor_id = [0; 32];
-    let words = risc0_zkvm::serde::to_vec(&z).expect("ChainState serialises");
+    let words = hazync_journal::serde::to_vec(&z).expect("ChainState serialises");
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     Sha256::digest(Sha256::digest(bytes)).into()
 }
@@ -850,15 +673,14 @@ pub fn empty_smt_root() -> [u8; 32] {
     e
 }
 
-pub fn words(d: &Digest) -> [u32; 8] {
-    let mut w = [0u32; 8];
-    w.copy_from_slice(d.as_words());
-    w
+/// An image id (32 bytes) in the guest's u32x8 form.
+pub fn words(d: &[u8; 32]) -> [u32; 8] {
+    hazync_journal::id_words(d)
 }
 
 /// An image id as printed (32 bytes) in the guest's u32x8 form.
 pub fn image_words(id: [u8; 32]) -> [u32; 8] {
-    words(&Digest::from_bytes(id))
+    words(&id)
 }
 
 pub fn hex(b: &[u8]) -> String {
@@ -1723,29 +1545,26 @@ mod tests {
         }
     }
 
-    /// The built-in table is the published one (reproduce/LIBZYNC_IDS, written with the table by
-    /// reproduce/pin-libzync-ids.py): each network's CURRENT image (its last entry) is the published id, and every
-    /// earlier entry is an image the record says was published and superseded (reproduce/METHOD_ID for mainnet,
-    /// reproduce/LIBZYNC_IDS's history in git for signet: named in this file's comments). A hand edit fails here.
+    /// Until the Stage 4 freeze the table holds one record per network and no image (engine/CUTOVER.md C3): a default
+    /// caller has nothing to check a proof against, so it must give the image id and key, and is told so.
     #[test]
-    fn images_match_the_published_ids() {
-        let f = include_str!("../../reproduce/LIBZYNC_IDS");
-        let record = include_str!("../../reproduce/METHOD_ID");
-        let this = include_str!("lib.rs");
+    fn network_records_carry_no_image_until_the_freeze() {
         for net in ["mainnet", "signet"] {
-            let line = f.lines().find(|l| l.starts_with("libzync-product ") && l.split_whitespace().nth(1) == Some(net))
-                .unwrap_or_else(|| panic!("reproduce/LIBZYNC_IDS has no {net} line"));
-            let id = line.split_whitespace().skip_while(|w| *w != "METHOD_ID").nth(1).unwrap();
-            let cur = Image::by_network(net).unwrap();
-            assert_eq!(id, cur.method_id_hex, "{net}: the current image and reproduce/LIBZYNC_IDS disagree");
-            for old in IMAGES.iter().filter(|i| i.network == net && i.method_id_hex != id) {
-                let named = if net == "mainnet" { record.contains(&format!("Superseded {}", &old.method_id_hex[..8])) }
-                            else { this.contains(&format!("// v0.23.0-v0.25.0 {net}")) };
-                assert!(named, "{net}: earlier image {} is not in the superseded record", old.method_id_hex);
-            }
-            assert_eq!(IMAGES.iter().filter(|i| i.network == net && i.method_id_hex == id).count(), 1,
-                       "{net}: the published id is listed more than once");
+            assert_eq!(IMAGES.iter().filter(|i| i.network == net).count(), 1, "{net}: one record");
+            let r = Image::by_network(net).unwrap();
+            assert!(!r.has_image() && r.engine_key.is_none() && r.method_id() == [0; 32], "{net}: no image, no key");
+            assert!(r.profile & PROFILE_NODE2 != 0, "{net}: an engine image computes node format 2");
+            let v = verify(&Inputs { receipt: b"HZE1\x01\0\0\0xx", image: r, anchor: None, now: 0 });
+            assert_eq!(v.verdict, Verdict::Fail);
+            assert!(v.checks[0].1.contains(&format!("no engine image is published for {net} yet")), "{:?}", v.checks);
+            let g = r.with_method_id(&"ab".repeat(32)).unwrap();
+            assert!(g.has_image());
+            let v = verify(&Inputs { receipt: b"HZE1\x01\0\0\0xx", image: g, anchor: None, now: 0 });
+            assert!(v.checks[0].1.contains("has no engine verifying key"), "{:?}", v.checks);
         }
+        // a RISC Zero receipt (bincode, its kind tag first) is not an engine proof file
+        let v = verify(&Inputs { receipt: &[1, 0, 0, 0, 9, 9], image: IMAGES[0].with_method_id(&"ab".repeat(32)).unwrap(), anchor: None, now: 0 });
+        assert!(v.checks[0].1.contains("v0.27.1"), "{:?}", v.checks);
     }
 
     #[test]
@@ -1933,9 +1752,10 @@ mod tests {
 
     #[test]
     fn the_leaf_format_is_selected_by_height_through_the_lineage() {
-        let old = image_words(hex32(IMAGES[0].method_id_hex).unwrap());
-        assert_eq!(IMAGES[0].undo_from(), pin::NO_UNDO, "8888d59c has no undo commitment");
-        assert_eq!(Image::by_id("signet", "d4210dae455340743cca097f2b422eee9846c9c02af0dae31d1268fadef4f387").unwrap().undo_from(), pin::NO_UNDO);
+        // 8888d59c, the RISC Zero board's mainnet image before v0.26.0: no undo commitment
+        let old = image_words(hex32("8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap());
+        assert_eq!(pin::PRE_UNDO_IMAGES[0], old);
+        assert_eq!(undo_from_of(&old, &[]), pin::NO_UNDO, "8888d59c has no undo commitment");
         let new = [7u32; 8];
         assert_eq!(undo_from_of(&new, &[]), 1, "an image with an empty lineage: every block but genesis");
         let at2000 = [Handover { image: old, first_height: 2000, verifier: pin::SAME_ZKVM }];
@@ -1948,13 +1768,6 @@ mod tests {
         assert_eq!(undo_from_of(&[8u32; 8], &later), 2000);
         // the CI rehearsal: a test image with the commitment, pinned by another at 11: every block has it
         assert_eq!(undo_from_of(&[8u32; 8], &[Handover { image: new, first_height: 11, verifier: pin::SAME_ZKVM }]), 1);
-        // the current images (the new ids) have the commitment from block 1
-        for net in ["mainnet", "signet"] {
-            let cur = Image::by_network(net).unwrap();
-            if !pin::PRE_UNDO_IMAGES.contains(&words(&cur.method_id())) {
-                assert_eq!(cur.undo_from(), if cur.lineage.is_empty() { 1 } else { cur.undo_from() });
-            }
-        }
     }
 
     #[test]
@@ -2200,160 +2013,6 @@ mod bundle_tests {
         let mut v = e.clone();
         v[4] = 1; // a version-1 bundle (with a hints-file hash) is refused
         assert!(Bundle::decode(&v).is_err());
-    }
-}
-
-#[cfg(test)]
-mod receipt_hardening_tests {
-    //! Fuzz round 11-17 (hazync-coord, cargo-fuzz on the zAPPs): malformed receipts risc0 PANICS on, and a receipt
-    //! with bytes appended that verified. Each case is the real mainnet 1..200 proof with one change; each must be a
-    //! FAIL from `verify`, never a panic (a panic here is an abort in the CLI, the C ABI and WASM: panic = "abort").
-    use super::*;
-    use risc0_zkvm::{InnerReceipt, Receipt};
-
-    const RCPT: &[u8] = include_bytes!("../vectors/mainnet_1_200_8888d59c.rcpt");
-
-    fn image() -> &'static Image {
-        Image::by_id("mainnet", "8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4").unwrap()
-    }
-    fn run(receipt: &[u8]) -> Report {
-        verify(&Inputs { receipt, image: image(), anchor: None, now: 1_800_000_000 })
-    }
-    fn first_fail(r: &Report) -> String {
-        r.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.clone()).unwrap_or_default()
-    }
-    /// The vector with `f` applied to its succinct receipt, re-encoded as every producer encodes it.
-    fn mutated(f: impl FnOnce(&mut risc0_zkvm::SuccinctReceipt<risc0_zkvm::ReceiptClaim>)) -> Vec<u8> {
-        let mut r: Receipt = bincode::deserialize(RCPT).unwrap();
-        match &mut r.inner { InnerReceipt::Succinct(s) => f(s), _ => panic!("the vector is succinct") }
-        bincode::serialize(&r).unwrap()
-    }
-
-    #[test]
-    fn the_untouched_vector_still_verifies() {
-        assert_eq!(bincode::serialize(&decode_receipt(RCPT).unwrap()).unwrap(), RCPT, "strict decoding re-encodes to the file");
-        assert_eq!(run(RCPT).verdict, Verdict::Demo, "{:?}", run(RCPT).checks);
-    }
-
-    /// F1: one control-inclusion-proof digest word 0xffffffff. risc0 panicked: `assertion failed: elem.is_reduced()`
-    /// (risc0-zkp poseidon2/mod.rs:57 from MerkleProof::verify).
-    #[test]
-    fn control_inclusion_proof_word_not_reduced_is_a_fail() {
-        for w in [BABYBEAR_P, 0xffff_ffff] {
-            let b = mutated(|s| {
-                let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
-                words[3] = w;
-                s.control_inclusion_proof.digests[0] = words.into();
-            });
-            let r = run(&b);
-            assert_eq!(r.verdict, Verdict::Fail);
-            assert!(first_fail(&r).contains("malformed receipt: control inclusion proof digest 0 word 3"), "{}", first_fail(&r));
-        }
-        // the largest reduced word is not refused as malformed (it fails the proof instead)
-        let b = mutated(|s| {
-            let mut words: [u32; 8] = s.control_inclusion_proof.digests[0].as_words().try_into().unwrap();
-            words[3] = BABYBEAR_P - 1;
-            s.control_inclusion_proof.digests[0] = words.into();
-        });
-        let r = run(&b);
-        assert_eq!(r.verdict, Verdict::Fail);
-        assert!(!first_fail(&r).contains("malformed"), "{}", first_fail(&r));
-    }
-
-    #[test]
-    fn control_id_word_not_reduced_is_a_fail() {
-        let b = mutated(|s| {
-            let mut words: [u32; 8] = s.control_id.as_words().try_into().unwrap();
-            words[7] = 0xffff_ffff;
-            s.control_id = words.into();
-        });
-        let r = run(&b);
-        assert_eq!(r.verdict, Verdict::Fail);
-        assert!(first_fail(&r).contains("malformed receipt: control_id word 7"), "{}", first_fail(&r));
-    }
-
-    /// Any seal word >= P is refused before risc0 reads the seal (a valid Poseidon2 seal holds none). That includes F2's
-    /// trigger, an unreduced digest in a Merkle top row, which makes risc0-zkp's MerkleTreeVerifier::new return an
-    /// error after hashing part of the row and leak those hashes; the indices here are arbitrary words of the seal.
-    #[test]
-    fn seal_word_not_reduced_is_a_fail_before_risc0() {
-        for i in [0usize, 1000, 50_000] {
-            let b = mutated(|s| { let i = i.min(s.seal.len() - 1); s.seal[i] = 0xffff_ffff; });
-            let r = run(&b);
-            assert_eq!(r.verdict, Verdict::Fail);
-            assert!(first_fail(&r).contains("malformed receipt: seal word"), "{}", first_fail(&r));
-        }
-    }
-
-    /// F4: bytes after the receipt (probe rcpt_trailing0 verified DEMO). Refused, whatever they are.
-    #[test]
-    fn trailing_bytes_are_a_fail() {
-        for tail in [&[0u8][..], &[0, 0, 0, 0], b"junk"] {
-            let mut b = RCPT.to_vec();
-            b.extend_from_slice(tail);
-            let r = run(&b);
-            assert_eq!(r.verdict, Verdict::Fail, "{tail:?}");
-            assert!(first_fail(&r).contains("the receipt file decodes"), "{}", first_fail(&r));
-            assert!(decode_receipt(&b).is_err());
-        }
-        assert!(decode_receipt(&RCPT[..RCPT.len() - 1]).is_err(), "a truncated receipt");
-    }
-
-    /// A journal that is not whole words: risc0 serde's from_slice panicked on it ("failed to cast or read slice as
-    /// [u32]") when the bytes were word-aligned, and the journal is decoded even when the receipt does not verify.
-    #[test]
-    fn journal_not_whole_words_is_a_fail() {
-        for extra in 1..4 {
-            let mut r: Receipt = bincode::deserialize(RCPT).unwrap();
-            r.journal.bytes.extend(std::iter::repeat(0).take(extra));
-            let b = bincode::serialize(&r).unwrap();
-            let rep = run(&b);
-            assert_eq!(rep.verdict, Verdict::Fail);
-            assert!(rep.checks.iter().any(|(ok, w)| !ok && w.contains("not whole words")), "{:?}", rep.checks);
-        }
-    }
-
-
-    /// Review 11-18: a bundle's length field near u32::MAX is refused (it wrapped on wasm32), and an `expect` height is
-    /// canonical. (The header-chain reader's checked hex32 is tested in zapps/headers.)
-    #[test]
-    fn review_edges() {
-        let b = Bundle { network: 0, image: [0; 32], stop_height: 0, tip_hash: [0; 32], cum_work: [0; 32],
-                         trie_root: [0; 32], receipt: vec![] };
-        let mut e = b.encode();
-        let at = e.len() - 4;
-        e[at..].copy_from_slice(&u32::MAX.to_le_bytes());
-        assert!(Bundle::decode(&e).is_err());
-        for (h, ok) in [("0", true), ("200", true), ("+200", false), ("0200", false), ("", false), ("-1", false), ("2 0", false)] {
-            assert_eq!(canonical_decimal(h), ok, "{h:?}");
-        }
-    }
-
-    /// No legitimate producer appends anything: every receipt vector, and the receipt inside every bundle vector that
-    /// decodes, is read by the strict decoder and re-encodes to its own bytes.
-    #[test]
-    fn every_vector_decodes_strictly() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/vectors");
-        let mut n = 0;
-        for e in std::fs::read_dir(dir).unwrap() {
-            let p = e.unwrap().path();
-            let b = std::fs::read(&p).unwrap();
-            let inner = if b.starts_with(BUNDLE_MAGIC) { match Bundle::decode(&b) { Ok(x) => x.receipt, Err(_) => continue } } else { b };
-            if receipt_kind(&inner).is_err() { continue; }
-            let name = p.display().to_string();
-            // malformed on purpose: one bit flipped in the seal; an unreduced word; a byte appended
-            if ["_flipped.rcpt", "_ctrl_unreduced.rcpt", "_trailing_byte.rcpt"].iter().any(|s| name.ends_with(s)) { continue; }
-            let r = decode_receipt(&inner).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(bincode::serialize(&r).unwrap(), inner, "{name}");
-            n += 1;
-        }
-        assert!(n >= 4, "{n} receipt vectors");
-        // and the ones malformed on purpose are refused by the decoder, not by risc0
-        for (f, want) in [("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt", "malformed receipt: control inclusion proof"),
-                          ("mainnet_1_200_8888d59c_trailing_byte.rcpt", "bytes remaining")] {
-            let e = decode_receipt(&std::fs::read(format!("{dir}/{f}")).unwrap()).unwrap_err();
-            assert!(e.contains(want), "{f}: {e}");
-        }
     }
 }
 

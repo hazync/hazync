@@ -1,17 +1,19 @@
-PASS  retired_design_b         verdict 1 (want 1)  receipt verifies against image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae (signet): receipt was produced for a version of the verifier with parameters digest ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013; expected 
-PASS  retired_design_b_product verdict 1 (want 1)  receipt verifies against image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae (signet): receipt was produced for a version of the verifier with parameters digest ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013; expected 
-PASS  wrong_image              verdict 1 (want 1)  receipt verifies against image 01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7 (signet): receipt was produced for a version of the verifier with parameters digest ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013; expected 
-PASS  fake_receipt             verdict 1 (want 1)  the receipt file is a single succinct or Groth16 proof (a dev-mode FakeReceipt, not a proof)
+PASS  mainnet_1_200_demo       verdict 2 (want 2)  a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching 
+PASS  mainnet_1_200_as_signet  verdict 1 (want 1)  profile 0xf1 == 0xf5 (libzync, scripts checked, mainnet, coin log, counting trie, live-coin hash, node format 2)
+PASS  other_image_id           verdict 1 (want 1)  engine proof verifies against image abababababababababababababababababababababababababababababababab (mainnet) under the
+PASS  no_image_given           verdict 1 (want 1)  no engine image is published for mainnet yet: give the image id and its key
+PASS  key_flipped              verdict 1 (want 1)  the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)
+PASS  no_key                   verdict 1 (want 1)  an engine proof needs its verifying key and the key's 32-byte pin
+PASS  proof_flipped            verdict 1 (want 1)  engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the
+PASS  journal_flipped          verdict 1 (want 1)  engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the
+PASS  trailing_byte            verdict 1 (want 1)  engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the
+PASS  truncated                verdict 1 (want 1)  the file is an engine proof (not an engine proof file (HZE1 magic, proof length, journal))
+PASS  length_past_end          verdict 1 (want 1)  the file is an engine proof (not an engine proof file (HZE1 magic, proof length, journal))
+PASS  bundle                   verdict 2 (want 2)  a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching 
+PASS  bundle_header_lies       verdict 1 (want 1)  bundle header: height, tip, work and trie_root equal the verified journal's
 PASS  bundle_v1                verdict 1 (want 1)  unsupported bundle version 1
-PASS  bundle_header_lies       verdict 1 (want 1)  unsupported bundle version 1
-PASS  mainnet_1_200_demo       verdict 2 (want 2)  a valid chain, but from a given anchor, below minimum work, or below the checkpoint height, or facts without a matching "expect": not shown to be the network's
-PASS  mainnet_1_200_as_signet  verdict 1 (want 1)  receipt verifies against image 01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7 (signet): claim digest does not match the expected digest a0bc22807a0fa20458252751118bd549794899312a8d528eccb8af8a2d2f4fc2; expected 571965919ccb1d2aa8c6e1a697
-PASS  mainnet_1_200_old_image  verdict 1 (want 1)  receipt verifies against image 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (mainnet): claim digest does not match the expected digest a0bc22807a0fa20458252751118bd549794899312a8d528eccb8af8a2d2f4fc2; expected 8fb56dacc54e53e0082f16b19
-PASS  mainnet_1_200_flipped    verdict 1 (want 1)  receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): verification indicates proof is invalid
-PASS  risc0_305_receipt        verdict 1 (want 1)  receipt verifies against image 863c9ce35104740d8b6fa2972f0dd1b29289e3e67e5679400f0e8ecdbef69af5 (mainnet): receipt was produced for a version of the verifier with parameters digest ece5e9b8ae2cd6ea6b1827b464ff0348f9a7f4decd269c0087fdfd75098da013; expected
-PASS  mainnet_1_200_ctrl_unreduced verdict 1 (want 1)  the receipt file decodes (malformed receipt: control inclusion proof digest 0 word 3 is 0xffffffff, not a BabyBear field element)
-PASS  mainnet_1_200_trailing_byte verdict 1 (want 1)  the receipt file decodes (not a receipt: Slice had bytes remaining after deserialization)
-PASS  mainnet_1_200_journal_not_words verdict 1 (want 1)  receipt verifies against image 8888d59c4b8c699fd4cc3afaf8168ff2baa1f6511b1dcea1c23f041b2b2315f4 (mainnet): claim digest does not match the expected digest a0bc22807a0fa20458252751118bd549794899312a8d528eccb8af8a2d2f4fc2; expected bd52cc48578f04e229d9cbe45
 PASS  bad_image_hex            verdict 1 (want 1)  image id is not 64 hex digits
 PASS  unknown_network          verdict 1 (want 1)  unknown network
+PASS  no_key_swiftsync_verify  verdict 1 (want 1)  no engine image is published yet: call swiftsync_verify_engine_facts with the image id, its verifying key and pin
+PASS  image_id_null            no published engine image id yet
 all cases as expected

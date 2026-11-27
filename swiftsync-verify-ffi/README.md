@@ -8,11 +8,13 @@ cargo build --release --manifest-path swiftsync-verify-ffi/Cargo.toml
 cd swiftsync-verify-ffi && cc -O2 -Iinclude test.c target/release/libswiftsync_verify.a -lpthread -ldl -lm -o test && ./test
 ```
 
-`test.c` runs 16 cases of the vectors through the C ABI, CI's `adversarial.yml` among them: the real mainnet 1..200
-proof of the v0.24.0 image `8888d59c` (RISC Zero 3.1.0; `DEMO`), the same proof as signet, against v0.23.0's image
-`863c9ce3`, and with a flipped bit (all `FAIL`), v0.23.0's RISC Zero 3.0.5 proof (`FAIL`: 3.1.0 refuses every 3.0.x
-receipt), three malformed copies of the real proof (`FAIL`, no abort: fuzz round 11-17), and refusals. `test.out` is
-the result at this commit. The
+`test.c` runs 18 cases through the C ABI: the vectors' engine proof of mainnet 1..200 under its image id and pinned
+key (`DEMO`), the same proof as signet, against another image id, with no image id, with a key whose SHA-256 is not the
+pin, with no key, five one-change copies (proof bit, journal bit, byte appended, cut, a proof length past the end), the
+bundles (one `DEMO`, a header that lies, version 1), refusals, `swiftsync_verify` without a key (no engine image is
+published yet: `FAIL` with the reason) and `swiftsync_image_id` (NULL until one is). `test_engine.c` checks a coin fact
+on the same proof. Engine proofs only since the cutover (27.11.2026); RISC Zero receipts are checked with v0.27.1's
+library. `test.out` is the result at this commit. The
 result struct
 returns the proven height, tip hash (internal order), chainwork (LE) and UTXO count, so the caller can do step 7
 (the tip is on its own chain).

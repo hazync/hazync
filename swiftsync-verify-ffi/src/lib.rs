@@ -53,8 +53,7 @@ pub unsafe extern "C" fn swiftsync_verify_facts(receipt: *const u8, receipt_len:
     verify_inner(receipt, receipt_len, network, now, image_hex, anchor_json, None, facts_json, expect, out, msg, msg_len)
 }
 
-/// As `swiftsync_verify_facts`, for an engine (OpenVM) proof file (engine/VERIFIER.md; a build with the `engine`
-/// feature): `vk`/`vk_len` is the image's verifying key file and `vk_pin` its 32-byte SHA-256, which the caller must hold
+/// As `swiftsync_verify_facts`, with the engine image's key (engine/VERIFIER.md): `vk`/`vk_len` is the image's verifying key file and `vk_pin` its 32-byte SHA-256, which the caller must hold
 /// as the image's PUBLISHED pin (never computed from the key it was handed: OpenVM's verifier trusts the key it gets).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -103,14 +102,19 @@ unsafe fn verify_inner(receipt: *const u8, receipt_len: usize, network: u8, now:
         }
     };
     let receipt = slice(receipt, receipt_len);
-    let rep = if let Some((vk, pin)) = key {
-        match engine_verify(&Inputs { receipt, image: image.with_node2(), anchor, now }, vk, pin) {
-            Ok(r) => r,
-            Err(e) => return fail(&e),
+    // Engine proofs only (engine/CUTOVER.md). The key: the caller's (swiftsync_verify_engine_facts), accepted only as
+    // exactly the bytes its pin names, else the record's; no engine image is published yet, so without the caller's
+    // key every proof is refused, with the reason.
+    if let Some((vk, pin)) = key {
+        use sha2::Digest as _;
+        if <[u8; 32]>::from(sha2::Sha256::digest(vk)) != pin {
+            return fail("the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)");
         }
-    } else if swiftsync_verify::is_engine_proof(receipt) {
-        return fail("an engine (OpenVM) proof: call swiftsync_verify_engine_facts with its verifying key and pin");
-    } else if receipt.starts_with(BUNDLE_MAGIC) {
+        image = image.with_engine_key(vk.to_vec());
+    } else if swiftsync_verify::is_engine_proof(receipt) && image.engine_key.is_none() {
+        return fail("no engine image is published yet: call swiftsync_verify_engine_facts with the image id, its verifying key and pin");
+    }
+    let rep = if receipt.starts_with(BUNDLE_MAGIC) {
         match Bundle::decode(receipt) {
             Ok(b) => check_bundle(&b, image, anchor, now),
             Err(e) => return fail(&e),
@@ -194,17 +198,15 @@ unsafe fn verify_inner(receipt: *const u8, receipt_len: usize, network: u8, now:
     }
 }
 
-static IDS: [&str; 2] = [
-    "46666b6f7e3d1c1c3fa599a9bcf12209e0730d6a2fb747b8bf30fac667e43c1c\0",
-    "01a80f17469dfd75869534ffdbf3105e55438afc77329e818eca7044b4129be7\0",
-];
+/// The published engine image ids, NUL-terminated, by network (0 mainnet, 1 signet): none until the Stage 4 freeze.
+static IDS: [Option<&str>; 2] = [None, None];
 
 /// See include/swiftsync_verify.h.
 #[no_mangle]
 pub extern "C" fn swiftsync_image_id(network: u8) -> *const c_char {
     match IDS.get(network as usize) {
-        Some(s) => s.as_ptr() as *const c_char,
-        None => std::ptr::null(),
+        Some(Some(s)) => s.as_ptr() as *const c_char,
+        _ => std::ptr::null(),
     }
 }
 
@@ -213,7 +215,9 @@ mod tests {
     #[test]
     fn ids_match_the_library() {
         for (k, n) in ["mainnet", "signet"].iter().enumerate() {
-            assert_eq!(super::IDS[k].trim_end_matches('\0'), swiftsync_verify::Image::by_network(n).unwrap().method_id_hex);
+            let rec = swiftsync_verify::Image::by_network(n).unwrap().method_id_hex;
+            assert_eq!(super::IDS[k].map(|s| s.trim_end_matches('\0')).unwrap_or(""), rec);
+            assert_eq!(super::swiftsync_image_id(k as u8).is_null(), rec.is_empty());
         }
     }
 }
@@ -292,12 +296,12 @@ mod trie_tests {
         st.apply(&[], &[(coin_key(&a, &txid, 0), None, 500)]).unwrap();
         st.height = 1;
         let mut cs = swiftsync_verify::genesis_anchor(&swiftsync_verify::IMAGES[0]);
-        cs.profile |= swiftsync_verify::PROFILE_COINLOG | swiftsync_verify::PROFILE_TRIE;
+        cs.profile |= swiftsync_verify::PROFILE_COINLOG | swiftsync_verify::PROFILE_TRIE | swiftsync_verify::PROFILE_NODE2;
         cs.height = 1;
         cs.trie_root = libzync::coinlog::h_of(&st.root());
         // an ABSENT answer (vout 5) needs no creating transaction; one the trie holds does (TrieFact::origin)
         let f = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(5)).unwrap();
-        assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &f).is_ok());
+        { let r = trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &f); assert!(r.is_ok(), "{r:?}"); }
         let mut q = f.clone();
         q.expect = None;
         assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &q).unwrap_err().contains("without"));
@@ -307,14 +311,4 @@ mod trie_tests {
         let held = swiftsync_verify::make_trie_fact(&st, "coin", &a, Some(&disp), Some(0)).unwrap();
         assert!(trie_check(&cs, swiftsync_verify::pin::NO_UNDO, &held).unwrap_err().contains("origin"));
     }
-}
-
-#[cfg(feature = "engine")]
-fn engine_verify(inp: &Inputs, vk: &[u8], pin: [u8; 32]) -> Result<swiftsync_verify::Report, String> {
-    Ok(swiftsync_verify::verify_engine(inp, &swiftsync_verify::EngineKey { bytes: vk, pin }))
-}
-
-#[cfg(not(feature = "engine"))]
-fn engine_verify(_: &Inputs, _: &[u8], _: [u8; 32]) -> Result<swiftsync_verify::Report, String> {
-    Err("an engine (OpenVM) proof: this library was built without engine support (--features engine)".into())
 }

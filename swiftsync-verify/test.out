@@ -1,52 +1,68 @@
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain; chain identity NOT checked: compare block 200 = 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 with a source you trust (--mempool, --expect, --bitcoin-cli)
+exit=2 PASS
+== env MODE=good swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --bitcoin-cli <tmp>/cli swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
+exit=2 PASS
+== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --bitcoin-cli <tmp>/cli swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] your node's block 200 is the proven tip 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 (node: 0000000000000000000000000000000000000000000000000000000000000abc)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env MODE=good swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.idEUN2QUU3/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+== env MODE=err swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --bitcoin-cli <tmp>/cli swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] your node's chain (<tmp>/cli getblockhash 200: error code: -8)
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== env MODE=fork swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --bitcoin-cli /tmp/tmp.idEUN2QUU3/cli experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --expect 200:000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 2)
+SWIFTSYNC_VERIFY_DEMO: the chain and its coin log: a valid chain from genesis, but below Core's minimum chainwork or the pinned checkpoint for mainnet: not shown to be the network's chain
+exit=2 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --expect 200:0000000000000000000000000000000000000000000000000000000000000abc swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] --expect: block 200 is 0000000000000000000000000000000000000000000000000000000000000abc; the proof's tip is block 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] receipt verifies against image 067822b958f7cc86d67ad9f37153b99c29664072a8e90a79a2d9af4dc71f5b36 (signet): claim digest does not match the expected digest ca0aa75905f3630ab92f7e5fdf8ad96b0a08c38c5789cc711a557c29239fb1c8; expected dda820799187684c1a03703c17852b1a1db000751c185033c2a1f52cdfb45c64
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+== swiftsync-verify/target/release/swiftsync-verify --network signet --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] profile 0xf1 == 0xf5 (libzync, scripts checked, mainnet, coin log, counting trie, live-coin hash, node format 2)
+  [FAIL] anchor_id is genesis
 SWIFTSYNC_VERIFY_FAIL: 2 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --coinlog --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
+== swiftsync-verify/target/release/swiftsync-verify swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] no engine image is published for mainnet yet: give the image id and its key
 SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
-SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: --image needs --vk: the verifying key from that image's build
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-  [FAIL] journal is a ChainState (Found an Option discriminant that wasn't 0 or 1)
-SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+== swiftsync-verify/target/release/swiftsync-verify --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: --vk needs --image: the id of the image you rebuilt, whose key it is
 exit=1 PASS
-== env RISC0_DEV_MODE=1 swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: panicked at /home/defenwycke/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/risc0-zkvm-3.0.5/src/lib.rs:214:9:\nzkVM: Inconsistent settings -- please resolve. The RISC0_DEV_MODE environment variable is set but dev mode has been disabled by feature flag.
-exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /tmp/tmp.idEUN2QUU3/junk.rcpt (expect exit 1)
-  [FAIL] the receipt file decodes (invalid value: integer `184469182`, expected variant index 0 <= i < 4)
-SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
-exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json /nonexistent.rcpt (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: "/nonexistent.rcpt": No such file or directory (os error 2)
-exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image xyz experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --image xyz --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: --image "xyz": not 64 hex digits
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json --now 99999999999 experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt (expect exit 1)
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine_key_flipped.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the pinned key 76351aa196cb79e4a11fed6476df660a57058772e0cb6bddcdd6d627b012cd7f: the STARK does not verify against the image's key
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+exit=1 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine_proof_flipped.hze (expect exit 1)
+  [FAIL] engine proof verifies against image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (mainnet) under the pinned key b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a: the proof does not decode
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+exit=1 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk <tmp>/junk.hze (expect exit 1)
+  [FAIL] the file is an engine (OpenVM) proof (HZE1); a RISC Zero receipt is checked with v0.27.1's verifier
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+exit=1 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk /nonexistent.hze (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: "/nonexistent.hze": No such file or directory (os error 2)
+exit=1 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --now 1231006505 swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
+  [FAIL] time-too-new: largest block time 1231753120 <= this clock 1231006505 + 7200 s
+SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed
+exit=1 PASS
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --now 99999999999 swiftsync-verify/vectors/mainnet_1_200_engine.hze (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: --now may only set the clock back
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt experimental/libzync-bench/signet/signet2600.hints (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the receipt alone
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze swiftsync-verify/vectors/signet2600.hints (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the proof alone
 exit=1 PASS
-== swiftsync-verify/target/release/swiftsync-verify --network signet --product --image c3501ac900743bbc911c8f6dedcd71f1ee53fe4bea4f1cbc9726324478e63dae --anchor experimental/libzync-bench/signet/gpu_r4/anchor_effective.json experimental/libzync-bench/signet/gpu_r4/block_2600.rcpt - (expect exit 1)
-SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the receipt alone
+== swiftsync-verify/target/release/swiftsync-verify --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk swiftsync-verify/vectors/mainnet_1_200_engine.hze - (expect exit 1)
+SWIFTSYNC_VERIFY_FAIL: no proof takes a SwiftSync hints file any more (design B is retired, E2): give the proof alone
 exit=1 PASS
-swiftsync-verify test.sh: 14/14 as expected
+swiftsync-verify test.sh: 19/19 as expected

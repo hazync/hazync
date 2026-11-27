@@ -8,7 +8,7 @@ m = json.load(open(os.path.join(here, "manifest.json")))
 bad = 0
 for c in m["cases"]:
     r = subprocess.run([verifier, *c["args"]], cwd=here, capture_output=True, text=True,
-                       env={k: v for k, v in os.environ.items() if k != "RISC0_DEV_MODE"})
+                       )
     last = (r.stdout.strip().splitlines() or [""])[-1]
     ok = r.returncode == c["expect_exit"]
     bad += not ok

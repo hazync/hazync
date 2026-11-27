@@ -1,4 +1,4 @@
-//! `swiftsync-verify [--network mainnet|signet] [--image <hex>] [--anchor state.json] [--bitcoin-cli "<command>"] <receipt>`
+//! `swiftsync-verify [--network mainnet|signet] --image <hex> --vk <key file> [--anchor state.json] [--bitcoin-cli "<command>"] <proof.hze>`
 //!
 //! Checks a libzync chain proof (the chain from genesis, its coin log, and with the product image its counting trie
 //! and live-coin hash) and the facts given with it, and prints every check. Exit 0 `SWIFTSYNC_VERIFY_OK`, 2
@@ -11,11 +11,10 @@
 //! and that block's chainwork, and fails unless both equal the proof's. Without it, the tip and work are printed
 //! for you to compare, and the verdict line says the step was not run.
 //!
-//! `--image <hex>` replaces the built-in image id for the network: the id you rebuilt yourself (§5 step 9).
-//!
-//! An engine (OpenVM) proof file (`HZE1`, engine/VERIFIER.md; a build with `--features engine`): `--vk <file>` is the
-//! image's verifying key, which must be PINNED (OpenVM's verifier trusts the key it is given). No engine image is
-//! published yet, so for now only your own rebuild pins one: `--image <id> --vk <that build's key>`.
+//! The proof is an engine (OpenVM) proof file (`HZE1`, engine/VERIFIER.md); a RISC Zero receipt is checked with
+//! v0.27.1's verifier. `--image <hex>` is the engine image id (one you rebuilt, §5 step 9) and `--vk <file>` its
+//! verifying key, which is PINNED (OpenVM's verifier trusts the key it is given). No engine image is published yet
+//! (the Stage 4 freeze), so both are needed: the key is taken as your own build's and pinned as given.
 //!
 //! `--handover <image hex>:<first height>` (repeat, oldest first): the lineage an image pins, for a reader who rebuilt
 //! one that pins any (docs/libzync/HANDOVER.md).
@@ -28,25 +27,25 @@
 //! - `--bitcoin-cli` (step 7 above), your own node.
 //! A failed identity check is FAIL. With none of them the verdict says the identity was NOT checked and prints the hash.
 //!
-//! `--coinlog`, `--product`: kept for old command lines. The published images already are the product build (coin log,
-//! counting trie, live-coin hash; profile bits 4-6), and the summary follows the proven profile, so neither is needed.
+//! `--coinlog`, `--product`: kept for old command lines. The engine image is the product build (coin log, counting
+//! trie, live-coin hash; profile bits 4-6), and the summary follows the proven profile, so neither is needed.
 //! `--trie <fact.json>` (repeat): a counting-trie fact at the tip (coin unspent / spent by / absent, a script's balance,
 //! its complete history), as `zync-path trie` writes it; checked against the verified state's trie root.
 //!
 //! A proof whose chainwork is below Core's `nMinimumChainWork` for the network is at best DEMO (exit 2): a valid chain
 //! from genesis, but a low-work fork costs little to mine, so it is no evidence of the network's chain.
 //!
-//! `<receipt>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
-//! against the verified result. `swiftsync-verify [flags] bundle <receipt> <out.sspf>` writes one,
-//! and refuses a receipt that does not verify.
+//! `<proof.hze>` may also be a proof bundle (`.sspf`, docs/libzync/PROOF_BUNDLE.md); its header is then checked
+//! against the verified result. `swiftsync-verify [flags] bundle <proof.hze> <out.sspf>` writes one, and refuses a
+//! proof that does not verify.
 
 use std::process::{exit, Command};
 use swiftsync_verify::{check_bundle, hex, verify, Bundle, ChainState, Image, Inputs, Verdict, BUNDLE_MAGIC};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: swiftsync-verify [--network mainnet|signet] [--image <hex>] [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--expect <height>:<block hash>] [--mempool | --mempool-url <url>] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <receipt|bundle.sspf>");
-    eprintln!("       swiftsync-verify [--network ...] [--image <hex>] bundle <receipt> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
+    eprintln!("usage: swiftsync-verify [--network mainnet|signet] --image <hex> --vk <key file> [--coinlog] [--anchor state.json] [--bitcoin-cli \"<command>\"] [--now <unix seconds, earlier than the clock>] [--product] [--expect <height>:<block hash>] [--mempool | --mempool-url <url>] [--coin <fact.json>]... [--journey <journey.json>]... [--trie <fact.json>]... <proof.hze|bundle.sspf>");
+    eprintln!("       swiftsync-verify [--network ...] --image <hex> --vk <key file> bundle <proof.hze> <out.sspf>   (OK, or DEMO for low work only; never from an anchor)");
     exit(1);
 }
 
@@ -107,7 +106,7 @@ fn main() {
                     Some(x) => swiftsync_verify::hex32(&x.to_lowercase()).unwrap_or_else(|| bad()),
                 };
                 handovers.push(swiftsync_verify::Handover {
-                    image: swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(id)),
+                    image: swiftsync_verify::words(&id),
                     first_height: h.parse().unwrap_or_else(|_| bad()),
                     verifier,
                 });
@@ -133,6 +132,18 @@ fn main() {
     if !handovers.is_empty() {
         image = image.with_lineage(handovers);
     }
+    match (&image_hex, &vk_path) {
+        (Some(_), Some(vk)) => {
+            use sha2::Digest as _;
+            let bytes = std::fs::read(vk).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(vk))));
+            let pin: [u8; 32] = sha2::Sha256::digest(&bytes).into();
+            println!("  verifying key {} taken as your own build's (pin {})", esc(vk), hex(&pin));
+            image = image.with_engine_key(bytes);
+        }
+        (None, Some(_)) => fail("--vk needs --image: the id of the image you rebuilt, whose key it is"),
+        (Some(_), None) if image.engine_key.is_none() => fail("--image needs --vk: the verifying key from that image's build"),
+        _ => {}
+    }
     if product {
         image = image.with_product();
     } else if coinlog {
@@ -141,7 +152,7 @@ fn main() {
     let read = |p: &str| -> Vec<u8> { std::fs::read(p).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(p)))) };
     // The retired hints-file argument: say so rather than print the usage.
     if files.iter().any(|f| f == "-" || f.ends_with(".hints")) {
-        fail("no proof takes a SwiftSync hints file any more (design B is retired, E2): give the receipt alone");
+        fail("no proof takes a SwiftSync hints file any more (design B is retired, E2): give the proof alone");
     }
     let anchor_given = anchor.is_some();
     let anchor: Option<ChainState> = anchor.map(|p| {
@@ -169,8 +180,6 @@ fn main() {
         let b = Bundle::decode(&receipt_bytes).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(receipt))));
         println!("  {} is a proof bundle; its header is checked against the verified result", esc(receipt));
         check_bundle(&b, image, anchor, now)
-    } else if swiftsync_verify::is_engine_proof(&receipt_bytes) {
-        engine_verify(&receipt_bytes, image, image_hex.is_some(), vk_path.as_deref(), anchor, now, &read)
     } else {
         verify(&Inputs { receipt: &receipt_bytes, image, anchor, now })
     };
@@ -200,7 +209,7 @@ fn main() {
             match swiftsync_verify::parse_expect(e) {
                 Some((h, x)) => {
                     rep.checks.push((swiftsync_verify::identity_matches(h, &x, cs.height, &cs.tip_hash), format!("--expect: block {h} is {x}; the proof's tip is block {} {tip}{}",
-                        cs.height, if h != cs.height { " (only the tip height can be checked from the receipt alone)" } else { "" })));
+                        cs.height, if h != cs.height { " (only the tip height can be checked from the proof alone)" } else { "" })));
                     tip_checked = true;
                 }
                 None => rep.checks.push((false, format!("--expect {e:?}: want <height>:<64 hex digits>"))),
@@ -346,30 +355,4 @@ fn display(h: &[u8; 32]) -> String {
 /// cum_work (32 bytes LE) as `getblockheader` prints chainwork: 64 hex digits, big-endian.
 fn work_hex(w: &[u8; 32]) -> String {
     display(w)
-}
-
-/// An engine (OpenVM) proof file (engine/VERIFIER.md): `--vk <file>` is the image's verifying key. Its PIN (SHA-256 of
-/// the file) authenticates it: OpenVM's verifier trusts the key it is given. No engine image is published yet, so the
-/// only pin is the reader's own: with `--image <id>` (an image you rebuilt), the key file from that build is taken as
-/// yours and pinned as given; a published engine image's pin will come from its record.
-#[cfg(feature = "engine")]
-fn engine_verify(file: &[u8], image: &'static Image, own_image: bool, vk: Option<&str>, anchor: Option<ChainState>, now: u64,
-                 read: &dyn Fn(&str) -> Vec<u8>) -> swiftsync_verify::Report {
-    use sha2::Digest as _;
-    let Some(vk) = vk else { fail("an engine proof: give the image's verifying key with --vk <file>") };
-    if !own_image {
-        fail("an engine proof: no engine image is published yet, so its key cannot be pinned from a record; give the id of \
-              the image you rebuilt with --image <id> and that build's key with --vk");
-    }
-    let bytes = read(vk);
-    let pin: [u8; 32] = sha2::Sha256::digest(&bytes).into();
-    println!("  engine proof; verifying key {} taken as your own build's (pin {})", esc(vk), swiftsync_verify::hex(&pin));
-    swiftsync_verify::verify_engine(&Inputs { receipt: file, image: image.with_node2(), anchor, now },
-                                    &swiftsync_verify::EngineKey { bytes: &bytes, pin })
-}
-
-#[cfg(not(feature = "engine"))]
-fn engine_verify(_: &[u8], _: &'static Image, _: bool, _: Option<&str>, _: Option<ChainState>, _: u64,
-                 _: &dyn Fn(&str) -> Vec<u8>) -> swiftsync_verify::Report {
-    fail("an engine (OpenVM) proof: this verifier was built without engine support (cargo build --features engine)")
 }

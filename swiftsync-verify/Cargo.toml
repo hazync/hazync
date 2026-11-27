@@ -34,20 +34,17 @@ path = "src/zync_serve.rs"
 # 503, never an abort): cargo build --profile zync-serve --features tip --bin zync-serve. The core verifier and its
 # .wasm never enable it.
 tip = ["libzync/reader"]
-# engine (OpenVM) proofs: `verify_engine` (engine/VERIFIER.md). Off until the wasm build carries OpenVM's wasm patch;
-# the default once the RISC Zero front is removed.
-engine = ["dep:hazync-engine-verify"]
 
 [dependencies]
-# disable-dev-mode: RISC0_DEV_MODE can never make this verifier accept a fake receipt (review round 3).
-risc0-zkvm = { version = "=3.1.0", default-features = false, features = ["std", "disable-dev-mode"] }
+# The guests' journal encoding, Journal and the id word layout, with no zkVM crate (engine/CUTOVER.md C1).
+hazync-journal = { path = "../engine/journal" }
 # The hint hash (§3 of the proposal) from the crate the prover uses; without default features it is sha2 only.
 libzync = { path = "../libzync", default-features = false, features = ["tls"] }   # per-thread node format (COINLOG.md §2)
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-bincode = "1"
 sha2 = "0.10"
-hazync-engine-verify = { path = "../engine/verify-core", optional = true }
+# engine (OpenVM) proofs, the only kind since the cutover (engine/VERIFIER.md, engine/CUTOVER.md)
+hazync-engine-verify = { path = "../engine/verify-core" }
 
 [profile.release]
 opt-level = "z"

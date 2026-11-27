@@ -1,6 +1,7 @@
 /* swiftsync_verify.h: check a libzync chain proof (the chain from genesis, its coin log, and with the product image its
  * counting trie and live-coin hash) and facts about it, from C or C++. The same checks as the swiftsync-verify CLI;
  * link libswiftsync_verify.a (and -lpthread -ldl -lm). Thread-safe; no global state; never aborts on bad input.
+ * Engine (OpenVM) proofs only since the cutover (27.11.2026): a RISC Zero receipt is checked with v0.27.1's library.
  * (E2 retired the SwiftSync hints file: no proof takes one, and the hints arguments are gone from both calls.) */
 #ifndef SWIFTSYNC_VERIFY_H
 #define SWIFTSYNC_VERIFY_H
@@ -24,13 +25,15 @@ typedef struct {
     uint8_t  tip_hash[32];   /* the proven block at H, internal byte order (as uint256 holds it) */
     uint8_t  chainwork[32];  /* cumulative work at H, 32 bytes little-endian (as arith_uint256 serialises) */
     uint64_t utxo_leaves;    /* coins in the UTXO set at H */
-    uint32_t profile;        /* bit 0 libzync, 1 scripts NOT checked (assumevalid), 2 signet, 4 coin log, 5 trie, 6 live-coin hash */
+    uint32_t profile;        /* bit 0 libzync, 1 scripts NOT checked (assumevalid), 2 signet, 4 coin log, 5 trie, 6 live-coin hash, 7 node format 2 */
 } swiftsync_result;
 
-/* Verify `receipt` (a .rcpt receipt or a .sspf bundle).
+/* Verify `receipt` (an engine proof file, .hze, or a .sspf bundle) under the image's PUBLISHED key. No engine image is
+ * published yet (the Stage 4 freeze), so this call refuses every proof, with the reason; until then use
+ * swiftsync_verify_engine_facts with your own build's image id and key.
  *   network:     SWIFTSYNC_NET_*, OR SWIFTSYNC_IMG_COINLOG / SWIFTSYNC_IMG_PRODUCT.
  *   now:         the caller's clock, unix seconds (for time-too-new, §5 step 11).
- *   image_hex:   NULL for the built-in image id, or 64 hex digits (an id you rebuilt, §5 step 9).
+ *   image_hex:   NULL for the published image id, or 64 hex digits (an id you rebuilt, §5 step 9).
  *   anchor_json: NULL for genesis, or a ChainState JSON; the result is then at best SWIFTSYNC_VERIFY_DEMO.
  *   out:         filled under OK and DEMO only (under FAIL its fields would be the prover's word); may be NULL.
  *   msg/msg_len: optional buffer for a NUL-terminated description of the first failed check.
@@ -62,17 +65,18 @@ int swiftsync_verify_facts(const uint8_t* receipt, size_t receipt_len,
                            uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                            const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
 
-/* As swiftsync_verify_facts, for an ENGINE (OpenVM) proof file (`HZE1`, engine/VERIFIER.md; a library built with the
- * `engine` feature). vk/vk_len: the image's verifying key file. vk_pin: 32 bytes, SHA-256 of that file, which you must
- * hold as the image's PUBLISHED pin: never compute it from the key you were handed, because OpenVM's verifier trusts
- * the key it is given (the image id does not authenticate a key). out->profile has bit 7 (node format 2). An engine
- * proof given to swiftsync_verify / swiftsync_verify_facts is FAIL with a message saying to call this. */
+/* As swiftsync_verify_facts, with the image's key (an engine proof file `HZE1` or a .sspf bundle, engine/VERIFIER.md).
+ * image_hex is required. vk/vk_len: the image's verifying key file. vk_pin: 32 bytes, SHA-256 of that file, which you
+ * must hold as the image's PUBLISHED pin (or your own build's): never compute it from the key you were handed, because
+ * OpenVM's verifier trusts the key it is given (the image id does not authenticate a key). A key whose SHA-256 is not
+ * vk_pin is FAIL. out->profile has bit 7 (node format 2). */
 int swiftsync_verify_engine_facts(const uint8_t* proof, size_t proof_len,
                                   uint8_t network, uint64_t now, const char* image_hex, const char* anchor_json,
                                   const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin,
                                   const char* facts_json, const char* expect, swiftsync_result* out, char* msg, size_t msg_len);
 
-/* The built-in image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network. Static storage. */
+/* The published engine image id for `network`, as 64 hex digits and a NUL; NULL for an unknown network, and for every
+ * network until the Stage 4 freeze publishes one. Static storage. */
 const char* swiftsync_image_id(uint8_t network);
 
 #ifdef __cplusplus

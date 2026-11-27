@@ -11,10 +11,11 @@
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet; | 0x10 coin-log image, | 0x20 product image]`
 //! `[u64 now, unix seconds][u32 n][receipt or .sspf bundle][u32 n][anchor JSON, n = 0 for genesis]`
 //! `[u32 n][image id hex, n = 0 for the built-in id]`. The page supplies `now` because WebAssembly has no clock.
-//! Network bit 0x40 (a build with the `engine` feature): the proof is an engine (OpenVM) proof file, and two chunks
-//! follow the image id: `[u32 n][verifying key file][u32 32][the key's pin: SHA-256 of that file]`. The pin is a
-//! constant the page is published with, never computed from the key it fetched (engine/VERIFIER.md: OpenVM's verifier
-//! trusts the key it is given).
+//! Engine (OpenVM) proofs only since the cutover (27.11.2026). Network bit 0x40: two chunks follow the image id,
+//! `[u32 n][verifying key file][u32 32][the key's pin: SHA-256 of that file]`; a key whose SHA-256 is not the pin is
+//! refused. The pin is a constant the page is published with, never computed from the key it fetched
+//! (engine/VERIFIER.md: OpenVM's verifier trusts the key it is given). No engine image is published yet, so a frame
+//! without the key is refused, with the reason.
 //!
 //! The JSON always has `verdict` ("ok", "demo" or "fail", the CLI's 0 / 2 / 1) and `checks`. There is no step 7
 //! here (a browser has no node); the page shows the tip and work for the reader to compare.
@@ -154,13 +155,16 @@ fn run_base(b: Base, lineage_txt: &[u8]) -> Result<(Report, &'static Image), Str
     } else {
         Some(serde_json::from_slice(anchor_json).map_err(|e| format!("anchor is not a ChainState: {e}"))?)
     };
-    let rep = if let Some((vk, pin)) = key {
-        // an engine image is node format 2 (profile bit 7), what every engine guest computes
-        image = image.with_node2();
-        engine_verify(&Inputs { receipt, image, anchor, now }, vk, pin)?
-    } else if swiftsync_verify::is_engine_proof(receipt) {
-        return Err("an engine (OpenVM) proof: give its verifying key and pin (network bit 0x40)".into());
-    } else if receipt.starts_with(BUNDLE_MAGIC) {
+    if let Some((vk, pin)) = key {
+        use sha2::Digest as _;
+        if <[u8; 32]>::from(sha2::Sha256::digest(vk)) != pin {
+            return Err("the verifying key is not the image's pinned key (its SHA-256 is not the pin)".into());
+        }
+        image = image.with_engine_key(vk.to_vec());
+    } else if image.engine_key.is_none() {
+        return Err("no engine image is published yet: give the image id, its verifying key and pin (network bit 0x40)".into());
+    }
+    let rep = if receipt.starts_with(BUNDLE_MAGIC) {
         check_bundle(&Bundle::decode(receipt)?, image, anchor, now)
     } else {
         verify(&Inputs { receipt, image, anchor, now })
@@ -286,7 +290,7 @@ pub extern "C" fn verify_facts(ptr: *mut u8, len: usize) -> *const u8 {
     }
 }
 
-/// The built-in image id for a network code (0 mainnet, 1 signet), for the page to display.
+/// The published engine image id for a network code (0 mainnet, 1 signet), for the page to display; empty until one is.
 #[no_mangle]
 pub extern "C" fn image_id(network: u32) -> *const u8 {
     ret(match network {
@@ -313,16 +317,6 @@ mod frame_tests {
         assert_eq!(f.take(8).unwrap().len(), 8);
         assert!(f.take(1).is_err());
     }
-}
-
-#[cfg(feature = "engine")]
-fn engine_verify(inp: &Inputs, vk: &[u8], pin: [u8; 32]) -> Result<Report, String> {
-    Ok(swiftsync_verify::verify_engine(inp, &swiftsync_verify::EngineKey { bytes: vk, pin }))
-}
-
-#[cfg(not(feature = "engine"))]
-fn engine_verify(_: &Inputs, _: &[u8], _: [u8; 32]) -> Result<Report, String> {
-    Err("an engine (OpenVM) proof: this module was built without engine support".into())
 }
 
 /// No random source in this module (OpenVM's VM crate links rand; verification never draws from it: its challenges
