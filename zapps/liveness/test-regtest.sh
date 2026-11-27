@@ -38,7 +38,8 @@ if tip is None:
 print(f"{s},value={c['value_sat']},script={c['spk']},created={c['height']},coinbase={int(c['coinbase'])}")
 P
 }
-prove() { $V prove $G/receipts/$1/history.bin $2 $3 $4 --blocks $T/blocks_$1 > $T/$5.hex || { echo "prove $*: FAILED"; BAD=$((BAD+1)); }; }
+# the harness's receipts are RISC Zero proofs: coin log node format 1
+prove() { $V prove $G/receipts/$1/history.bin $2 $3 $4 --blocks $T/blocks_$1 --node-format 1 > $T/$5.hex || { echo "prove $*: FAILED"; BAD=$((BAD+1)); }; }
 prove a 112 tip $X xa; prove b 113 tip $X xb; prove a 112 tip $Y ya; prove b 113 tip $Y yb
 prove a 112 110 $X xa110; prove a 112 tip $RC rca; prove a 112 tip $L1 l1a
 # the committed vector (the WASM and C ABI controls read it) is what the prover makes from the committed history

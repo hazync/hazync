@@ -74,7 +74,8 @@ case_ "an --expect your node contradicts"             1 --bitcoin-cli "$T/node" 
 if true; then
   # the producer: the same bytes again, and no proof for an outpoint that never existed
   B=$D/../../../prover/testdata/libzync/mainnet
-  "$V" prove "$D/mainnet_1_200_history.bin" 200 tip "$T9:0" --blocks "$B" > "$T/p.hex" 2>/dev/null
+  # the RISC Zero chain's history: node format 1 (the default, 2, is the engine chain's)
+  "$V" prove "$D/mainnet_1_200_history.bin" 200 tip "$T9:0" --blocks "$B" --node-format 1 > "$T/p.hex" 2>/dev/null
   if cmp -s <(tr -d '\n' < "$T/p.hex") <(tr -d '\n' < "$D/b9_0_at200.hex"); then pass=$((pass+1)); echo "ok   zapp-liveness prove reproduces b9_0_at200.hex"
   else fail=$((fail+1)); echo "FAIL zapp-liveness prove differs"; fi
   if "$V" prove "$D/mainnet_1_200_history.bin" 200 tip "$T170:2" --blocks "$B" > /dev/null 2>&1; then fail=$((fail+1)); echo "FAIL zapp-liveness prove made a proof for a missing output"

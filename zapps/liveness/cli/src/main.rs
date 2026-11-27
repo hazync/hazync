@@ -12,12 +12,16 @@
 //!       and `--bitcoin-cli` (your node; its chainwork is compared too) are the chain-identity sources every zAPP CLI
 //!       takes (zapp-common), as the core verifier's; without one the verdict is at most DEMO. Exit 0 OK, 2 DEMO, 1 FAIL.
 //!   zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>]
+//!                       [--node-format 1|2]
 //!       a liveness proof, hex: the outpoint unspent after <at>, or spent and by whom
-//!   zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli "<cmd>")
+//!   zapp-liveness serve <history.bin> <addr:port> (--blocks <dir> | --bitcoin-cli "<cmd>") [--node-format 1|2]
 //!       GET /tip, GET /live/<at|tip>/<txid>/<vout>: {"proof": hex, "answer": "unspent" | "spent:<h>:<tx>:<vin>"}
 //!       (the answer is the server's word until the client checks the proof)
 //! ```
 //! ⚠ `prove` and `serve` replay the whole history in memory, as zync-path / zync-serve do.
+//! `--node-format`: the coin log node format of the chain the history is of (COINLOG.md §2): 2 (the default) for a chain
+//! whose profile carries bit 7 (the engine chain), 1 for the RISC Zero chain. A history.bin does not say which, and a
+//! path in the wrong format never verifies against that chain's roots.
 
 use libzync::history::{decode_all, Rec};
 use std::io::{BufRead, BufReader, Write};
@@ -57,9 +61,20 @@ fn history(p: &str) -> Vec<Rec> {
 fn positional(a: &[String]) -> Vec<String> {
     let (mut out, mut it) = (Vec::new(), a.iter());
     while let Some(x) = it.next() {
-        if x == "--blocks" || x == "--bitcoin-cli" || x == "--height" { it.next(); } else { out.push(x.clone()); }
+        if x == "--blocks" || x == "--bitcoin-cli" || x == "--height" || x == "--node-format" { it.next(); } else { out.push(x.clone()); }
     }
     out
+}
+
+/// `--node-format 1|2` (default 2), set for this thread before any path is computed.
+fn node_format_arg(a: &[String]) {
+    let f = match a.iter().position(|x| x == "--node-format").map(|i| a.get(i + 1).map(|s| s.as_str())) {
+        None => 2,
+        Some(Some("1")) => 1,
+        Some(Some("2")) => 2,
+        Some(_) => die("--node-format: 1 or 2"),
+    };
+    libzync::coinlog::set_node_format(f);
 }
 
 fn main() {
@@ -156,6 +171,7 @@ fn prove_main(all: &[String]) -> ! {
     let tip = num(1);
     let at = if a[2] == "tip" { tip } else { num(2) };
     let src = coin_source::Source::from_args(all).unwrap_or_else(|| die("prove needs --blocks <dir> or --bitcoin-cli \"<cmd>\""));
+    node_format_arg(all);
     let ask = LivenessAsk::parse(&format!("{}@{at}", a[3])).unwrap_or_else(|e| die(&e));
     let height = all.iter().position(|x| x == "--height").and_then(|i| all.get(i + 1)).map(|h| h.parse().unwrap_or_else(|_| die("--height?")));
     let recs = history(&a[0]);
@@ -194,6 +210,7 @@ fn serve_main(all: &[String]) -> ! {
     let a = positional(all);
     if a.len() != 2 { usage(); }
     let src = coin_source::Source::from_args(all).unwrap_or_else(|| die("serve needs --blocks <dir> or --bitcoin-cli \"<cmd>\""));
+    node_format_arg(all);
     let recs = history(&a[0]);
     let tip = recs.len().checked_sub(1).unwrap_or_else(|| die("empty history")) as u32;
     let l = std::net::TcpListener::bind(&a[1]).unwrap_or_else(|e| die(&format!("{}: {e}", a[1])));
@@ -222,6 +239,8 @@ mod live_tests {
     /// /live against the real mainnet 1..200 history and the repo's block files (moved from zync-serve, 15.11.2026)
     #[test]
     fn live_route() {
+        // the vectors are the RISC Zero chain's (node format 1), as `serve --node-format 1` would serve them
+        libzync::coinlog::set_node_format(1);
         let dir = env!("CARGO_MANIFEST_DIR");
         let recs = decode_all(&std::fs::read(format!("{dir}/../vectors/mainnet_1_200_history.bin")).unwrap()).unwrap();
         let src = coin_source::Source::Dir(format!("{dir}/../../../prover/testdata/libzync/mainnet").into());
