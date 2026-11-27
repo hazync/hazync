@@ -68,7 +68,7 @@ exit=1 PASS
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 163d229d1042186e96cd80747318cee153cc140c55c733ba5b66840dfa45cc99 --headers-vk zapps/headers/tests/data/engine4031/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --max-tip-age 60 <tmp>/tip.json (expect exit 1)
-  [FAIL] the tip's block time 1234465122 is within 60 s of this clock 1795775499
+  [FAIL] the tip's block time 1234465122 is within 60 s of this clock 1795786429
 SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
 exit=1 PASS
 == zapp-deposit --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --allow-demo --no-require-identity <tmp>/core.json (expect exit 1)
@@ -118,4 +118,30 @@ exit=1 PASS
 == zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 <tmp>/junk.json (expect exit 1)
 SWIFTSYNC_VERIFY_FAIL: "<tmp>/junk.json": not a deposit bundle (expected value at line 1 column 1)
 exit=1 PASS
-test_deposit.sh: 33/33 as expected
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_engine.hze --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --history swiftsync-verify/tests/data/engine200/history.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers zapps/headers/tests/data/engine975278/proof.hze --tip-path zapps/headers/tests/data/engine975278/mmr_path_200_tip975278.txt -o <tmp>/whole.json (expect exit 0)
+zapp-deposit build: wrote <tmp>/whole.json (1200114 bytes): tx at position 1 of block 170, 975109 confirmation(s) as of tip 975278 (31 fully validated through 200)
+exit=0 PASS
+== zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --vout 0 --amount 1000000000 --min-depth 975109 --min-validated-depth 31 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/whole.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16, output 0 = 1000000000 sat to 4104ae1a62fe09c5f51b13905f07f06b99a2f7159b2225f374cd378d71302fa28414e7aab37397f554a7df5f142c21c1b7303b8a0626f1bad
+exit=0 PASS
+== zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 975110 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/whole.json (expect exit 1)
+  [FAIL] depth: 975109 confirmation(s) as of tip 975278 >= 975110 asked (31 fully validated, 975078 proof of work only)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e4 <tmp>/whole.json (expect exit 1)
+  [FAIL] chain identity: the tip is block 975278 00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e4 (from a source the caller trusts)
+SWIFTSYNC_VERIFY_FAIL: deposit: 1 check(s) failed
+exit=1 PASS
+== zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 163d229d1042186e96cd80747318cee153cc140c55c733ba5b66840dfa45cc99 --headers-vk zapps/headers/tests/data/engine4031/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --expect 975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3 <tmp>/whole.json (expect exit 1)
+  [FAIL] headers: receipt 1 (an engine proof) verifies against the headers image 163d229d1042186e96cd80747318cee153cc140c55c733ba5b66840dfa45cc99: the proof does not decode
+  [FAIL] the header-chain proof verifies (see the headers: checks)
+SWIFTSYNC_VERIFY_FAIL: deposit: 2 check(s) failed
+exit=1 PASS
+== zapp-deposit --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --min-depth 6 --no-require-identity <tmp>/whole.json (expect exit 0)
+SWIFTSYNC_VERIFY_OK: ACCEPTED: deposit: transaction f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 is in block 170 00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee, 975109 confirmation(s) as of tip 975278 00000000000000000001d
+exit=0 PASS
+== zapp-deposit build --core swiftsync-verify/vectors/mainnet_1_200_engine.hze --image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 --vk swiftsync-verify/vectors/mainnet_1_200_engine.vk --history swiftsync-verify/tests/data/engine200/history.bin --height 170 --block experimental/libzync-bench/deposit/block_170_raw.txt --headers-image 25b32ac5f005f0ec83d9adf15ce6bddcd9a6dd38565dbd2bbbb4ed5315944eec --headers-vk zapps/headers/tests/data/engine975278/vk.bin --txid f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16 --headers zapps/headers/tests/data/engine975278/proof.hze --tip-path zapps/headers/tests/data/engine4031/mmr_path_200_tip4031.txt -o <tmp>/none.json (expect exit 1)
+  [FAIL] BINDING: the core tip 200 000000008f1a7008320c16b8402b7f11e82951f44ca2663caf6860ab2eeef320 is the header chain's block at that height (its MMR path, 11 hashes, leads to a committed peak): the header chain's blocks 0..=200 are the fully validated ones
+zapp-deposit: the bundle does not verify: not written
+exit=1 PASS
+test_deposit.sh: 40/40 as expected

@@ -2,9 +2,9 @@
 # End-to-end test of the deposit-proof zyncAPP CLI zapp-deposit (docs/libzync/DEPOSIT_ZAPP.md) on real ENGINE proofs:
 # `zapp-deposit build` builds bundles for block 170's Satoshi-to-Hal transaction against the engine chain's proof of
 # mainnet 1..200 (swiftsync-verify/vectors), alone and bound to the engine's header chain 0..4,031
-# (zapps/headers/tests/data/engine4031); `zapp-deposit` checks them with the caller's expectations. Both proofs are below
-# Core's minimum work, so the best real verdict is DEMO (exit 2); the unit tests (src/tests.rs) reach OK on a zero-work
-# image. No engine image is published yet: every call gives the image ids and keys. Usage: test_deposit.sh
+# (zapps/headers/tests/data/engine4031) and to the WHOLE header chain 0..975,278 (engine975278); `zapp-deposit` checks
+# them with the caller's expectations. Bound to the whole chain (above Core's minimum work) the verdict is OK (exit 0);
+# otherwise at best DEMO (exit 2). No engine image is published yet: every call gives the image ids and keys. Usage: test_deposit.sh
 # [<zapp-deposit>] (default: cli/target/release). Prints every verdict line and exit code.
 Z=$(realpath "${1:-$(dirname "$0")/cli/target/release/zapp-deposit}")
 cd "$(dirname "$0")/../.." || exit 1
@@ -44,9 +44,9 @@ run 1 $V --txid $T --expect 199:${TIP#*:} $W/core.json
 run 1 $V $HK --txid $T --max-tip-age 60 $W/tip.json
 # the image ids and keys (no engine image is published yet)
 run 1 $Z --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $Z --image $(printf 'ab%.0s' $(seq 32)) --vk $X/mainnet_1_200_engine.vk --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $Z --image $(cat $X/mainnet_1_200_engine.image_id) --vk $X/mainnet_1_200_engine_key_flipped.vk --txid $T --allow-demo --no-require-identity $W/core.json
-run 1 $V --headers-image $(printf 'ab%.0s' $(seq 32)) --headers-vk $H/vk.bin --txid $T --allow-demo --no-require-identity $W/tip.json
+run 1 $Z --image "$(printf 'ab%.0s' $(seq 32))" --vk $X/mainnet_1_200_engine.vk --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $Z --image "$(cat $X/mainnet_1_200_engine.image_id)" --vk $X/mainnet_1_200_engine_key_flipped.vk --txid $T --allow-demo --no-require-identity $W/core.json
+run 1 $V --headers-image "$(printf 'ab%.0s' $(seq 32))" --headers-vk $H/vk.bin --txid $T --allow-demo --no-require-identity $W/tip.json
 run 1 $V --txid $T --network signet $W/core.json
 run 1 $V $W/core.json
 run 1 $V --txid $T /nonexistent.json
@@ -61,5 +61,18 @@ run 1 $V $HK --txid $T --min-depth 6 --bitcoin-cli $W/badnode $W/tip.json
 run 1 $V $HK --txid $T --min-depth 6 --bitcoin-cli $W/nowork $W/tip.json
 run 1 $V $HK --txid $T --min-depth 6 --bitcoin-cli $W/otherwork $W/tip.json
 head -c 500 /dev/urandom > $W/junk.json; run 1 $V --txid $T $W/junk.json
+# bound to the WHOLE header chain 0..975,278 (zapps/headers/tests/data/engine975278, proved 27.11.2026): above Core's
+# minimum work, so OK with the tip from a source the caller trusts; asking past the burial, another tip, the 4,031
+# chain's key for this proof, or the 4,031 chain's path: FAIL; --no-require-identity (the caller compares the tip
+# itself): OK, as documented
+G=zapps/headers/tests/data/engine975278; GK="--headers-image $(cat $G/image_id) --headers-vk $G/vk.bin"
+GTIP=975278:00000000000000000001d951592f7a06f0d24697e4f9c362ae173fced55583e3
+run 0 $MK $GK --txid $T --headers $G/proof.hze --tip-path $G/mmr_path_200_tip975278.txt -o $W/whole.json
+run 0 $V $GK --txid $T --vout 0 --amount 1000000000 --min-depth 975109 --min-validated-depth 31 --expect $GTIP $W/whole.json
+run 1 $V $GK --txid $T --min-depth 975110 --expect $GTIP $W/whole.json
+run 1 $V $GK --txid $T --min-depth 6 --expect 975278:${GTIP: -64:63}4 $W/whole.json
+run 1 $V $HK --txid $T --min-depth 6 --expect $GTIP $W/whole.json
+run 0 $V $GK --txid $T --min-depth 6 --no-require-identity $W/whole.json   # documented: OK without a tip source
+run 1 $MK $GK --txid $T --headers $G/proof.hze --tip-path $H/mmr_path_200_tip4031.txt -o $W/none.json
 echo "test_deposit.sh: $((N-BAD))/$N as expected"
 [ "$N" -gt 0 ] && [ "$BAD" = 0 ]

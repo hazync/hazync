@@ -2,9 +2,10 @@
 
 Status: built 15.11.2026, independently reviewed the same day (no soundness break found), released in v0.27.0 (#743,
 20.11.2026) on RISC Zero receipts; engine (OpenVM) proofs only since 27.11.2026, tested on the engine chain's core proof
-of mainnet 1..200 and the engine header proof of 0..4,031 (both below Core's minimum work, so the tests' best real
-verdict is DEMO). The whole header chain 0..975,278 is proved on the engine (engine/results/zapp_headers), which is
-what lets a bound bundle reach OK (§1, "Whose work counts"); that proof is not a test fixture yet. No image of its own: it checks two proofs that already exist. No engine image is published yet (the
+of mainnet 1..200, alone and bound to the engine header proofs of 0..4,031 (below Core's minimum work: DEMO at best)
+and of the whole chain 0..975,278 (zapps/headers/tests/data/engine975278, proved 27.11.2026). Bound to the whole
+chain, the bundle for block 170's Satoshi-to-Hal transaction is ACCEPTED (OK, exit 0): 975,109 confirmations as of
+tip 975,278, 31 of them fully validated through block 200 (test_deposit.sh, 40 cases). No image of its own: it checks two proofs that already exist. No engine image is published yet (the
 Stage 4 freeze), so every check names the core and header images and their keys (`--image`, `--vk`,
 `--headers-image`, `--headers-vk`). Code: the zAPP's own module `zapps/deposit` (ZYNCAPPS.md §9), on the core verifier
 and the header-chain zAPP (`zapps/headers`) as libraries: `src/lib.rs` (verifier), `zapp-deposit` (CLI), `wasm/`
@@ -235,8 +236,6 @@ first v0.26.0 board run.
 
 ## 8. Open
 
-- OK and `accepted` on real engine proofs: a bundle bound to the engine's whole-chain header proof (proved
-  26.11.2026, not yet a fixture); today only the unit tests reach OK (on a zero-work image).
 - Sizes and times on engine proofs (§7 is RISC Zero's).
 - Where a bridge gets `history.bin`-derived openings at mainnet scale (a path service, like `zync-serve` for coins).
 - On-chain verification, if a contract chain wants it: (b) on the engine, OpenVM's SNARK path, review, a reproducible
