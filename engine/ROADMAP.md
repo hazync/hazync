@@ -54,7 +54,7 @@ negative controls.
 | 3.4 | Path services (zync-path, zync-serve) and the headers follower on engine proofs | ☐ |
 | 3.5 | Web: hazync.org verifier page with the engine WASM (verify_full), the headers page | ☐ |
 | 3.6 | Release tooling: package-release.sh, release gates (CI, GPU gate on a real Linux GPU incl. Blackwell, and Windows when 2.9 lands), check-deployment / check-deployed-verifier for the new artefacts | ☐ |
-| 3.7 | RunPod scripts: GraphQL -> REST v2 before Jan 2027 (existing note) | ☐ |
+| 3.7 | RunPod scripts: GraphQL -> REST v2 before Jan 2027. Found done 27.11 (sponsor_bot and rp.py on v2; coordinator/test_runpod_v2.py passes, its repo sweep finds no GraphQL call but the balance query, which v2 lacks; experimental/ exempt, marked "port before reuse"). Left: the balance query, when v2 has one | ◐ |
 
 **Gate 3:** a dry run of the whole system on the engine (tip blocks proved live, board claiming, zAPPs served, web
 verifier checking), with the old system untouched.
