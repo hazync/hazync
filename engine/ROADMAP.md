@@ -39,7 +39,7 @@ committed. **Status 26.11.2026 evening: PASSED** (1.1-1.6 and 1.8 ✅, evidence 
 | 2.6 | Handover across OpenVM versions: step 1 ✅ (verifier in-guest, 15.6B); step 2 ✅ (ovm-xver: block 200 PROVED as a handover from keys-ch's 199, 3 negatives refused in-guest); step 3 ✅ (a REAL handover v2.0.2 -> v2.1.0: block 200 PROVED from v2.0.2's proof of 199, state byte-identical, 3 negatives refused in-guest) | ✅ | engine/HANDOVER.md, results/handover_step1, handover_step2, handover_step3 |
 | 2.7 | hzengine as a product component: CLI surface, errors, logs; host flags the engine path left RISC Zero-shaped (rig text, chunk overrides: fixed 26.11) audited. First audit 27.11: 3 fixed (serve refuses unknown fields, its op list, the host names a dead server with its exit status); 5 open for the user or the cutover (names, a `pack` command, self-tests, panics, log level) | ◐ | results/product_component/AUDIT.md |
 | 2.8 | Small cards (2^26, 4 GB): an EXPERIMENTAL build option, documented as unable to prove some adversarial blocks | ☐ | results/gpu_a40_memory |
-| 2.9 | Windows: rebuild with the current engine; prove on Xesktop (PRO 6000), then the 1050 Ti laptop (small-card option) | ☐ later (user: not yet important) | Q12 |
+| 2.9 | Windows: rebuild with the current engine; prove on Xesktop (PRO 6000), then the 1050 Ti laptop (small-card option). **User 27.11: Windows is IN the first release** (engine/RELEASE_PLAN.md) | ☐ | Q12 |
 
 **Gate 2:** every zAPP and verifier passes its own test suite on engine proofs; handover rehearsal passes with its
 negative controls.
@@ -85,7 +85,7 @@ verifier checking), with the old system untouched.
 
 | # | task |
 |---|---|
-| 6.1 | **[U]** Release contents discussed; release notes in the user's voice |
+| 6.1 | **[U]** Release contents discussed; release notes in the user's voice. **27.11 decided:** no release before many audits and reviews; Windows in; full package (every zAPP CLI and module); v1.0.0 if the reviews go well (engine/RELEASE_PLAN.md) |
 | 6.2 | Release (CI + GPU gates), deploy, check deployed (sweep with no name filter) |
 | 6.3 | Cutover: board, path services, web, docs point at the engine chain |
 | 6.4 | The RISC Zero chain's services retired (its proofs stay verifiable with its released verifiers) |

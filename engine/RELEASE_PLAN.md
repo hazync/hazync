@@ -40,9 +40,11 @@ reader to reproduce the ids.
 - Windows (feedback: a Windows card too): only if Windows ships (2.9).
 - check-deployment / check-deployed-verifier: the new artefacts and the site's wasm sha.
 
-## For the user to decide
+## Decided (user, 27.11.2026)
 
-1. A or B.
-2. Windows in or out of the first engine release.
-3. zAPP CLIs and modules as release assets, or source only.
-4. The version number (the RISC Zero line ended at v0.27.1).
+- **No release before a lot of audits and reviews** (Gate 4's review rounds, 4.2, and the audit question 1.7). Open:
+  release after Gate 4 with the chain proved in public, or after Gate 5 with it proved first.
+- **Windows in**: 2.9 (Windows on the engine: rebuild, prove on Xesktop's PRO 6000, then the 1050 Ti laptop) is no
+  longer parked; it is part of the first release, with the Windows GPU gate.
+- **Full package**: every zAPP CLI and wasm module ships as a release asset, in the signed manifest.
+- **Version v1.0.0**, if the reviews go well and the user is happy with them.
