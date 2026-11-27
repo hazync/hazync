@@ -42,8 +42,11 @@ reader to reproduce the ids.
 
 ## Decided (user, 27.11.2026)
 
-- **No release before a lot of audits and reviews** (Gate 4's review rounds, 4.2, and the audit question 1.7). Open:
-  release after Gate 4 with the chain proved in public, or after Gate 5 with it proved first.
+- **No release before a lot of audits and reviews** (Gate 4's review rounds, 4.2, and the audit question 1.7).
+- **Order: reviews -> release -> the chain proved from genesis in public** (way A). "Obviously we can't prove the
+  entire chain from genesis on our own. That comes after the release which comes after the reviews." So the release
+  ships verifiers and provers with the core chain at DEMO until the public re-prove passes Core's minimum work and the
+  checkpoint; the header chain (proved) and deposits bound to it are OK from day one.
 - **Windows in**: 2.9 (Windows on the engine: rebuild, prove on Xesktop's PRO 6000, then the 1050 Ti laptop) is no
   longer parked; it is part of the first release, with the Windows GPU gate.
 - **Full package**: every zAPP CLI and wasm module ships as a release asset, in the signed manifest.

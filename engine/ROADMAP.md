@@ -72,6 +72,9 @@ verifier checking), with the old system untouched.
 
 ## Stage 5: re-prove from genesis
 
+**User 27.11: this comes AFTER the release (Stage 6).** Order: reviews (Gate 4) -> release (6.1-6.3) -> the chain
+proved from genesis in public, on the released provers (this stage). We cannot prove the whole chain on our own.
+
 | # | task |
 |---|---|
 | 5.1 | Cost estimate refined: ~50 more blocks across eras and transaction types; the automatic chunk sizing checked on each kind (user, 26.11). **Found 26.11: the cost model misses heavy scripts by 17,000-24,000x (tap_small, tap_full) and splits mem_k1140 60x unevenly** (results/guest_memory). **27.11: three terms added** (results/cost_model_scripts): executed-script bytes past 520 (11,600 / byte), each input its SHARE of the transaction instead of all of it, and the legacy position (37 / byte), fitted on all 47 measured chunks: engine / predicted now 3.70-4.53 on every multi-input block and attack (was 1.19 to 24,519); ordinary chunk error unchanged or better; mem_k1140's new split ~1.38 straggler computed from measured per-input costs (5.35 measured before). Left: execute the new splits, the ~50 blocks |
@@ -79,7 +82,7 @@ verifier checking), with the old system untouched.
 | 5.3 | The re-prove, with checkpoints and the spine; progress public |
 | 5.4 | **User 26.11: STOP the RISC Zero chain now**: it freezes at its current tip; all proving budget goes to the engine. Its proofs stay verifiable; read-only services stay up until cutover |
 
-**Gate 5:** the engine chain at the tip, verified by the released verifiers.
+**Gate 5:** the engine chain at the tip, verified by the released verifiers. (After the release: Stage 6 below runs first.)
 
 ## Stage 6: release and cutover
 
