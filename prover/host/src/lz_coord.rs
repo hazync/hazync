@@ -188,8 +188,7 @@ fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, chec
     let vk = ev::decode_vk(&key).map_err(|e| format!("the board's engine key does not decode: {e}"))?;
     let id = ev::image_id_of(&vk);
     let (proof, journal) = ev::unpack(raw).map_err(|e| format!("not an engine proof file: {e}"))?;
-    ev::verify_full_bytes(&key, &pin, proof, journal, &id)
-        .map_err(|e| format!("does not verify against this coordinator's engine image {} (METHOD_ID MISMATCH or invalid proof): {e}", hex(&id)))?;
+    ev::verify_full_bytes(&key, &pin, proof, journal, &id).map_err(|e| engine_refusal(e, journal, &id))?;
     if journal.len() % 4 != 0 { return Err("journal is not whole words".into()); }
     let w: Vec<u32> = journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
     let st: ChainState = risc0_zkvm::serde::from_slice(&w).map_err(|e| format!("journal is not a ChainState: {e}"))?;
@@ -203,6 +202,29 @@ fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, chec
         return Err(format!("profile {:#x}, this coordinator's image commits {:#x}", st.profile, crate::lz::expected_profile()));
     }
     range_ok(&st, &image, lo, check_end, 1, false)
+}
+
+/// Why an engine proof did not verify, in the words the board sorts by (server.py verify_receipt): "MISMATCH" only for
+/// a proof another guest build made (the common contributor mistake, which the worker reports as a build problem),
+/// a forged, tampered or corrupt one as an invalid proof, and the board's own key as its configuration. Another build
+/// is told apart by the proof's journal, read WITHOUT trusting it: a chain state naming another image. The verdict does
+/// not depend on it (the proof is refused either way), only the reason; the RISC Zero path sorts by its receipt's
+/// claimed image the same way. Found by the Gate 3 dry run (engine/results/board_dryrun): every failed engine proof
+/// said "MISMATCH or invalid proof", so a tampered proof was reported as another build.
+fn engine_refusal(e: hazync_engine_verify::Refusal, journal: &[u8], id: &[u8; 32]) -> String {
+    use hazync_engine_verify::Refusal;
+    if matches!(e, Refusal::VkPin | Refusal::Vk) {
+        return format!("the board's engine key is not usable ({e}): a coordinator configuration error (HAZYNC_ENGINE_VK, HAZYNC_ENGINE_VK_PIN)");
+    }
+    let image: [u32; 8] = core::array::from_fn(|i| u32::from_le_bytes(id[4 * i..4 * i + 4].try_into().unwrap()));
+    let other = (journal.len() % 4 == 0).then(|| journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>())
+        .and_then(|w| risc0_zkvm::serde::from_slice::<ChainState, u32>(&w).ok())
+        .filter(|st| st.kind == KIND_CHAIN && st.self_id != image);
+    match other {
+        Some(st) => format!("proved by image {} (its journal says so), not this coordinator's engine image {} (METHOD_ID MISMATCH: another guest build): {e}",
+                            hex_id(&st.self_id), hex(id)),
+        None => format!("not a valid proof of this coordinator's engine image {} (forged, tampered or corrupt): {e}", hex(id)),
+    }
 }
 
 fn hex_id(w: &[u32; 8]) -> String {
@@ -344,20 +366,31 @@ mod engine_board_tests {
         // the key not the pinned one
         let (k, _) = key(D);
         let e = verify_any_engine(&proof(), (k, [0u8; 32]), Some(1), false).unwrap_err();
-        assert!(e.contains("MISMATCH or invalid proof"), "wrong pin: {e}");
-        // another image's key (pinned correctly): not this board's image
+        assert!(e.contains("configuration error") && !e.contains("MISMATCH"), "wrong pin: {e}");
+        // another image's key (pinned correctly): the proof is not a valid proof under it, and not another BUILD's
+        // chain proof either (its journal names this proof's own image, not the other key's)
         let e = verify_any_engine(&proof(), key(OTHER), Some(1), false).unwrap_err();
-        assert!(e.contains("does not verify against this coordinator's engine image"), "other image: {e}");
-        // a journal byte changed: the public values no longer match
+        assert!(e.contains("not this coordinator's engine image") || e.contains("not a valid proof of this coordinator's engine image"), "other image: {e}");
+        // a journal byte changed: the public values no longer match; a FORGERY, never reported as another build
         let mut p = proof();
         let n = p.len();
         p[n - 5] ^= 1;
         let e = verify_any_engine(&p, key(D), Some(1), false).unwrap_err();
-        assert!(e.contains("invalid proof"), "tampered journal: {e}");
-        // a proof byte changed
+        assert!(e.contains("forged, tampered or corrupt") && !e.contains("MISMATCH"), "tampered journal: {e}");
+        // a proof byte changed: the same
         let mut p = proof();
         p[4000] ^= 1;
-        assert!(verify_any_engine(&p, key(D), Some(1), false).is_err(), "tampered proof verified");
+        let e = verify_any_engine(&p, key(D), Some(1), false).unwrap_err();
+        assert!(e.contains("forged, tampered or corrupt") && !e.contains("MISMATCH"), "tampered proof: {e}");
+        // a chain proof whose journal names ANOTHER image (what another guest build's proof carries): MISMATCH, by the
+        // journal's own self_id; built here from the real one with self_id changed (it does not verify either way)
+        let (pr, jr) = hazync_engine_verify::unpack(&proof()).map(|(a, b)| (a.to_vec(), b.to_vec())).unwrap();
+        let w: Vec<u32> = jr.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+        let mut st: crate::ChainState = risc0_zkvm::serde::from_slice(&w).unwrap();
+        st.self_id[0] ^= 1;
+        let j2: Vec<u8> = risc0_zkvm::serde::to_vec(&st).unwrap().iter().flat_map(|x| x.to_le_bytes()).collect();
+        let e = verify_any_engine(&hazync_engine_verify::pack(&pr, &j2), key(D), Some(1), false).unwrap_err();
+        assert!(e.contains("METHOD_ID MISMATCH: another guest build") && e.contains("proved by image"), "another build: {e}");
         // claimed starts the state cannot have: past its height, zero, and one whose state before it is unknown here
         for lo in [201u32, 0] {
             let e = verify_any_engine(&proof(), key(D), Some(lo), false).unwrap_err();
@@ -373,7 +406,7 @@ mod engine_board_tests {
         assert!(e.contains("not an engine proof file"), "receipt on an engine board: {e}");
         // a truncated file
         let e = verify_any_engine(&proof()[..100], key(D), Some(1), false).unwrap_err();
-        assert!(e.contains("MISMATCH or invalid proof") || e.contains("not an engine proof file"), "truncated: {e}");
+        assert!(e.contains("not an engine proof file") || e.contains("forged, tampered or corrupt"), "truncated: {e}");
     }
 
     #[test]
