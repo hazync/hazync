@@ -20,7 +20,8 @@ libsecp256k1, libzync) is the product's, reviewed on RISC Zero; what is new is h
 | 9 | segpar | engine/host/src/segpar.rs | 285 | prover-side only (its header says why): confirm a wrong or misordered segment proof fails the continuation checks |
 | 10 | parameters | results/security_params | - | the 100-bit estimate's inputs; the key binding the parameters |
 
-Total engine-specific soundness code: about 1,900 lines (rows 1-9 without the product's own files), plus the patches.
+Total engine-specific soundness code: 1,616 lines (rows 1-9 without the product's own c_heap.rs and coinlog.rs, which add
+477; swiftsync-verify and the zAPP readers not counted), plus the patches (382 lines).
 engine/journal (1,270 lines) is risc0-zkvm 3.1.0's serde unchanged but for one constant, checked byte-identical
 (engine/journal/compat); a reviewer only confirms the diff.
 
