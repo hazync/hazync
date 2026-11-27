@@ -27,6 +27,9 @@ a real CPU run of a small range (blocks 1..4: two leaves, a fold, verify-any on 
 
 - 3.3 first: prep's leaf bundles, trie store and history regenerated from genesis in node format 2 (the engine's), on
   hazync-proof beside the RISC Zero run's, which stays untouched (Gate 3).
+  **27.11.2026: running** (hazync-engine-prep / -fetch on hazync-proof, 1..977,800 from genesis; format 2 checked: its state
+  at 200 = the engine chain's proven state; 180,000 blocks in the first 3,187 s; engine/results/prep_format2). The board's
+  every-block bundles are a separate paced pass once the engine board runs.
 - 3.1: the tip controller (coordinator/tip_*.py) runs the engine host (HAZYNC_ENGINE) on rented GPUs; measured end to
   end against FEASIBILITY Q17.
 - 3.4: zync-path / zync-serve / the headers follower on the engine chain's history and proofs (their code is engine
