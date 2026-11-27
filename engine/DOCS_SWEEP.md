@@ -93,3 +93,11 @@ devs 4. Beyond the words: every number (proof times, sizes, chain progress) and 
 DRAFT.md (1,492 lines, 46 lines on RISC Zero / risc0, none on OpenVM). Its measurements move to the engine's
 (engine/results/*, only measured numbers, no proving timeframe), and it describes Hazync as it is (no RISC Zero to
 OpenVM history in the abstract or introduction; at most a later development section). Persona reviews after.
+
+## Findings from group A (27.11.2026): code the docs had to contradict, not changed here
+
+- `scripts/libzync/assume_check.sh` calls `zapp-assume` with no `--image` / `--vk`: it fails on the engine-only checker.
+- `zapps/deposit/src/lib.rs` `DepositBundle::core_receipt`'s doc comment still says "a succinct receipt, bincode, hex";
+  the field carries an engine proof file (`HZE1`) as hex.
+- The engine's whole header chain 0..975,278 is proved (engine/results/zapp_headers, 26.11.2026), but no test fixture
+  holds it, so the header and deposit suites reach DEMO only; a bound deposit bundle could reach OK on it.
