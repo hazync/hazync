@@ -2029,6 +2029,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bitcoin",
+ "bytemuck",
  "hazync-coinbase-smt",
  "hazync-utreexo",
  "libzync",
