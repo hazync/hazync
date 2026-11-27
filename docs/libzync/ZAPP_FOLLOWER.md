@@ -1,5 +1,9 @@
 # Following the tip with zAPP facts (design)
 
+> **27.11.2026:** this follower ran on the RISC Zero board (stopped 26.11.2026; it published `proof.rcpt`). The path
+> services (`zync-serve`, `zync-path`) are engine-only now and build paths in node format 2; the follower moves to the
+> engine with Stage 3 (engine/ROADMAP.md 3.3, 3.4), and this page is brought up to date then.
+
 > **Design, 16.11.2026; Z1 built the same day** (branch `feat/reorg-p1-p2`, with REORG P1; §13); **Z2-Z5 built on
 > 20.11.2026** (branch `feat/tip-follow`, with REORG D1; §14). I wrote it from the repo at `797b777e` (main), the reorg design on
 > `design/reorg-handling` (`docs/libzync/REORG.md`, cited as REORG §n) and a read-only survey of `hazync-proof` the

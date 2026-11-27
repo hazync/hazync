@@ -1,12 +1,19 @@
 # Hazync documentation
 
-Bitcoin Core's own consensus code, executed inside a RISC Zero zkVM, so that a block's validity can be **proven once
+Bitcoin Core's own consensus code, executed inside a zkVM (OpenVM on the engine branch; RISC Zero for the released images), so that a block's validity can be **proven once
 and verified by anyone** without re-executing it. **Hazync v2** is the libzync engine (`libzync/`, the guest in
 `prover/methods/guest`), on RISC Zero 3.1.0 since release v0.24.0: published images mainnet `46666b6f` (v0.26.0,
 unchanged in v0.27.0: a new chain from genesis whose block leaves commit each block's undo data,
 [`libzync/UNDO.md`](libzync/UNDO.md)), signet `01a80f17`, and the header-chain zyncAPP `de54b94f` (v0.27.0, with an MMR
 of every block hash; `2db34e12` before), with the other zyncAPPs' images in [`../reproduce/LIBZYNC_IDS`](../reproduce/LIBZYNC_IDS). The
-public board has run it since 2026-11-12, from genesis.
+public board ran it from 2026-11-12 until 26.11.2026.
+
+**The move to OpenVM (27.11.2026, branch `engine/openvm`).** The same guest source is proved on OpenVM v2.1.0, the
+verifiers check engine proofs only, and the chain will be proved again from genesis; the board is paused until then.
+Start with [`../engine/ENGINE.md`](../engine/ENGINE.md) (the engine), [`../engine/VERIFIER.md`](../engine/VERIFIER.md)
+(what a verifier checks on an engine proof), [`../engine/ROADMAP.md`](../engine/ROADMAP.md) (what is done and left),
+[`../engine/HANDOVER.md`](../engine/HANDOVER.md) (across OpenVM versions) and [`../engine/CUTOVER.md`](../engine/CUTOVER.md)
+(how RISC Zero left the verifiers). RISC Zero proofs are checked with v0.27.1's verifiers.
 
 **Hazync v1**, the original per-signature CORE guest (`37987b85`, last release v0.22.1), is documented in
 [`history/`](history/README.md) and its code is in [`../history/`](../history/README.md). Those pages are the record
@@ -44,7 +51,7 @@ of the past and are not kept current.
 | [`libzync/UNDO.md`](libzync/UNDO.md) | the per-block undo-data commitment (v0.26.0 images) |
 | [`libzync/REORG.md`](libzync/REORG.md), [`libzync/ZAPP_FOLLOWER.md`](libzync/ZAPP_FOLLOWER.md) | reorg handling for the board (P1–P6, released in v0.27.0, automatic rewinds off) and the zAPP follower |
 | [`libzync/PROOF_BUNDLE.md`](libzync/PROOF_BUNDLE.md) | the proof bundle format |
-| [`libzync/ROADMAP.md`](libzync/ROADMAP.md) | everything built, measured and still open, in order |
+| [`libzync/ROADMAP.md`](libzync/ROADMAP.md) | the RISC Zero roadmap as it stood (superseded by [`../engine/ROADMAP.md`](../engine/ROADMAP.md)) |
 
 ## Soundness and review
 

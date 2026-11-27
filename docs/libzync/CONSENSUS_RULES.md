@@ -4,7 +4,9 @@
 
 **Read at:** repo commit `bf8e60764` (branch `libzync`). Its `prover/`, `coinbase-smt/` and `libzync/` are clean, so the
 guest read here is that commit (2026-11-01). It is OLDER than the frozen core c14 whose source the published ids in
-`reproduce/LIBZYNC_IDS` are built from (risc0 3.1.0 at `7dfb05b`: mainnet `8888d59c…`, signet `d4210dae…`). The rows
+`reproduce/LIBZYNC_IDS` are built from (risc0 3.1.0 at `7dfb05b`: mainnet `8888d59c…`, signet `d4210dae…`). The engine
+guest (OpenVM, 27.11.2026) is assembled from the same source (engine/guest/assemble.sh), so the rules below hold for it
+unchanged; its patches differ only on the accelerated paths (see "Patches on consensus paths"). The rows
 were brought up to c14 by the later reviews and test passes they cite (the checkpoint row, the coin log, the
 96/96 rig on c13 and c14; ROADMAP H6, rounds 9-11 re-checked consensus completeness against Core v28). The
 whole table has not been re-read line by line at c14. Bitcoin Core v28.0 `110183746` and libsecp256k1 v0.5.1
@@ -317,7 +319,14 @@ not that a case targets it.
 
 ## Patches on consensus paths
 
-None of these changes a rule. Each is a cheaper way to compute the same bytes or points. The tags above say "Core patched"
+None of these changes a rule. Each is a cheaper way to compute the same bytes or points. The table is the RISC Zero
+build's. The engine build (engine/guest/base.sh) keeps 0001, 0002, 0009, 0010 and 0101 on Core, adds
+`core-0201-sha-openvm-native.patch` (SHA-256 on OpenVM's native state layout) and `core-0202-sha-finalize-in-place.patch`,
+and builds a PRISTINE libsecp256k1 v0.5.1 plus `secp-0201-openvm-batch-liftx.patch` (the batch hooks of 0102 at the
+same call sites, plus the sqrt hook) and `secp-0202-sha-openvm-native.patch`: none of the RISC Zero field and group
+patches (0005 0006 0008 0012 0013). On Core v28.0's 22,666 script and transaction vectors the engine's final
+image gives RISC Zero's verdict on all 21,987 it rules on, and refuses all 679 that RISC Zero aborts on, with no
+abort of its own (engine/results/core_vectors, 26.11.2026). The tags above say "Core patched"
 wherever one applies. A hash mistake fails blocks rather than passing them, because txids, wtxids and sighashes all feed
 the merkle root, the commitment or a signature.
 

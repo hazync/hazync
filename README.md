@@ -38,6 +38,11 @@ Core's rules one by one.
 
 ## The program
 
+> **27.11.2026 (branch `engine/openvm`):** the prover is moving from RISC Zero to OpenVM v2.1.0, and the chain will
+> be proved again from genesis on it ([`engine/ROADMAP.md`](engine/ROADMAP.md)). The verifiers on this branch check
+> engine proofs only; RISC Zero proofs are checked with v0.27.1's. The ids and figures below are the released RISC
+> Zero build's until the engine images are published (Stage 4) and the release that ships them rewrites this page.
+
 A proof names the exact program that produced it. The published Hazync v2 images, built on RISC Zero 3.1.0
 (the core unchanged since release [v0.26.0](https://github.com/hazync/hazync/releases/tag/v0.26.0); the newest release
 is always [releases/latest](https://github.com/hazync/hazync/releases/latest), v0.27.1 on 21.11.2026), are

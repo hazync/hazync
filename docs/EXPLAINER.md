@@ -2,6 +2,10 @@
 
 > This page describes **Hazync v2** (the libzync engine), current since release v0.24.0. The version written for
 > Hazync v1 is kept as a record in [`history/EXPLAINER.md`](history/EXPLAINER.md).
+>
+> **27.11.2026:** Hazync is moving to a new proving engine, OpenVM. The idea below is unchanged; the program that
+> makes the proofs is new, and the chain will be proved again from the first block on it. The board is paused while
+> that happens. The status lines near the end describe the released RISC Zero build.
 
 *No jargon. No maths background needed. If you have ever wondered "how does my Bitcoin wallet actually know the
 money is real?", this is for you. It explains what Hazync is, why it matters, what is finished and what is not.*

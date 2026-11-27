@@ -6,7 +6,10 @@ third-party components under their own licences. This file records them.
 ## Compiled into the zkVM guest
 
 The patch sets below are the ones Hazync v2's published images (v0.24.0) are built with, as applied by
-`scripts/libzync-base.sh`; Hazync v1's CORE build applied a subset.
+`scripts/libzync-base.sh`; Hazync v1's CORE build applied a subset. The engine guest (OpenVM, engine/guest/base.sh) uses
+the same Core base and adds `engine/guest/core-0201-sha-openvm-native.patch` and `core-0202-sha-finalize-in-place.patch`
+to Bitcoin Core, and `secp-0201-openvm-batch-liftx.patch` and `secp-0202-sha-openvm-native.patch` to a pristine
+libsecp256k1 v0.5.1, without the RISC Zero field and group patches (0005 0006 0008 0012 0013).
 
 - **Bitcoin Core** — MIT. `bitcoin/bitcoin` tag `v28.0`. The guest compiles Core's real consensus
   sources (`interpreter.cpp`, `pubkey.cpp`, sighash, serialization) with patches that change no
@@ -32,6 +35,15 @@ The patch sets below are the ones Hazync v2's published images (v0.24.0) are bui
   risc0-derived build scaffolding. Copyright (c) RISC Zero, Inc.
 - **RustCrypto `sha2`** — MIT/Apache-2.0, pinned to an immutable commit, routed through the risc0
   SHA-256 accelerator (byte-identical output).
+
+- **OpenVM** v2.1.0 (https://github.com/openvm-org/openvm) and **stark-backend** v2.1.0
+  (https://github.com/openvm-org/stark-backend) — MIT OR Apache-2.0. The engine prover and every verifier on branch
+  `engine/openvm` (engine/ENGINE.md), pinned by tag. Patched at build time, never vendored: `engine/wasm-verify/
+  openvm-abi-stable.patch`, `engine/handover/openvm-verify-nozstd.patch` and `engine/handover/stark-sdk-nologging.patch`
+  (the WASM and handover verifier builds; engine/scripts/openvm_src.sh applies them to the pinned commits).
+- **`engine/journal`** (crate `hazync-journal`) and **`engine/platform/risc0-zkvm`** — the journal word encoding
+  (`src/serde`) is risc0-zkvm 3.1.0's `src/serde`, copied with one change (`WORD_SIZE` a local constant), Apache-2.0,
+  Copyright (c) RISC Zero, Inc.; the files keep RISC Zero's licence header. The engine guests and every verifier use it.
 
 ## Vendored and modified (Apache-2.0)
 

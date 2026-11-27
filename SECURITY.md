@@ -14,6 +14,11 @@ open: the status below, the round-by-round record in [`docs/libzync/LIBZYNC.md`]
 **Independent review is explicitly invited**; if you find a way to make an invalid block prove valid, that is the
 finding that matters most.
 
+> **27.11.2026 (branch `engine/openvm`):** the prover is moving from RISC Zero to OpenVM v2.1.0, and the chain will
+> be proved again from genesis on it ([`engine/ROADMAP.md`](engine/ROADMAP.md)). The verifiers on this branch check
+> engine proofs only; RISC Zero proofs are checked with v0.27.1's. The ids and figures below are the released RISC
+> Zero build's until the engine images are published (Stage 4) and the release that ships them rewrites this page; the supported-versions table changes with that release.
+
 This page covers **Hazync v2** (the libzync engine): published images mainnet `46666b6f`, signet `01a80f17` and the
 header-chain zyncAPP `de54b94f` ([`reproduce/LIBZYNC_IDS`](reproduce/LIBZYNC_IDS); v0.24.0 to v0.26.1 shipped `2db34e12`), release
 v0.27.0, RISC Zero 3.1.0. The core images are unchanged since v0.26.0, and both start their chains at genesis; the verifier keeps v0.24.0-v0.25.0's `8888d59c` so its receipts still verify.

@@ -18,39 +18,39 @@ no record. 81 files of the 145.
 | docs/libzync/ZAPP_TESTING.md | 40 | ✅ (a dated plan; engine note added: what carried over, what went) |
 | docs/libzync/REORG.md | 32 | ◐ board design: note added; rewritten when the board moves to the engine (Stage 3) |
 | docs/libzync/LIVENESS_ZAPP.md | 26 | ✅ (proof sizes from the engine vectors; check times and §8 are RISC Zero records) |
-| docs/SOUNDNESS.md | 25 | ☐ |
+| docs/SOUNDNESS.md | 25 | ◐ engine note, the image check and the proof-system item; §1's id table waits for published engine ids (Stage 4) |
 | docs/libzync/STATEMENT_ZAPP.md | 23 | ✅ (§8 shape B is a RISC Zero record) |
 | docs/libzync/HINTS_ZAPP.md | 22 | ✅ (cycle and proving measurements are RISC Zero records) |
 | docs/libzync/HANDOVER.md | 21 | ✅ (format unchanged; the RISC Zero cross-version path and §8 are records; engine: engine/HANDOVER.md) |
 | docs/libzync/ZYNCAPPS.md | 18 | ✅ |
-| docs/README.md | 18 | ☐ |
-| SECURITY.md | 18 | ☐ |
+| docs/README.md | 18 | ✅ |
+| SECURITY.md | 18 | ◐ engine note added; the supported-versions table changes with that release (6.1) |
 | docs/libzync/ASSUME_ZAPPS.md | 16 | ✅ (§5 a dated RISC Zero record; finding: scripts/libzync/assume_check.sh passes no --image/--vk) |
 | docs/HANDOVER.md | 16 | ◐ the board runbook: note added; rewritten for the engine with Stage 3 |
-| THIRD_PARTY_NOTICES.md | 16 | ☐ |
-| README.md | 16 | ☐ |
+| THIRD_PARTY_NOTICES.md | 16 | ✅ (OpenVM, stark-backend, engine/journal, the engine guest patches added; the RISC Zero entries stay while prover/ builds on it) |
+| README.md | 16 | ◐ engine note added; the page is rewritten for the release that ships the engine (6.1, the user's wording) |
 | docs/libzync/UNDO.md | 14 | ✅ |
 | docs/libzync/SWIFTSYNC_PROOFS.md | 14 | ✅ |
 | swiftsync-verify/README.md | 11 | ✅ |
-| docs/EXTERNAL_REVIEW.md | 8 | ☐ |
-| docs/libzync/PROOF_BUNDLE.md | 7 | ☐ |
-| docs/EXPLAINER.md | 7 | ☐ |
-| docs/libzync/ZAPP_FOLLOWER.md | 6 | ☐ |
-| docs/libzync/CONSENSUS_RULES.md | 6 | ☐ |
+| docs/EXTERNAL_REVIEW.md | 8 | ◐ the check is the engine one (16/16 vectors run 27.11); §1 reproduce waits for the engine container build (4.1) |
+| docs/libzync/PROOF_BUNDLE.md | 7 | ✅ (layout checked on the real engine bundle: L = 275,183, then HZE1) |
+| docs/EXPLAINER.md | 7 | ◐ note added; the status lines near the end are rewritten with the release |
+| docs/libzync/ZAPP_FOLLOWER.md | 6 | ◐ board follower: note added; rewritten with Stage 3 |
+| docs/libzync/CONSENSUS_RULES.md | 6 | ✅ (the engine's patches and its Core-vector result added; the RISC Zero patch table kept, labelled) |
 | swiftsync-verify-wasm/README.md | 5 | ✅ |
-| .claude/skills/benchmark-infographic/SKILL.md | 4 | ☐ |
+| .claude/skills/benchmark-infographic/SKILL.md | 4 | ✅ no change: it renders the evidence of past distributed-proof runs, whose artefacts are RISC Zero receipts |
 | zapps/utreexo/wasm/README.md | 3 | ✅ |
 | zapps/utreexo/README.md | 3 | ✅ |
 | zapps/statement/wasm/README.md | 3 | ✅ |
 | zapps/liveness/wasm/README.md | 3 | ✅ |
 | swiftsync-verify/vectors/README.md | 3 | ✅ |
-| docs/libzync/COINLOG.md | 3 | ☐ |
+| docs/libzync/COINLOG.md | 3 | ✅ |
 | zapps/hints/wasm/README.md | 2 | ✅ |
 | zapps/headers/wasm/README.md | 2 | ✅ |
 | zapps/deposit/wasm/README.md | 2 | ✅ |
 | zapps/assume/wasm/README.md | 1 | ✅ |
 | swiftsync-verify-ffi/README.md | 1 | ✅ |
-| docs/libzync/PREP_MEMORY.md | 1 | ☐ |
+| docs/libzync/PREP_MEMORY.md | 1 | ✅ no change: a dated measurement of the RISC Zero board's prep |
 
 ## B. Operations: board, coordinator, build, release, prover (after Stage 3, which changes what they describe)
 

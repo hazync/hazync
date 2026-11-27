@@ -3,6 +3,11 @@
 > This page describes **Hazync v2** (the libzync engine), the images published since release v0.24.0 (the current ones in §1 below). The guide
 > written for Hazync v1 (the CORE guest, its accumulator, field backend and ghostd adoption) is kept in
 > [`history/EXTERNAL_REVIEW.md`](history/EXTERNAL_REVIEW.md).
+>
+> **27.11.2026, branch `engine/openvm`:** the prover moves to OpenVM v2.1.0 (engine/ENGINE.md). The check below is the
+> engine one; §1's ids are the released RISC Zero images until the engine's are published at the Stage 4 freeze. New
+> places worth outside eyes on the engine: the compat layer (`engine/platform`), the guest edits (`engine/guest`), the
+> key pin (engine/VERIFIER.md), and the handover across OpenVM versions (engine/HANDOVER.md): engine/ROADMAP.md 4.2.
 
 Everything in Hazync v2 has been reviewed. None of it has been reviewed by someone who could be wrong in a
 different direction than we are. No test we write closes that gap, so this page says where an hour of an outsider's
@@ -29,25 +34,19 @@ The rule-by-rule comparison with Core is [`libzync/CONSENSUS_RULES.md`](libzync/
 ## Before reading anything, check something
 
 A few minutes on any Linux x86-64 box: no GPU, no chain data. Build the verifier and run its test vectors, which
-include a real GPU proof of mainnet blocks 1..200 under the published image:
+include the engine chain's proof of mainnet blocks 1..200 from genesis:
 
 ```sh
 cargo build --release --manifest-path swiftsync-verify/Cargo.toml
 python3 swiftsync-verify/vectors/run_vectors.py swiftsync-verify/target/release/swiftsync-verify   # 16/16
-swiftsync-verify/target/release/swiftsync-verify --network mainnet --product --mempool \
-    swiftsync-verify/vectors/mainnet_1_200_????????.rcpt
+V=swiftsync-verify/vectors/mainnet_1_200_engine
+swiftsync-verify/target/release/swiftsync-verify --network mainnet --image $(cat $V.image_id) --vk $V.vk --mempool $V.hze
 ```
 
-The vector is a real proof of mainnet 1..200 by v0.24.0's image `8888d59c…`, an earlier built-in
-image (v0.26.0's is `46666b6f…`): the verifier sees the receipt names that earlier built-in image and checks it as that image (first line of
-its output).
-
-The last command should answer **DEMO** (exit 2): valid from genesis, below Core's minimum chainwork and the
-checkpoint. `--mempool` makes one request to mempool.space to compare the tip hash with block 200; or pass
-`--expect 200:<hash>` from your own node. The release binary `hazync-verify-x86_64-linux-gnu` is the same verifier.
-
-The board's current genesis-anchored proof is served at `https://api.hazync.org/api/spine/proof`; it will also be
-DEMO until its chain passes block 970,000.
+No engine image is published yet, so the command names the image id and its key file; the verifier pins the key by
+its SHA-256 and prints it. It should answer **DEMO** (exit 2): valid from genesis, below Core's minimum chainwork and
+the checkpoint. `--mempool` makes one request to mempool.space to compare the tip hash with block 200; or pass
+`--expect 200:<hash>` from your own node.
 
 ## The list, in the order worth spending on
 

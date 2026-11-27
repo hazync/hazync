@@ -3,6 +3,12 @@
 > This page describes **Hazync v2** (the libzync engine), the images published since release v0.24.0 (the current ones in §1). The statement
 > for Hazync v1 (the CORE guest, image `37987b85…`, last released as v0.22.1) is kept in
 > [`history/SOUNDNESS.md`](history/SOUNDNESS.md); v1 proofs still verify with v0.22.1's verifier.
+>
+> **27.11.2026, branch `engine/openvm`:** the prover moves to OpenVM v2.1.0. The claim (§1, §2) and the consensus code
+> are unchanged; what changes is the proof system the claim rests on (§4 item 4 below) and the image check (§3): an
+> engine proof verifies against image M under M's verifying key, pinned by its SHA-256, because OpenVM's verifier
+> trusts the key it is given (engine/VERIFIER.md). The ids in §1 are the released RISC Zero images until the engine's
+> are published at the Stage 4 freeze. RISC Zero proofs are checked with v0.27.1's verifier.
 
 The page a reviewer should read first. It says what a v2 receipt proves, what that rests on, what it does not
 prove, and what is known to be open. It summarises; the normative text is
@@ -53,8 +59,9 @@ assumevalid bit, is clear).
 A receipt means nothing until a verifier has made every check in
 [`libzync/SWIFTSYNC_PROOFS.md`](libzync/SWIFTSYNC_PROOFS.md) §5. The ones that carry the claim:
 
-- **The image.** The receipt verifies against the published image id M, and `self_id == M`. The receipt must be a
-  real proof: a dev-mode `FakeReceipt` is refused, and the verifier is built with dev mode compiled out.
+- **The image.** The proof verifies against the published image id M, and `self_id == M`. On the engine: under M's
+  verifying key, whose SHA-256 is M's published pin (the image id does not bind every key field). On RISC Zero (v0.27.1
+  and before) the receipt had to be a real proof: a dev-mode `FakeReceipt` was refused, dev mode compiled out.
 - **The genesis anchor.** `anchor_id` must equal the network's pinned genesis anchor (mainnet
   `852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167`). The base step of the recursion is not
   verified, so a proof anchored anywhere else proves nothing about history. The value can be recomputed from the
@@ -94,8 +101,9 @@ Every proof the public board makes until its chain passes block 970,000 is, corr
      which requires the right proof to start exactly where the left one ends.
 3. **SHA-256** collision resistance: the coin log, the trie, the block forest, the BIP30 tree and every link digest
    are SHA-256 commitments.
-4. **The soundness of RISC Zero 3.1.0** (risc0-zkvm `=3.1.0`, pinned in `prover/methods/guest/Cargo.toml` and
-   `swiftsync-verify/Cargo.toml`), including its recursion. 3.1.0 fixes soundness bugs in RISC Zero's proof system
+4. **The soundness of the proof system.** On the engine: OpenVM v2.1.0 and stark-backend v2.1.0 (pinned by tag),
+   including its recursion (deferral), and the pinned keys; its audit coverage for 2.x is open (engine/ROADMAP.md 1.7,
+   a Stage 4 gate). On RISC Zero (released to v0.27.1): risc0-zkvm `=3.1.0`, including its recursion. 3.1.0 fixes soundness bugs in RISC Zero's proof system
    that were present in 3.0.x ([`RELEASE_NOTES_v0.24.0.md`](RELEASE_NOTES_v0.24.0.md) lists them). That is why
    v0.23.0 (image `863c9ce3…`, risc0 3.0.5) is withdrawn: **a 3.1.0 verifier refuses every 3.0.x receipt**, and a
    test vector checks this with v0.23.0's real proof of blocks 1..200
@@ -137,8 +145,8 @@ From [`libzync/CONSENSUS_RULES.md`](libzync/CONSENSUS_RULES.md), [`libzync/LIBZY
   Bitcoin Core 28.0 on regtest, 96/96 agree on the frozen core; Core's script and transaction vectors with every
   flag variant, 22,666 / 22,666 agree (on an earlier build, c10e12); forged signature hints, 0 Core-invalid cases
   pass (c10e11). Each row names its image in [`libzync/LIBZYNC.md`](libzync/LIBZYNC.md) §5.
-- **One zkVM.** Every proof rests on one pinned RISC Zero version (ROADMAP I3; a second-zkVM check of checkpoints is
-  an idea, not built). The published images are on 3.1.0 (ROADMAP I3).
+- **One zkVM.** Every proof rests on one pinned zkVM version: OpenVM v2.1.0 on the engine, RISC Zero 3.1.0 for the
+  released images (ROADMAP I3; a second-zkVM check of checkpoints is an idea, not built).
 - **No external audit or bug bounty** (ROADMAP I2): needed before anyone relies on a proof for money.
 - **No proof of the whole mainnet chain yet.** The board restarted from genesis under `8888d59c` on 2026-11-12.
 
