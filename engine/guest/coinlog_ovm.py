@@ -47,7 +47,7 @@ fn compress_w(iv: &'static [u32; 8], a: &W, b: &W, out: &mut W) {   // ENGINE: O
 }
 
 /// One compression of a contiguous L || R into `out`: node format 2 (COINLOG.md §2) is the native state words as they
-/// are (format 1 stored each word's bytes reversed). Through a local state, so `out` may overlap the block.
+/// are (format 1 stored each word's bytes reversed). Through a local state (Rust's &mut cannot alias the block).
 #[cfg(target_os = "zkvm")]
 #[inline(always)]
 unsafe fn compress_blk(iv: &'static [u32; 8], blk: &[W; 2], out: &mut W) {

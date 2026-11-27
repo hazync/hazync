@@ -24,7 +24,12 @@ rep('#[cfg(feature = "batch-ecdsa")]\nmod batch_ecdsa;', '#[cfg(feature = "batch
 #    calls the module outside its feature gate, so an inert one stands in.
 rep('mod liftx_hint;', 'mod liftx_hint;\n#[cfg(not(feature = "liftx-hint"))]\nmod liftx_hint {   // ENGINE: inert (libsecp sqrt hook instead)\n    pub fn install(_: alloc::vec::Vec<([u8; 32], [u8; 32])>) {}\n    pub fn stats() -> (u32, u32) { (0, 0) }\n}')
 # 4) The journal's hash becomes the proof's public values, once, at the end of main.
+assert s.count("\nfn main() {") == 1, ("edit 4: `fn main() {` not unique / missing", s.count("\nfn main() {"))
 i = s.index("\nfn main() {"); j = s.index("\n}\n", i)
+# j must END main: the first column-0 `}` after it (review R1-2 #1). A column-0 `}` inside main would put finalize()
+# mid-body, so what follows j must be a new item, a blank line or the end of the file, never indented code.
+after = s[j + 3:].lstrip("\n")
+assert after == "" or not after[0].isspace(), ("edit 4: main's closing brace is not the end of main", after[:70])
 s = s[:j] + "\n    risc0_zkvm::guest::env::finalize();" + s[j:]
 # 5) SHA-256 in OpenVM's native layout: Core and libsecp call zkvm_sha256_impl directly (core-0201 / secp-0202, laid
 #    out by base.sh) and so does the coin log (edit 7). The engine defines no sys_sha_compress (RISC Zero's syscall,

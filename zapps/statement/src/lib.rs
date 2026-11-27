@@ -372,6 +372,7 @@ pub fn check_age(h: u32, tip: u32, max_age: u32) -> Result<String, String> {
 /// verified state `cs`. Each script's balance fact comes from the snapshot; the total is their sum.
 pub fn draft(cs: &ChainState, trie: &libzync::trie_store::TrieStore, scripts: &[Vec<u8>], purpose: &str, nonce: &str)
              -> Result<Statement, String> {
+    libzync::coinlog::use_format_of(cs.profile);   // the proof's node format, whatever this thread last used (review R1-4 B3)
     if trie.root() != libzync::coinlog::w_of(&cs.trie_root) {
         return Err("the trie snapshot's root is not the proof's trie root (a snapshot of another height or chain)".into());
     }

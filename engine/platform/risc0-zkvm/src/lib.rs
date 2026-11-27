@@ -213,7 +213,12 @@ pub mod guest {
             assert!(!s.finalized, "env::finalize twice");
             s.finalized = true;
             assert!(s.next_commit == s.commits.len(), "engine: {} proofs supplied, {} verified", s.commits.len(), s.next_commit);
+            // a metering image reveals sha256(BENCH_TAG || journal), never sha256(journal): no proof of it can pass as a
+            // proof of any journal, whatever self_id it claims (review R1-1 #1; the host's engine::bench_pvs)
+            #[cfg(not(feature = "bench-noverify"))]
             openvm::io::reveal_bytes32(crate::sha256(&s.journal));
+            #[cfg(feature = "bench-noverify")]
+            openvm::io::reveal_bytes32(crate::sha256(&[crate::BENCH_TAG, &s.journal[..]].concat()));
             #[cfg(feature = "bench-noverify")]
             openvm::io::println(alloc::format!("HZHEAP: {} bytes allocated (input {} bytes)", heap_pos() - unsafe { HEAP0 }, s.input.len()));
             if s.emit {
@@ -230,3 +235,7 @@ pub mod guest {
         }
     }
 }
+
+/// The domain tag of a metering image's public values (feature bench-noverify): sha256(BENCH_TAG || journal). The host
+/// has the same bytes (engine/host/src/engine.rs BENCH_TAG).
+pub const BENCH_TAG: &[u8] = b"hazync/bench-noverify/v1";

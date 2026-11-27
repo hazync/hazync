@@ -21,6 +21,7 @@ fn die(m: &str) -> ! {
 }
 
 fn main() {
+    libzync::coinlog::set_node_format(2);   // a producer builds in node format 2, the engine chain's, whatever this thread last verified (review R1-4 B3)
     let a: Vec<String> = std::env::args().skip(1).collect();
     let num = |i: usize| -> u64 { a.get(i).and_then(|x| x.parse().ok()).unwrap_or_else(|| die("usage: see the source header")) };
     let hist = || decode_all(&std::fs::read(a.get(1).unwrap_or_else(|| die("history.bin?"))).unwrap_or_else(|e| die(&e.to_string())))

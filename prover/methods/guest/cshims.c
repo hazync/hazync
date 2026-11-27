@@ -78,8 +78,8 @@ unsigned long strtoul(const char* s, char** e, int b) {
 /* Static heap for newlib malloc's _sbrk (the guest has no OS).
  *
  * 1 MiB, and exhaustion is FAIL-CLOSED: this returns -1, malloc returns NULL, operator new throws
- * bad_alloc, nothing in the guest catches it, so std::terminate aborts and NO receipt is produced.
- * A block crafted to exhaust the heap yields no proof, never a wrong one. */
+ * bad_alloc: inside EvalScript Core's catch (...) fails the script (SCRIPT_ERR_UNKNOWN_ERROR), elsewhere std::terminate
+ * aborts. A block crafted to exhaust the heap can lose its proof (a valid script fails), never get a wrong one. */
 static char _heap[1 << 20];
 static size_t _used = 0;
 

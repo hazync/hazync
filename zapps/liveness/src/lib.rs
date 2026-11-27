@@ -244,6 +244,8 @@ pub fn check_liveness_fact(cs: &ChainState, undo_from: u32, f: &LivenessFact, ne
 /// history. The coin's fields come from a block source (the caller's node or block files) and are checked here: a
 /// coin whose leaf the log does not hold is refused. Holds no secret and proves nothing by itself.
 pub fn make_liveness(recs: &[libzync::history::Rec], tip: u32, at: u32, coin: &libzync::liveness::Coin) -> Result<Vec<u8>, String> {
+    // builds in THIS THREAD's node format, which the caller sets for the chain it serves (`prove` sets 2, the engine
+    // chain's; a test of an old chain sets 1): review R1-4 B3
     use libzync::liveness as lv;
     let r = libzync::history::replay(recs, at, tip).map_err(|e| e.to_string())?;
     let leaf = coin.leaf();
@@ -319,6 +321,7 @@ pub fn verify_liveness(receipt: &[u8], image: &'static Image, anchor: Option<Cha
 /// `at`, from a run's history and a block source, trying each candidate coin the source gives.
 pub fn prove(recs: &[libzync::history::Rec], tip: u32, at: u32, src: &coin_source::Source, txid: &[u8; 32], vout: u32,
              height: Option<u32>) -> Result<Vec<u8>, String> {
+    libzync::coinlog::set_node_format(2);   // a producer builds in node format 2, the engine chain's, whatever this thread last verified (review R1-4 B3)
     let mut coins = coin_source::candidates(src, txid, vout, height)?;
     // the LATEST coin first: an outpoint created again over its own spent coin names the live one by default; the
     // caller pins an older one with --height (and the verifier's question with `created=`)

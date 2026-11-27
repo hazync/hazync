@@ -191,7 +191,7 @@ pub fn execute_with(e: &Engine, dir: &Path, input: &Path, children: &[PathBuf], 
     match (r, exit) {
         (Ok((pvs, (cost, instret))), _) => {
             let journal = crate::capture::journal_of(&out);
-            ensure!(pvs == Sha256::digest(&journal).as_slice(), "journal does not match the public values");
+            ensure!(pvs == e.pvs_of(&journal).as_slice(), "journal does not match the public values");
             eprintln!("execute: {:.1} s, cost {cost}, instructions {instret}, journal {} bytes sha256 {}",
                       t.elapsed().as_secs_f64(), journal.len(), hex::encode(Sha256::digest(&journal)));
             if let Some(p) = journal_out {

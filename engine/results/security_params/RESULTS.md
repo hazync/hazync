@@ -29,10 +29,13 @@ verifying key of a keys dir, which takes the bounds from the KEY, not from the s
 | the reader's key (vk.bin, pinned) | 44 | 282 | 85 | 1,783 | 19 | 100.1 |
 
 The headers image (keys-hdr29, 25b32ac5) gives the same rows. Every component of the estimate (LogUp, GKR, ZeroCheck,
-batching, stacked reduction, WHIR) is at or above 100 bits; WHIR is the binding one (100.0-100.1). The app VM is inside
-every stated assumption (39 of 100 AIRs, 1,481 of 5,000 constraints, 596 of 1,000 interactions, 6,845 of 30,000
-columns). The parameters are part of the verifying key, and readers pin the key by SHA-256, so a proof made under
+batching, stacked reduction, WHIR) prints 100.0 bits or more; WHIR is the binding one (100.0-100.1). soundness.out
+prints one decimal, so a row shown as 100.0 (leaf, deferral leaf) lies in 99.95-100.05: "about 100", not "at least
+100" (review R1-6). The app VM is inside every stated assumption (39 of 100 AIRs, 1,481 of 5,000 constraints, 596 of
+1,000 interactions, 6,845 of 30,000 columns) and EXACTLY at the stacked-height limit (2^24, the maximum allowed). The parameters are part of the verifying key, and readers pin the key by SHA-256, so a proof made under
 weaker parameters does not verify.
 
 What this is not: a review of the calculator or of SWIRL's analysis (that is OpenVM's, and the audit question 1.7).
-The number is what the backend's own soundness code computes for these keys.
+The number is what the backend's own soundness code computes for these keys. Each figure is per circuit and per proof: the
+soundness of the whole recursive composition (a chain proof over every segment, leaf, internal and deferral proof) is a
+union over those proofs and so a few bits lower; it is not computed here (review R1-6).

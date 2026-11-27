@@ -200,6 +200,29 @@ pub fn seg_cap_gib(share: usize) -> Option<usize> {
 pub struct Engine {
     pub sdk: Sdk,
     pub agg_vk: Arc<MultiStarkVerifyingKey<SC>>,
+    /// The keys dir holds a METERING image (built with the guest feature `bench-noverify`: env::verify accepts without
+    /// a proof). Its public values are the domain-separated [`bench_pvs`], never sha256(journal), so no proof of it can
+    /// pass as a reader's proof of any journal (review R1-1 #1). Marked by the file BENCH_NOVERIFY in the keys dir.
+    pub bench: bool,
+}
+
+/// The guest's tag for a metering image's public values (engine/platform/risc0-zkvm BENCH_TAG; the same bytes).
+pub const BENCH_TAG: &[u8] = b"hazync/bench-noverify/v1";
+pub const BENCH_MARK: &str = "BENCH_NOVERIFY";
+
+/// A metering image's public values: sha256(BENCH_TAG || journal).
+pub fn bench_pvs(journal: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(BENCH_TAG);
+    h.update(journal);
+    h.finalize().into()
+}
+
+impl Engine {
+    /// The public values a proof of this keys dir's image commits for `journal`.
+    pub fn pvs_of(&self, journal: &[u8]) -> [u8; 32] {
+        if self.bench { bench_pvs(journal) } else { Sha256::digest(journal).into() }
+    }
 }
 
 impl Engine {
@@ -239,7 +262,7 @@ impl Engine {
             }
         };
         let agg_vk = sdk.agg_vk();
-        Ok(Engine { sdk, agg_vk })
+        Ok(Engine { sdk, agg_vk, bench: dir.join(BENCH_MARK).exists() })
     }
 
     pub fn exe(dir: &Path) -> Result<Arc<VmExe<F>>> {
@@ -368,7 +391,7 @@ impl Engine {
                 let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));
                 let pvs = pvs?;
                 let journal = crate::capture::journal_of(&out);
-                ensure!(pvs == Sha256::digest(&journal).as_slice(), "emitted journal does not match the public values");
+                ensure!(pvs == self.pvs_of(&journal).as_slice(), "emitted journal does not match the public values");
                 eprintln!("execute: {:.1} s, journal {} bytes", t.elapsed().as_secs_f64(), journal.len());
                 journal
             }
@@ -384,7 +407,7 @@ impl Engine {
         };
         eprintln!("prove: {:.1} s", t.elapsed().as_secs_f64());
         let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
-        ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");
+        ensure!(c.pvs == self.pvs_of(&journal).as_slice(), "the proof's public values are not sha256(journal)");
         Ok((proof, journal))
     }
 }
@@ -404,13 +427,13 @@ impl Engine {
         let (pvs, out) = crate::capture::stdout_of(|| self.sdk.execute(exe.clone(), emit));
         let pvs = pvs?;
         let journal = crate::capture::journal_of(&out);
-        ensure!(pvs == Sha256::digest(&journal).as_slice(), "emitted journal does not match the public values");
+        ensure!(pvs == self.pvs_of(&journal).as_slice(), "emitted journal does not match the public values");
         eprintln!("execute: {:.1} s, journal {} bytes", t.elapsed().as_secs_f64(), journal.len());
         let t = std::time::Instant::now();
         let (proof, baseline) = crate::segpar::prove(self, exe, prove, def_inputs, stdin_file, workers)?;
         eprintln!("prove (segpar): {:.1} s", t.elapsed().as_secs_f64());
         let c = self.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
-        ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "the proof's public values are not sha256(journal)");
+        ensure!(c.pvs == self.pvs_of(&journal).as_slice(), "the proof's public values are not sha256(journal)");
         Ok((proof, journal))
     }
 }
@@ -447,11 +470,18 @@ pub fn build(dir: &Path, guest: &Path) -> Result<()> {
     if !feats.is_empty() {
         eprintln!("guest features: {}", feats.join(","));
     }
+    let bench = feats.iter().any(|f| f == "bench-noverify");
     let elf = e.sdk.build(GuestOptions { rustc_flags: remap_flags(guest)?, ..GuestOptions::default() }.with_features(feats), guest, &None, None)?;
     let exe = e.sdk.convert_to_exe(elf)?;
     let prover = e.sdk.prover(exe.clone())?;
     let baseline = prover.generate_baseline();
     write_object_to_file(dir.join("guest.vmexe"), exe.clone())?;
+    // the metering marker follows the build (review R1-1 #1): present exactly when this image has bench-noverify
+    if bench {
+        std::fs::write(dir.join(BENCH_MARK), "metering image (guest feature bench-noverify): never a reader's image\n")?;
+    } else if dir.join(BENCH_MARK).exists() {
+        std::fs::remove_file(dir.join(BENCH_MARK))?;
+    }
     write_to_file_json(dir.join("baseline.json"), VerificationBaselineJson::from(baseline.clone()))?;
     let img = image_of(&baseline);
     std::fs::write(dir.join("image.json"), serde_json::to_vec_pretty(&img)?)?;
@@ -526,6 +556,7 @@ pub fn with_ext(p: &Path, ext: &str) -> std::path::PathBuf {
 /// by the readers' own verifier (engine/verify-core) before it is written; the key file and its pin with `--key`.
 /// Needs only agg.vk and baseline.json (not the proving keys).
 pub fn pack(dir: &Path, proof_path: &Path, out: &Path, key_out: Option<&Path>) -> Result<()> {
+    ensure!(!dir.join(BENCH_MARK).exists(), "{}: a metering image ({BENCH_MARK}): its proofs are never a reader's file", dir.display());
     let mvk: MultiStarkVerifyingKey<SC> = read_object_from_file(dir.join("agg.vk")).wrap_err("agg.vk")?;
     let mvk = Arc::new(mvk);
     let baseline = Engine::baseline(dir)?;
@@ -550,6 +581,7 @@ pub fn pack(dir: &Path, proof_path: &Path, out: &Path, key_out: Option<&Path>) -
 
 /// See `Cmd::WasmInputs`.
 pub fn wasm_inputs(dir: &Path, proof_path: &Path, out: &Path) -> Result<()> {
+    ensure!(!dir.join(BENCH_MARK).exists(), "{}: a metering image ({BENCH_MARK}): its proofs are never a reader's file", dir.display());
     use openvm_stark_backend::codec::Encode;
     let e = Engine::load(dir)?;
     let baseline = Engine::baseline(dir)?;
@@ -586,7 +618,10 @@ pub fn verify(dir: &Path, proof_path: &Path) -> Result<()> {
     let t = std::time::Instant::now();
     Sdk::verify_proof(e.agg_vk.as_ref().clone(), baseline.clone(), &proof)?;
     let c = e.child_calls(&baseline, slice::from_ref(&proof))?.pop().unwrap();
-    ensure!(c.pvs == Sha256::digest(&journal).as_slice(), "public values are not sha256(journal)");
+    ensure!(c.pvs == e.pvs_of(&journal).as_slice(), "public values are not sha256(journal)");
+    if e.bench {
+        eprintln!("verify: a METERING image ({BENCH_MARK}): its public values are tagged, no reader accepts this proof");
+    }
     if let Ok(img) = Engine::image(dir) {
         ensure!(c.exe == img.exe_bytes() && c.vm == img.vm_bytes(), "proof is not of the recorded image");
     }

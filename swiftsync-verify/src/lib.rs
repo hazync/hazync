@@ -999,6 +999,7 @@ pub fn trie_verdict(cs: &ChainState, undo_from: u32, f: &TrieFact) -> Result<(St
 /// print it. Holds no secret and proves nothing by itself: a wrong proof simply fails `check_trie_fact`.
 pub fn make_trie_fact(st: &libzync::trie_store::TrieStore, kind: &str, script_pubkey: &[u8], txid: Option<&str>, vout: Option<u32>)
                       -> Result<TrieFact, String> {
+    libzync::coinlog::set_node_format(2);   // a producer builds in node format 2, the engine chain's, whatever this thread last verified (review R1-4 B3)
     use libzync::trie_fact as tf;
     // the answer, from the proof itself against the store's root, goes into the fact as its claim (`expect`)
     let root = st.root();

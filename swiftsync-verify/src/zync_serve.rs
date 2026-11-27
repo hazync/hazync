@@ -170,6 +170,7 @@ fn serve(addr: &str, mut handle: impl FnMut(&str) -> (u16, String)) {
 }
 
 fn main() {
+    libzync::coinlog::set_node_format(2);   // a producer builds in node format 2, the engine chain's, whatever this thread last verified (review R1-4 B3)
     let a: Vec<String> = std::env::args().skip(1).collect();
     if a.first().map(String::as_str) == Some("--tip") {
         #[cfg(not(feature = "tip"))]

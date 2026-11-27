@@ -121,6 +121,7 @@ fn handle(e: &Engine, dir: &Path, r: &Req) -> Result<serde_json::Value> {
             // the board's proof file: input (P.proof.json + P.journal, or HZE1) -> out as HZE1, checked by verify-core
             let input = r.input.as_ref().ok_or_else(|| eyre::eyre!("pack: input"))?;
             let out = r.out.as_ref().ok_or_else(|| eyre::eyre!("pack: out"))?;
+            eyre::ensure!(!e.bench, "pack: a metering image (BENCH_NOVERIFY): its proofs are never a reader's file");
             let baseline = Engine::baseline(dir)?;
             let (proof, journal) = crate::engine::read_proof(e, &baseline, input)?;
             let (file, _key, pin, id) = crate::engine::pack_bytes(e.agg_vk.as_ref(), baseline, &proof, &journal)?;

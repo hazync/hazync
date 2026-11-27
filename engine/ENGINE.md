@@ -107,3 +107,12 @@ adversarial blocks the chunks are badly unbalanced in time (not in memory or cor
 
 Consensus code and its patches' meaning; ChainState's content (apart from image ids and the trie format);
 zAPP-facing facts. Anything that changes a commitment's meaning is listed in CHANGES.md with the reason.
+
+## A chunk's `all_valid = false` means "not proven", never "invalid" (review R1-3 #4, 27.11.2026)
+
+A chunk sets `all_valid = false` when any check fails, including the batched signature check, and a prover can force
+that for a valid block (a wrong hint, e.g. -R for R). The aggregate then refuses the block: `block_valid` requires the
+chunks' `all_valid` (prover/methods/guest/src/main.rs, the chain step asserts, lines ~1671, ~1737, ~2316, and
+agg_lite.rs ~543), so no proof is made. Nothing reads `all_valid = false` as evidence that a block is invalid: the host
+only prints it (prover/host/src/main.rs exec-chunk, chunks.rs), and a reader only ever sees proofs of valid chains.
+A block with no proof is a liveness question for the prover, not a statement about the block.
