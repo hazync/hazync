@@ -306,6 +306,15 @@ pub(crate) fn stamp(s: &mut ChainState) {
         assert!(crate::verify::dev_mode_env(), "HAZYNC_TEST_NO_STAMP is a dev-mode test hook");
         return;
     }
+    // An engine host (HAZYNC_ENGINE_VK or HAZYNC_ENGINE_KEYS): the engine image proves every block, from genesis, with
+    // no lineage (engine/STAGE3.md 3.2). Without this a leaf was anchored on a state the engine chain never commits
+    // (self_id = this build's RISC Zero METHOD_ID), so --check-end refused it and no two leaves joined.
+    if let Some(w) = engine_backend::engine_image_cached() {
+        s.self_id = w;
+        s.lineage = [0; 32];
+        s.profile = crate::lz::expected_profile();
+        return;
+    }
     s.self_id = image_at(s.height);
     s.lineage = lineage_at(s.height);
     s.profile = crate::lz::expected_profile();

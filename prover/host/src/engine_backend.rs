@@ -366,3 +366,9 @@ pub(crate) fn engine_image_words() -> Option<Result<[u32; 8], String>> {
     let keys = std::env::var("HAZYNC_ENGINE_KEYS").ok()?;
     Some(Ok(image_id_words(&keys)))
 }
+
+/// [`engine_image_words`] once per process; a host set up for the engine whose key or image cannot be read stops.
+pub(crate) fn engine_image_cached() -> Option<[u32; 8]> {
+    static I: std::sync::OnceLock<Option<[u32; 8]>> = std::sync::OnceLock::new();
+    *I.get_or_init(|| engine_image_words().map(|r| r.unwrap_or_else(|e| panic!("engine image: {e}"))))
+}
