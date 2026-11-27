@@ -59,3 +59,10 @@ peak 23,856 MiB; `hzengine verify` OK, journal sha256 20bb754b... (identical). T
 323,287 bytes), as zapps/headers/tests/data/engine975278: `zapp-headers` gives OK with the tip from hazync-coord's
 node, MMR root bb22154a... (zapps/headers/test.sh). Not the reference card: the timing check of the 266.2 s is the
 PRO 6000 Workstation Edition re-run below.
+
+## Re-run on the reference card: RTX PRO 6000 Blackwell Workstation Edition (27.11.2026)
+
+Pod z6vjshptqqwe9h (nvidia-smi: "NVIDIA RTX PRO 6000 Blackwell Workstation Edition, 97887 MiB"), the same bundle:
+**prove 268.0 s** (job 278 s), GPU busy 56%, peak 24,066 MiB; `hzengine verify` OK; journal byte-identical to the
+A6000 run's and to 26.11's (sha256 20bb754b...). Against the 26.11 run on the same card, 266.2 s: +1.8 s (+0.7%).
+Both pods of 27.11 (this and the A6000) together: $0.72 (balance 6.44 -> 5.72).
