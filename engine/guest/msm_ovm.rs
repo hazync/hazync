@@ -107,7 +107,9 @@ pub fn msm(coeffs: &[Fr], bases: &[P]) -> P {
     if n <= STRAUS_MAX {
         return straus(&live.iter().map(|&i| &bases[i]).collect::<Vec<_>>(), &sc, &bits);
     }
-    let c = (1..=16usize).min_by_key(|&c| cost(&bits, c)).unwrap();
+    // c <= 15: signed digits lie in (-2^(c-1), 2^(c-1)] and are stored as i16; at c = 16 a digit of +32768 wrapped
+    // (review R1-3 #3)
+    let c = (1..=15usize).min_by_key(|&c| cost(&bits, c)).unwrap();
     let nw = bits.iter().map(|&b| windows(b, c)).max().unwrap_or(0);
     if nw == 0 {
         return id;

@@ -1,6 +1,8 @@
 //! OpenVM replacement for prover/methods/guest/src/batch_ecdsa.rs: SAME public items (HINT_BYTES, install, finish, Pt,
-//! Acc, neg_pt), SAME hint layout (u32 valid, R.x BE, R.y BE), SAME transcript ("libzync/batch-sig/v2", count, every
-//! tuple, every kind), SAME acceptance tests and batch equation Σ z·u2·Q − Σ z·R + (Σ z·u1)·G == O, keys merged.
+//! Acc, neg_pt), SAME hint layout (u32 valid, R.x BE, R.y BE), the product's transcript ("libzync/batch-sig/v2", count,
+//! every tuple u1, u2, Q.x, Q.y, R.x, R.y as little-endian bytes, every kind), the product's acceptance tests (R a
+//! NON-identity curve point, then accept_r) and batch equation Σ z·u2·Q − Σ z·R + (Σ z·u1)·G == O, keys merged.
+//! Until review round 1 (27.11.2026) R.y was missing from the transcript and R could be the identity: R1-3 #1, #2.
 //! Group arithmetic on OpenVM's secp256k1 extension instead of risc0 bigint2 circuits. A call with no valid hint is
 //! checked DIRECTLY (u1·G + u2·Q) and returns 1 (valid) / 2 (invalid) — the libsecp hook (bench/ovm-secp/apply_hook.py)
 //! maps 2 to libsecp's own "invalid".
@@ -18,7 +20,7 @@ pub const HINT_BYTES: usize = 68;
 /// x then y, 8 little-endian limbs each (libsecp's layout), as Hazync's Pt.
 pub type Pt = [u32; 16];
 
-struct Deferred { u1: Fr, u2: Fr, q: P, r: P, raw: [u8; 160], kind: u32 }
+struct Deferred { u1: Fr, u2: Fr, q: P, r: P, raw: [u8; 192], kind: u32 }
 static mut COLLECT: bool = false;
 static mut HINTS: Vec<u8> = Vec::new();
 static mut NEXT: usize = 0;
@@ -69,11 +71,15 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     }
     let rec = &h[i*HINT_BYTES+4..(i+1)*HINT_BYTES];
     let (Some(x), Some(y)) = (Fq::from_le_bytes(&be_to_le(&rec[..32])), Fq::from_le_bytes(&be_to_le(&rec[32..]))) else { FALLBACK += 1; return 0; };
-    let Some(rp) = P::from_xy(x.clone(), y.clone()) else { FALLBACK += 1; return 0; };
+    // a NON-identity curve point (review R1-3 #1: from_xy maps (0,0) to the identity, which the MSM drops: a forged
+    // BIP340 signature with r = 0 would then pass); the product checks y^2 == x^3 + 7 by hand (batch_ecdsa.rs)
+    let Some(rp) = P::from_xy_nonidentity(x.clone(), y.clone()) else { FALLBACK += 1; return 0; };
     if !accept_r(kind, x.as_le_bytes(), y.as_le_bytes(), &rr_s, &le(&rl)) { FALLBACK += 1; return 0; }
-    let mut raw = [0u8; 160];
+    // the product's transcript bytes: u1, u2, Q.x, Q.y, R.x, R.y (review R1-3 #2: without R.y the prover chose +/-R for
+    // ECDSA after the weights were fixed)
+    let mut raw = [0u8; 192];
     raw[..32].copy_from_slice(a.as_le_bytes()); raw[32..64].copy_from_slice(b.as_le_bytes());
-    raw[64..96].copy_from_slice(&qxb); raw[96..128].copy_from_slice(&qyb); raw[128..].copy_from_slice(x.as_le_bytes());
+    raw[64..96].copy_from_slice(&qxb); raw[96..128].copy_from_slice(&qyb); raw[128..160].copy_from_slice(x.as_le_bytes()); raw[160..].copy_from_slice(y.as_le_bytes());
     (*core::ptr::addr_of_mut!(DEFERRED)).push(Deferred { u1: a, u2: b, q, r: rp, raw, kind: kind as u32 });
     1
 }
