@@ -56,3 +56,8 @@ prove it unspent, and refuses it (the guest's own doc comment). A merchant who n
 The verifier side (27.11.2026): zapps/zeroconf, the module `zapp_zeroconf`. It checks the real proof above under the
 production image's pinned key, with keys-rtch as the trusted core and the state at 109 as the anchor: DEMO (a given
 anchor), T's txid, fee, weight and sigops; 13 refusals (tests/engine.rs).
+
+**Own kind, 27.11.2026:** the guest commits 0x5A5A0001 (it shared the coin zAPP's 0x5A430002). Rebuilt as keys-z-zeroconf3
+(production, 1ee5f2d7...) and keys-z-zeroconfc (metering); everything above re-run on them with the same results:
+the 8 negatives refused and the control accepted, both cases, and the real proof (real_proofs.sh -> real3/: core 354 s,
+chunk 126 s, zeroconf 155 s, verified; statement kind 0x5a5a0001).

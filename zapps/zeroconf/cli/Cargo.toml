@@ -1,0 +1,36 @@
+[package]
+name = "zapp-zeroconf-cli"
+version = "0.1.0"
+edition = "2021"
+description = "zapp-zeroconf: the zero-confirmation zyncAPP's command line (zapps/zeroconf)"
+license = "MIT"
+publish = false
+
+# The CLI, apart from the library (..): it alone takes the chain-identity flags every zAPP CLI shares (zapps/common:
+# --expect, --mempool, --bitcoin-cli), so the library carries none of that code.
+
+[[bin]]
+name = "zapp-zeroconf"
+path = "src/main.rs"
+
+[dependencies]
+zapp-zeroconf = { path = ".." }
+zapp-common = { path = "../../common" }
+zapp-corecheck = { path = "../../corecheck" }
+swiftsync-verify = { path = "../../../swiftsync-verify", features = ["engine"] }
+serde_json = "1"
+sha2 = "0.10"
+
+[features]
+# TESTS ONLY: `--network regtest`, the zAPP regtest harness's image (zapps/corecheck), for the tests on the real regtest
+# proof. Dev profile only: a release build with it does not compile.
+regtest-test = ["zapp-common/regtest-test", "zapp-corecheck/regtest-test"]
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[workspace]

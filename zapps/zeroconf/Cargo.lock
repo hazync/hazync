@@ -3320,6 +3320,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
+ "sha2",
  "swiftsync-verify",
 ]
 

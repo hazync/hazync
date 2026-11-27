@@ -1,12 +1,13 @@
 //! The zeroconf zAPP's ENGINE proof in its verifier: the fixture's T (engine/zapps/zeroconf/fixture: Core v31.1
 //! accepts it at 110) proved valid for block 111 on the regtest harness's tip 110, by the production zeroconf image
-//! (keys-z-zeroconf2) with REAL children: the core proof of block 110 (keys-rtch, a base step on native prep's
+//! (keys-z-zeroconf3) with REAL children: the core proof of block 110 (keys-rtch, a base step on native prep's
 //! state at 109) and the speculative chunk (engine/zapps/zeroconf/real_proofs.sh). Then the refusals.
 use swiftsync_verify::{hex32, ChainState, EngineKey, Image, Verdict};
 use zapp_zeroconf::*;
 
 const D: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/engine");
-const ZC_ID: &str = "e1e5aaf58889dedcc2fa8f02496a772a49b2387f4031d4d46946151e44b32aff";
+/// keys-z-zeroconf3: the zeroconf guest with its own kind 0x5A5A0001 (27.11.2026)
+const ZC_ID: &str = "1ee5f2d7a8d10a2a0da6c6de360b92002b526651d6cfae30abbf015b5ffd88bb";
 const CORE_ID: &str = "2d7401595eee8ae196702fafee49057eaf1ce8627bf79dd2b04d320e2533dc4f";
 /// the harness's block 110, as getblockhash prints it (scripts/zapp-regtest/oracle/snap_110.json, Core's own)
 const TIP: &str = "2d5cc9c833f072d2744d26a9354e94111e77d05669b5004f7d68641c42ae9d53";
@@ -57,6 +58,7 @@ fn engine_zeroconf_t_at_110() {
     let z = r.statement.as_ref().unwrap();
     assert_eq!((z.tip_height, z.fee, z.weight, z.sigops), (110, 10_000, 1_031, 1), "T's fee, weight and sigops (Core's)");
     assert_eq!(z.wtxid_hex(), t["wtxid"].as_str().unwrap());
+    assert_eq!(z.kind, KIND_ZEROCONF);
     // without a tip from the caller's own chain: DEMO, never OK
     assert_eq!(run(&file, ZC_ID, &key, core(), Some(&anchor), TXID, None).verdict, Verdict::Demo);
 
@@ -90,6 +92,13 @@ fn engine_zeroconf_t_at_110() {
     refused(run(&file, CORE_ID, &key, core(), Some(&anchor), TXID, None), "another image id");
     let bad = EngineKey { bytes: &vk, pin: [7u8; 32] };
     refused(run(&file, ZC_ID, &bad, core(), Some(&anchor), TXID, None), "a pin that is not the key's");
+    // the same proof by the image before 27.11.2026 (keys-z-zeroconf2), which committed the coin zAPP's kind: a real
+    // proof under its own key and image, refused for its kind alone
+    let (ok_file, ok_vk) = (rd("old_kind/proof.hze"), rd("old_kind/vk.bin"));
+    let old_key = EngineKey { bytes: &ok_vk, pin: { use sha2::Digest as _; sha2::Sha256::digest(&ok_vk).into() } };
+    let r = run(&ok_file, "e1e5aaf58889dedcc2fa8f02496a772a49b2387f4031d4d46946151e44b32aff", &old_key, core(), Some(&anchor), TXID, None);
+    assert!(r.checks.iter().any(|(ok, s)| !ok && s.contains("kind 0x5a430002")), "{:?}", r.checks);
+    refused(r, "the old shared kind");
     // not an engine proof at all
     refused(run(&rd("T.json"), ZC_ID, &key, core(), Some(&anchor), TXID, None), "not an engine proof file");
 }
