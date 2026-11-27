@@ -104,7 +104,17 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    segpar.rs builds the baseline from its parts; engine.rs calls app_exe_commit() and decode_using_vk. So: a small host
    port; and the predecessor's key file is NOT the same struct across versions, so xver must use the PREDECESSOR's
    verify crate and types (one verify-core flavour per OpenVM version, e.g. a v2.0.2 copy with these two calls).
-   Untested yet: the platform crate and the guest build on v2.0.2.
+   **Done 27.11 (night), engine/handover/v2.0.2:**
+   - Predecessor side: the whole engine on v2.0.2 (make.sh + engine-on-v2.0.2.patch: the baseline field, proof
+     decode, one guest call `as_le_bytes`): hzengine 140 s, keys 26 s, the mainnet guest (exe 78d2023d, vm 94ad2d3b:
+     a different VM, as it must be), block 199 PROVED on v2.0.2 (287 s, CPU) and verified.
+   - Two OpenVM versions in one graph: v2.0.2's tree from openvm_src.sh (OVM_VERSION=v2.0.2, OVM_SBK_PATHS=1:
+     stark-backend by PATH, so it needs no [patch] table), v2.0.2's own nozstd patch (the v2.1.0 one does not apply:
+     no codec.rs there), and the CUDA `links` names renamed in the predecessor copy (Cargo allows one package per
+     `links` value: openvm-circuit-primitives, cuda-common); verify-core for v2.0.2 as hazync-engine-verify-v2-0-2
+     (make_verify.sh). A native binary with BOTH verifiers builds (openvm-circuit 2.0.2 and 2.1.0 side by side).
+   - Successor side: xver keys tagged by version; the v2.1.0 guest with v2.0.2's verifier (ovm-xver-v2_0_2)
+     BUILDS (exe 0065e63a). The handover block: running (results/handover_step3).
    A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).
