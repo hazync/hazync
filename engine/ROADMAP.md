@@ -63,7 +63,7 @@ verifier checking), with the old system untouched.
 
 | # | task |
 |---|---|
-| 4.1 | Reproducible container build of every engine image (core, each zAPP, handover verifier); ids pinned like reproduce/LIBZYNC_IDS; two machines agree |
+| 4.1 | Reproducible container build of every engine image (core, each zAPP, handover verifier); ids pinned like reproduce/LIBZYNC_IDS; two machines agree. ◐ 27.11: reproduce/engine.Dockerfile + engine-ids.sh build core and zeroconf; laptop and hazync-coord agree byte for byte and equal the box's references (c7fe0eb8, 1ee5f2d7); two build paths reach the exe (the kit path, a zAPP guest's location): results/reproduce_engine |
 | 4.2 | **[U]** Review rounds of the soundness code, in several ways: the compat layer (engine/platform), guest edits (edits.py, coinlog_ovm.py), the C heap, node format 2, segpar, the handover mode; findings fixed and re-reviewed |
 | 4.3 | The OpenVM patch set minimised; MSVC, WASM, nozstd and nologging patches offered upstream |
 | 4.4 | Security parameters and versions recorded (OpenVM / stark-backend tags, 100-bit params) |
