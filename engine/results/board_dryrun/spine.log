@@ -1,0 +1,11 @@
+no spine yet — seeding it with the block 1 receipt (274327 bytes)
+✓ spine now [1..1] — genesis-anchored, 274327 bytes, as 'ghost:95a610'.
+absorbing block 2 into [1..1] — one fold, no re-proving…
+✓ spine now [1..2] — genesis-anchored, 274463 bytes, as 'ghost:95a610'.
+absorbing [3..4] into [1..2] — one fold, no re-proving…
+✓ spine now [1..4] — genesis-anchored, 274479 bytes, as 'ghost:95a610'.
+absorbing [5..8] into [1..4] — one fold, no re-proving…
+✓ spine now [1..8] — genesis-anchored, 274503 bytes, as 'ghost:95a610'.
+  block 9 is not proven yet (no retained receipt) — the spine is up to date at [1..8].
+absorbed 8 block(s) into the spine in 4 step(s).
+STEP rc=0 secs=801 :: nice python3 /root/gd/src/coordinator/hazync spine
