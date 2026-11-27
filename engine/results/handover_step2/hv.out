@@ -1,0 +1,6 @@
+263fa1dd host: handover_dir() - the predecessor's 
+1. test-lineage host built 2167 s: HANDOVER k=0 image=c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 first_height=200 verifier=b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a (NOT CARRIED BY THIS HOST
+2. keys-xv: build: 72.3 s; image exe 434f9f6eb1cff466f1b52c339716da0b3f06a1456248e2098362611358e60922 vm 00e0007
+3. predecessor files: block_199.ovm.bin block_199.ovm.journal block_199.ovm.proof.json prep prep.log state_199.coinlog state_199.trie wi 
+4. handover block 200 rc=0 6131 s ::   block 200: 0 chunks, proved in 6130.4 s (handover: verifies predecessor), forest 209 live_set 1  [6130 s total] 
+HV_DONE
