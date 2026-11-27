@@ -1231,6 +1231,24 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         } else { r };
         (r, st)
     });
+    // HAZYNC_HANDOVER_PROOF=<P> (HAZYNC_ENGINE; engine/HANDOVER.md step 2): the first block is a handover step on the
+    // pinned ENGINE predecessor's proof P (P.journal, and P.bin: its plain encoding, `hzengine wasm-inputs`) from another
+    // OpenVM version: the lineage entry's verifier is that predecessor's key pin and the image is built with ovm-xver,
+    // whose xver checks P in-guest. The chain state comes from P's journal (the guest checks P itself); the anchor
+    // argument is unused, as for HAZYNC_HANDOVER_RECEIPT.
+    let ehandover: Option<(crate::engine_backend::EngineProof, Vec<u8>, ChainState)> = std::env::var("HAZYNC_HANDOVER_PROOF").ok().map(|p| {
+        assert!(crate::engine_backend::active(), "HAZYNC_HANDOVER_PROOF needs HAZYNC_ENGINE");
+        assert!(handover.is_none(), "HAZYNC_HANDOVER_PROOF and HAZYNC_HANDOVER_RECEIPT: one or the other");
+        let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_PROOF: this image has no predecessor pinned");
+        assert!(last.verifier != crate::handover_pin::SAME_ZKVM,
+                "HAZYNC_HANDOVER_PROOF: the pinned predecessor is on the SAME OpenVM (a child proof, not ovm-xver): not built yet");
+        let journal = std::fs::read(format!("{p}.journal")).unwrap_or_else(|e| panic!("{p}.journal: {e}"));
+        let bin = std::fs::read(format!("{p}.bin")).unwrap_or_else(|e| panic!("{p}.bin (the proof's plain encoding: hzengine wasm-inputs): {e}"));
+        let st = crate::engine_backend::decode_state(&journal);
+        assert!(st.kind == KIND_CHAIN && st.self_id == last.image, "{p} is not the predecessor's chain state");
+        assert_eq!(st.height + 1, last.first_height, "{p}: the pin hands over at {}", last.first_height);
+        (crate::engine_backend::EngineProof { path: p.into(), journal }, bin, st)
+    });
     // HAZYNC_LEAF_BUNDLE=<leaf_<h>.bin> (ROADMAP H-B 8): a LEAF proof of the one block h, a base step on S(h-1) taken from
     // prep's bundle with every witness in it: no coin log, trie or BIP30 tree, and no block files but block h's. The
     // receipt joins with its neighbours (libzync-join). HAZYNC_LEAF_CHECK=<dir>: an ordinary run that asserts each
@@ -1261,13 +1279,13 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         None => dir,
     };
-    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
+    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if let Some((_, _, st)) = &ehandover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // history.bin starts at height 0 only on a run from genesis (libzync::history).
-    let prev_is_genesis = handover.is_none() && leaf.is_none() && anchor_path == "genesis";
+    let prev_is_genesis = handover.is_none() && ehandover.is_none() && leaf.is_none() && anchor_path == "genesis";
     // The coin log at the run's start. Disk mode (HAZYNC_COINLOG_DIR) with HAZYNC_RESUME and a store already there: leave
     // it alone (loading the anchor would WIPE it, review 11-03); the resume below loads it at its receipt, and only if no
     // receipt is found is the anchor's log loaded after all.
@@ -1279,9 +1297,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     // Opened BEFORE the coin log (review 11-12, #3): it only checks, while the coin log's load rewinds its journal.
     let disk_trie_resume = methods::TRIE && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
         && crate::trie::trie_dir().map_or(false, |d| d.join("meta").exists());
-    if methods::TRIE && !disk_trie_resume && leaf.is_none() { crate::trie::trie_init_at_start(handover.is_some(), anchor_path, &prev); }
+    if methods::TRIE && !disk_trie_resume && leaf.is_none() { crate::trie::trie_init_at_start(handover.is_some() || ehandover.is_some(), anchor_path, &prev); }
     if methods::COINLOG && !disk_resume && leaf.is_none() {
-        cl_init_at_start(handover.is_some(), anchor_path, &prev);
+        cl_init_at_start(handover.is_some() || ehandover.is_some(), anchor_path, &prev);
     }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
@@ -1290,7 +1308,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     let replay = leaf.is_none() && (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
     // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
     // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
-    assert!(replay || handover.is_none() || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
+    assert!(replay || (handover.is_none() && ehandover.is_none()) || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
@@ -1327,14 +1345,25 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         t
     };
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
-    let mut handover_pending = handover.is_some();
+    let mut handover_pending = handover.is_some() || ehandover.is_some();
     let mut prev_rcpt: Option<Receipt> = handover.map(|(r, _)| r);
     // HAZYNC_ENGINE (engine_backend): every execution and proof of the range on the OpenVM engine. An engine chain
     // starts at genesis or a leaf bundle: no handover (no RISC Zero predecessor), and no resume yet (block_<h>.rcpt).
     let eng = crate::engine_backend::active();
     let mut eprev: Option<crate::engine_backend::EngineProof> = None;
+    // the predecessor's proof as the guest's xver reads it after the tail (xver_ovm.rs): its byte length, then the bytes
+    // packed little-endian, zero-padded to a word. Only for the handover block (step 2).
+    let mut eforeign: Option<Vec<u32>> = None;
     if eng {
-        assert!(!handover_pending, "HAZYNC_ENGINE: no handover (an engine chain has no RISC Zero predecessor)");
+        assert!(!handover_pending || ehandover.is_some(), "HAZYNC_ENGINE: no RISC Zero handover (an engine chain has no RISC Zero predecessor)");
+        if let Some((p, bin, _)) = ehandover {
+            let mut b = bin.clone();
+            b.resize(bin.len().div_ceil(4) * 4, 0);
+            let mut w = vec![bin.len() as u32];
+            w.extend(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())));
+            eforeign = Some(w);
+            eprev = Some(p);
+        }
         assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_ENGINE: resume is not supported yet");
     }
     let mut first = lo;
@@ -1590,6 +1619,11 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             let mut st = crate::sink::Stream::default();
             write_aggregate_env_ex(&mut st, &ejournals, &prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
             libzync_agg_tail(&mut st, &w);
+            if let (2, Some(words)) = (step, &eforeign) {
+                use crate::sink::Sink;
+                st.write(&(words.len() as u32));
+                st.write_slice(words);
+            }
             let x = crate::engine_backend::with(out, |e| e.execute_ex(&format!("b{h}_agg_collect"), &st.0, &[], true, true));
             assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "block {h}: collect aggregate: exit {:?}, not a finished collect run", x.exit);
             log = x.log.into_bytes();
@@ -1665,6 +1699,11 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             let mut st = crate::sink::Stream::default();
             write_aggregate_env_ex(&mut st, &echunks, &prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
             libzync_agg_tail(&mut st, &w);
+            if let (2, Some(words)) = (step, &eforeign) {
+                use crate::sink::Sink;
+                st.write(&(words.len() as u32));
+                st.write_slice(words);
+            }
             let p = crate::engine_backend::with(out, |e| e.prove(&format!("b{h}_agg"), &st.0, &ch, true));
             let p = crate::engine_backend::keep(&p, &format!("{out}/block_{h}.ovm"));
             let st = crate::engine_backend::decode_state(&p.journal);
