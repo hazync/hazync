@@ -41,7 +41,7 @@ s += """
 pub unsafe extern "C" fn hz_fe_sqrt(a_be: *const u8, out_be: *mut u8) -> i32 {
     use openvm_algebra_guest::{IntMod, Sqrt};
     let a = core::slice::from_raw_parts(a_be, 32);
-    let Some(x) = k256::Secp256k1Coord::from_be_bytes(a) else { return 0 };
+    let Some(x) = k256::Secp256k1Coord::from_be_bytes(a) else { panic!("hz_fe_sqrt: a non-canonical input (the caller normalises; review R2-4 #2)") };
     match x.sqrt() { Some(y) => { core::slice::from_raw_parts_mut(out_be, 32).copy_from_slice(&y.to_be_bytes()); 1 } None => 0 }
 }
 openvm::init!();

@@ -46,7 +46,7 @@ index 537be32..164d152 100644
 +        unsigned char ab[32], yb[32];
 +        secp256k1_fe t = x3; secp256k1_fe_normalize_var(&t); secp256k1_fe_get_b32(ab, &t);
 +        ret = hz_fe_sqrt(ab, yb);
-+        if (ret) { ret = secp256k1_fe_set_b32_limit(&r->y, yb); }
++        if (ret) { ret = secp256k1_fe_set_b32_limit(&r->y, yb); } else { secp256k1_fe_set_int(&r->y, 0); }
 +    }
 +#else
      ret = secp256k1_fe_sqrt(&r->y, &x3);
