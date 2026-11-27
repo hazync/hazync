@@ -441,7 +441,7 @@ fn main() {
             if matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)) { die("a dev-mode FakeReceipt is not a proof"); }
             r.verify(ZYNCAPP_ZEROCONF_ID).unwrap_or_else(|e| die(&format!("does not verify: {e}")));
             let z: ZeroConf = r.journal.decode().unwrap_or_else(|e| die(&format!("journal: {e}")));
-            if z.kind != 0x5A43_0002 { die("not a zyncAPP zeroconf statement"); }
+            if z.kind != 0x5A5A_0001 { die("not a zyncAPP zeroconf statement"); }
             let (mut t, mut id) = (z.tip_hash, z.txid);
             t.reverse();
             id.reverse();

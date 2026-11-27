@@ -54,7 +54,7 @@ PY
 }
 run() { # <name> <dir> <record index>
   $Z prove-zeroconf $ST/state_110.json $2/chunk.j $3 $2/paths_$3.json $2/out --regtest --stream $2/zc_$3.bin > $2/stream_$3.log 2>&1 || { echo "   $1: STREAM FAILED: $(tail -1 $2/stream_$3.log | cut -c1-120)"; return; }
-  $E execute --dir keys-z-zeroconfb --input $2/zc_$3.bin --journal $2/zc_$3.j --log $2/zc_$3.log > $2/zc_$3.out 2>&1; rc=$?
+  $E execute --dir keys-z-zeroconfc --input $2/zc_$3.bin --journal $2/zc_$3.j --log $2/zc_$3.log > $2/zc_$3.out 2>&1; rc=$?
   why=$(grep -a "panicked\|Guest panicked" -A1 $2/zc_$3.log $2/zc_$3.out 2>/dev/null | grep -av "panicked at\|^--" | head -1 | sed 's/^[^:]*://' | cut -c1-110)
   [ $rc != 0 ] && echo "   refused  $1: $why" || echo "   ACCEPTED $1"
 }

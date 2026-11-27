@@ -15,10 +15,9 @@ use serde::{Deserialize, Serialize};
 use swiftsync_verify::{anchor_id, hex, hex32, identity_matches, lineage_of, work_at_least, words, ChainState, EngineKey, Image,
                        Verdict, MAX_FUTURE_BLOCK_TIME};
 
-/// The statement's kind word, as the guest commits it (prover/zyncapps/methods/zeroconf: KIND_ZYNC_ZEROCONF).
-/// ⚠ The coin zAPP's guest commits the same word (KIND_ZYNC_COIN): the two are told apart by the image the proof
-/// verifies under, never by this word (a finding for the guest review rounds, ROADMAP 4.2).
-pub const KIND_ZEROCONF: u32 = 0x5A43_0002;
+/// The statement's kind word, as the guest commits it (prover/zyncapps/methods/zeroconf: KIND_ZYNC_ZEROCONF): 'Z' 'Z'
+/// 1. Its own since 27.11.2026; before, the coin zAPP's 0x5A43_0002, so only the image id told the two apart.
+pub const KIND_ZEROCONF: u32 = 0x5A5A_0001;
 
 /// The guest's committed statement, field for field and in order: risc0's serde encoding of exactly this struct.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

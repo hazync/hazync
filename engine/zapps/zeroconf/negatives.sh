@@ -4,7 +4,7 @@ cd /root/engine/zc1 || exit 1
 Z=./zyncapp_skip; E=/root/engine-kit/engine/host/target/release/hzengine; ST=/root/engine/rtprep
 run() { # <name> <tip> <chunk> <index> <paths> <net flag>
   $Z prove-zeroconf $2 $3 $4 $5 out $6 --stream neg.bin > /dev/null 2>&1 || { echo "$1: STREAM FAILED"; return; }
-  $E execute --dir ../keys-z-zeroconfb --input neg.bin --journal neg.j --log neg.log > neg.out 2>&1; rc=$?
+  $E execute --dir ../keys-z-zeroconfc --input neg.bin --journal neg.j --log neg.log > neg.out 2>&1; rc=$?
   why=$(grep -a "panicked\|Guest panicked" -A1 neg.log neg.out 2>/dev/null | grep -av "panicked at\|^--" | head -1 | sed 's/^[^:]*://' | cut -c1-110)
   [ $rc != 0 ] && echo "refused  $1: $why" || echo "ACCEPTED $1"
 }

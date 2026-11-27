@@ -52,7 +52,9 @@ pub struct ZeroConf {
     pub sigops: i64,
 }
 
-pub const KIND_ZYNC_ZEROCONF: u32 = 0x5A43_0002;
+/// 'Z' 'Z' 1. Until 27.11.2026 0x5A43_0002, the coin zyncAPP's kind as well: the two were told apart only by their
+/// image ids (engine/results/product_component/AUDIT.md).
+pub const KIND_ZYNC_ZEROCONF: u32 = 0x5A5A_0001;
 const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 
 struct Rd<'a> { w: &'a [u32], i: usize }
