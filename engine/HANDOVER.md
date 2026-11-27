@@ -72,6 +72,22 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    - Host: `engine-export` for the handover block writes the old proof's bytes into the aggregate stream where
      `xver` reads them (`n`, then the words), from the old chain's tip proof (proof.json).
    Cost: 15.6B once per upgrade (step 1), inside the handover block's aggregate.
+
+   **Built (27.11.2026):**
+   - Guest: `engine/guest/xver_ovm.rs` behind the engine feature `ovm-xver` (edits.py edit 1 switches the module; the
+     switch is on ONE line so the default image stays byte-identical: rebuilt at HEAD, exe b7d7c148 with and without
+     it). It carries each predecessor key as an embedded file with its pin (assemble.sh `HZ_OVM_XVER_KEYS`, generated
+     src/xver_keys.rs; main.rs's compile-time check `carried(verifier)` passes only for a carried pin) and checks the
+     proof with verify-core's `verify_full_bytes` (pin, image id from the key, STARK, public values = SHA-256(journal)).
+     With `ovm-xver` the whole guest takes OpenVM from ONE verified patched tree (openvm_src.sh: nozstd, nologging).
+   - Test images: `HZ_TEST_LINEAGE` replaces lineage/test.rs in the assembled copy only (the test variant, never
+     published); a host of the same variant is built from a copy of the checkout with that file.
+   - Host: `HAZYNC_HANDOVER_PROOF=<P>` in libzync-prove-range on the engine: the predecessor's state from P.journal
+     (checked against the pin's image and height), P.bin (plain encoding) as words after the tail in the collect and
+     prove passes, no child; the coin log / trie next to P (handover_dir()).
+   - **Two OpenVM versions in one guest are still ahead (step 3):** across a real upgrade the new guest must compile
+     the OLD version's verifier next to its own runtime. Step 2 is rehearsed with a predecessor of the SAME OpenVM
+     (keys-ch) forced through the software path.
 3. A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).
