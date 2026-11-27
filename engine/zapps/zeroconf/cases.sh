@@ -13,7 +13,9 @@ rm -rf zc_base && python3 $MF $ZR $TF zc_base > /dev/null && cmp zc_base/T.json 
 chunk() { # <dir>: hints + export of its template's speculative chunk, executed on the regtest core image
   local d=$1
   ( export HAZYNC_NETWORK=regtest HAZYNC_PROFILE_LAYOUT=cost HAZYNC_CHUNKS=1 HAZYNC_SPECULATIVE=1 HAZYNC_BLOCK=$d/template_111.json
-    $H libzync-hints $d/t111.lzb > $d/hints.log 2>&1 && HAZYNC_LZ_HINTS=$d/t111.lzb $H engine-export $d/x111 > $d/export.log 2>&1 )
+    # both stop at the aggregate, as they must for a speculative block (never aggregated); the chunk is written first
+    $H libzync-hints $d/t111.lzb > $d/hints.log 2>&1; HAZYNC_LZ_HINTS=$d/t111.lzb $H engine-export $d/x111 > $d/export.log 2>&1 )
+  [ -f $d/x111/chunk_00.in ] || { echo "   no chunk exported: $(sed 's/\x1b\[[0-9;]*m//g' $d/hints.log $d/export.log | grep -a 'panicked' -A1 | tail -1 | cut -c1-120)"; return 1; }
   $E execute --dir keys-rtch --input $d/x111/chunk_00.in --journal $d/chunk.j > $d/exec.log 2>&1 || { echo "   chunk execute FAILED"; return 1; }
   python3 - $d/chunk.j <<'PY'
 import struct,sys
