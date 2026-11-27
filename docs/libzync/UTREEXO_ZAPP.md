@@ -1,11 +1,13 @@
 # zyncAPP: proven Utreexo roots for assumeutreexo (design and prototype, #723)
 
-Status: released in v0.27.0 (#744, 20.11.2026) as an **early** zAPP, CPU only. Executed (no dev mode) from genesis to H = 1,999,
-10,000 and 100,000; the roots are byte-identical to Floresta's own code at every H tested; real CPU proofs at H = 2 and 3
-(§8). Reviewed 15.11.2026 (no soundness break found); images pinned in `reproduce/LIBZYNC_IDS` from the reproducible
-container build: base `00b2d1e8`, tip mode (§10) `5ef26dfe` since 21.11.2026 (the block walks read compact sizes as
-Core does, with libzync::facts' reader; two agreeing builds of `cffa2cbb`); before them `27bea7da` / `ab6f7a26`. Nothing deployed. Utreexo stays out of the Hazync core; this zAPP sits on
-top of it, like every zAPP.
+Status (27.11.2026): engine (OpenVM) proofs. The base and a tip step are proved on the engine on CPU (a base after
+block 100 and a step 100 -> 150, each over the engine chain's core proof of mainnet 1..200; engine/results/zapp_utreexo),
+and `zapp-utreexo`, its library and WASM check engine proofs only. No engine utreexo image is published yet (the Stage
+4 freeze): every check names the utreexo image, its verifying key and the core image. The prover and follower sections
+(§5's `zyncapp`, §10.5-10.6) describe the RISC Zero build, released in v0.27.0 as an early zAPP; they move to the engine
+with Stage 3. The measured and tested sections (§7, §8, §10.8, §10.9) are dated records of that build; the roots were
+byte-identical to Floresta's own code at every H tested (1,999, 10,000, 100,000). Utreexo stays out of the Hazync core;
+this zAPP sits on top of it, like every zAPP.
 
 Utreexo is Tadge Dryja's accumulator; Floresta (getfloresta/Floresta, formerly vinteumorg) is Davidson Souza's node
 and rustreexo its library. This zAPP adds nothing to either. It is an additive product on a Hazync chain proof:
@@ -182,28 +184,23 @@ What the host supplies: the block bytes, the tracked positions, each coin's stat
 **What the checker adds** (`zapps/utreexo`, `verify_utreexo_on`; the verdict on the decoded statement is the pure
 function `judge_verified_statement`): the **caller names the network** (`--network`, default mainnet, as every zAPP; the
 WASM frame's network field), never the proof, and a proof of another network is FAIL (its network word and core
-profile must be that network's); not a FakeReceipt, `RISC0_DEV_MODE` unset, the receipt verifies under the trusted
-utreexo id, `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, zero lineage (one core
+profile must be that network's); the engine proof verifies under the utreexo image the caller names (`--image`)
+and its pinned key (`--vk`: the key file's SHA-256 is the pin; engine/VERIFIER.md), `done = 1` and `to = H`, `self_id` = that id, one root per set bit of `leaves`, zero lineage (one core
 image since genesis: a handover lineage is refused, even the image's own), the core image, profile and anchor are
 that network's trusted ones (swiftsync-verify's `Image` table, used as a library), `max_time <= now + 7200`; OK
 additionally needs **block H from the node's own header chain** (`--expect`, or `--mempool` / `--bitcoin-cli` asked
 for block H), the core tip too when T > H (`--expect-tip`; a tip that is given is compared also when T = H; with
 `--mempool` / `--bitcoin-cli` block T is asked as well, must agree with a given `--expect-tip`, and the node's
-chainwork at T is compared with the proven one), minimum work plus the checkpoint, and a **pinned utreexo image**:
-the built-in id `00b2d1e8…` (since 21.11.2026; `27bea7da…` from 18.11.2026) is **pinned** in reproduce/LIBZYNC_IDS (`zyncapp-utreexo`, the
-reproducible container's build, §10.8; until then a local build, and a proof under an unpinned built-in id is at most
-DEMO) (`UTREEXO_IMAGE_PINNED`; an id the caller names with `--image` may reach OK, and the checks
-and the OK line say the checker does not know its code); otherwise DEMO. A FAIL report carries no statement. The receipt is decoded with a 16 MiB bincode
-limit and no trailing bytes (the core verifier's own decode, swiftsync-verify `src/lib.rs:463`, has no limit; core
-code, not changed here).
+chainwork at T is compared with the proven one), and minimum work plus the checkpoint; otherwise DEMO. The core image
+is the caller's too (`--core-image`): no engine image is published yet, so there is no built-in one, and the checks and
+the OK line say the checker does not know the code of an image it was given. A FAIL report carries no statement.
 
 **The CLI's output.** Check lines and the verdict line on stdout, exit 0 OK, 2 DEMO, 1 FAIL or a usage error (an
-unknown flag, a flag without its value, not exactly one receipt). With `--json` or `--floresta`, stdout carries only
+unknown flag, a flag without its value, not exactly one proof). With `--json` or `--floresta`, stdout carries only
 that output (the checks go to stderr; `---` between the two when both are asked), and only on OK, or on DEMO with
 `--allow-demo`; the JSON has `verdict`, `network` (the one checked), `identity_checked` and `image_source`
-(`"builtin-unpinned"` with `image_label`, `"builtin-pinned"`, or `"caller"` for an id named with `--image`, whose code
-the checker does not know; the OK line says so too), and the `--floresta` source starts with a comment line naming the network. The built-in
-image id was printed with the label "local build, not reproducible, not published" until it was pinned (18.11.2026; now "pinned in reproduce/LIBZYNC_IDS, reproducible container build").
+(`"caller"` for the id named with `--image`, whose code the checker does not know, and the OK line says so; once an
+image is published, `"builtin-pinned"`), and the `--floresta` source starts with a comment line naming the network.
 
 ## 5. Host and module layout
 
@@ -218,11 +215,12 @@ image id was printed with the label "local build, not reproducible, not publishe
   `utreexo-ref`'s line for H, then executes or proves the runs; `UTREEXO_TAMPER=<case>` negative tests;
   `utreexo-count <block_h.json ...>` the per-block cost model counts.
 - `zapps/utreexo` (this zAPP's own module, the same layout as every zAPP): the check library `zapp_utreexo` and the CLI
-  `zapp-utreexo verify <receipt> [--network mainnet|signet] [--expect H:hash] [--mempool | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
+  `zapp-utreexo verify <proof.hze> --image <hex> --vk <key file> --core-image <hex> [--base-image <hex>] [--network mainnet|signet] [--expect H:hash] [--mempool | --mempool-url <base> | --bitcoin-cli "<cmd>"] [--expect-tip T:hash] [--json] [--floresta] [--allow-demo]`, using
   swiftsync-verify as a library (no Utreexo code in the core verifier crates). `zapps/utreexo/wasm`: the same checks as
   WebAssembly (raw ABI, `zapp-utreexo.js` glue, `build.sh` byte-reproducible with Rust 1.99.0 at a fixed stage path,
-  `test.mjs`). `zapps/utreexo/vectors`: the real receipts of §8. `zapps/utreexo/test.sh`: the library's tests, 28 CLI
-  cases, the WASM build and its 13 cases, and the built WASM's sha256 against the line in `wasm/README.md`.
+  `test.mjs`). `zapps/utreexo/tests/data/engine`: the engine proofs (base 100, step 150) with their keys and ids.
+  `zapps/utreexo/test.sh`: the library's tests, 38 CLI cases, the WASM build and its 23 cases, and the built WASM's
+  sha256 against the line in `wasm/README.md`.
 - `prover/zyncapps/utreexo-ref`: the reference (Floresta's code), test only.
 
 ## 6. Distribution (proposal)
@@ -624,14 +622,15 @@ leaves an unused state directory, which the retention removes.
 
 ### 10.7 What a Floresta node checks
 
-`zapp_utreexo::verify_utreexo_tip_on` (Rust library; the CLI `zapp-utreexo verify` routes a tip receipt there by its
+`zapp_utreexo::verify_utreexo_tip_on` (Rust library; the CLI `zapp-utreexo verify` routes a tip proof there by its
 journal's kind word):
 
-1. the receipt decodes (16 MiB limit, no trailing bytes), is a real succinct or Groth16 receipt (not a FakeReceipt,
-   `RISC0_DEV_MODE` unset), and **verifies under the pinned tip image id**;
-2. kind 'ZU' 2; `self_id` = that id (every step was this image); `base_id` = the pinned base image id; `steps >= 1`,
+1. the file is an engine proof that **verifies under the tip image the node names** (`--image`) and its pinned key
+   (`--vk`);
+2. kind 'ZU' 2; `self_id` = that id (every step was this image); `base_id` = the base image the node names
+   (`--base-image`); `steps >= 1`,
    `base_height <= from < height`; one root per set bit of `leaves`; the network the CALLER names;
-3. `core_id` and `base_core_id` = the network's trusted core image; the core profile and the genesis anchor are that
+3. `core_id` and `base_core_id` = the core image the node names (`--core-image`); the core profile and the genesis anchor are that
    image's; the core lineage zero or the image's own; `max_time` not more than 2 h ahead of the node's clock;
 4. **block H's hash = the node's own header chain's** at H (`--expect`, or `--bitcoin-cli` / `--mempool`), and the core
    tip T (> H) the node's too (`--expect-tip`); Core's minimum work and checkpoint at T;
@@ -639,7 +638,8 @@ journal's kind word):
 6. then load: `Stump { leaves, roots }` with every 32-zero-byte root as `BitcoinNodeHash::Empty` (§1), and
    `mark_chain_as_assumed(stump, block_hash)` as for a compiled-in `AssumeUtreexoValue` (§2).
 
-OK needs 1-4 and both images pinned (both are, since 18.11.2026; an unpinned built-in id caps the verdict at DEMO). `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
+OK needs 1-4. Until engine images are published, the node names all three images (ones it rebuilt or trusts) and the
+key; a published image will be built in and pinned (an unpinned built-in id caps the verdict at DEMO). `--json` adds `mode: "tip"`, `steps`, `from`, `base_height`, `base_image`; `--floresta`
 prints the same `AssumeUtreexoValue` source as for a base.
 
 ### 10.8 Measured (18.11.2026, hazync-coord, CPU, risc0 3.1.0 executor, no dev mode)

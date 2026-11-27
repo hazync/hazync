@@ -1,8 +1,11 @@
 # The deposit-proof zyncAPP
 
-Status: built 15.11.2026, tested on real receipts, independently reviewed the same day (no soundness break found) and
-released in v0.27.0 (#743, 20.11.2026). No new image id: it
-checks two proofs that already exist. Code: the zAPP's own module `zapps/deposit` (ZYNCAPPS.md §9), on the core verifier
+Status: built 15.11.2026, independently reviewed the same day (no soundness break found), released in v0.27.0 (#743,
+20.11.2026) on RISC Zero receipts; engine (OpenVM) proofs only since 27.11.2026, tested on the engine chain's core proof
+of mainnet 1..200 and its header chain 0..4,031 (both below Core's minimum work, so DEMO at best until the engine chain
+is re-proved). No image of its own: it checks two proofs that already exist. No engine image is published yet (the
+Stage 4 freeze), so every check names the core and header images and their keys (`--image`, `--vk`,
+`--headers-image`, `--headers-vk`). Code: the zAPP's own module `zapps/deposit` (ZYNCAPPS.md §9), on the core verifier
 and the header-chain zAPP (`zapps/headers`) as libraries: `src/lib.rs` (verifier), `zapp-deposit` (CLI), `wasm/`
 (`verify_deposit` / `verifyDeposit` in `zapp-deposit.js`), `zapp-deposit build` (bundle builder). Tests: `src/tests.rs`,
 `test_deposit.sh` and `wasm/test-deposit.mjs`, all run by `zapps/deposit/test.sh`.
@@ -35,7 +38,7 @@ verdicts:
 A caller that compares the tip by other means can turn the identity requirement off (`--no-require-identity`,
 `"require_identity": false`); then `OK` and `accepted` need only the checks and the work, and saying so is its choice.
 
-**Whose work counts.** "The tip proof" is the header-chain proof when header receipts are given (and bound, §2), else
+**Whose work counts.** "The tip proof" is the header-chain proof when header proofs are given (and bound, §2), else
 the core proof. With headers, `OK` does NOT also require the core proof's own verdict to be `OK`: a core proof that is
 `DEMO` on its own (its chain 0..Hc below the minimum chain work, or below its pinned checkpoint, as every core proof is
 while the board re-proves from genesis) gives `OK` when the bound header chain has the minimum chain work and its tip
@@ -49,16 +52,15 @@ headers the core proof is the tip proof, and its `DEMO` stays `DEMO`.
 
 Two proofs exist:
 
-- the **core proof** (`46666b6f…`, v0.26.0; its proofs from the earlier `8888d59c…` still verify by id): every block
-  0..Hc fully validated. Its `ChainState` holds a block forest with one leaf per block: the block hash, the coin
-  state after it and (from v0.26.0) its undo hash. It reaches Hc, which today is well below the tip (the board is
-  re-proving from genesis).
-- the **header-chain proof** (`de54b94f…`): proof of work and Core's header rules 0..Ht, with an MMR of every block
-  hash. It follows the tip.
+- the **core proof**: every block 0..Hc fully validated. Its `ChainState` holds a block forest with one leaf per
+  block: the block hash, the coin state after it and its undo hash. It reaches Hc, which today is well below the tip
+  (the chain is re-proved from genesis on the engine).
+- the **header-chain proof**: proof of work and Core's header rules 0..Ht, with an MMR of every block hash. It follows
+  the tip.
 
 I considered two ways to join them.
 
-**(a) Composition in the verifier (my choice).** The verifier checks both receipts, then:
+**(a) Composition in the verifier (my choice).** The verifier checks both proofs, then:
 
 1. *binding*: the core tip hash is the header MMR's leaf at height Hc (one MMR path). Both are hash chains from
    genesis, so the header chain's blocks 0..Hc are exactly the core's (a difference would be a SHA-256d collision);
@@ -82,8 +84,8 @@ block h itself, not the blocks above it. A caller may still ask for more than 1.
 it changes nothing (a block above Hc is still refused unless `--allow-pow-only-block`); it is the second of the two
 explicit choices that accept a proof-of-work-only deposit block.
 
-**(b) A composed receipt.** A small guest verifies the core and header receipts as assumptions (`env::verify`),
-makes the same four checks and commits one statement. Built to measure it
+**(b) A composed proof.** A small guest verifies the core and header proofs in-guest, makes the same four checks and
+commits one statement. Built on RISC Zero to measure it
 (`experimental/libzync-bench/deposit/tools/`, not a published image; raw output in `RESULT_measured.txt`): **816,427 cycles, one segment**, journal 1,316
 bytes, on the real bundle (core 0..200, header chain 0..975,278, block 170). Proved on hazync-coord's CPU through r0vm
 3.1.0 in 293.4 s (a 225,858-byte succinct receipt), wrapped in Groth16 in a further 88.5 s (3,129 bytes). A
@@ -92,7 +94,7 @@ published version would go through `reproduce/` like the others.
 
 **Why I chose (a).** It adds no image id to review, reproduce and pin (the trust is the two images already published), no
 proving per deposit or per tip, and the verifier is a pure function that already runs in the CLI and in WASM (a
-browser). (b) is only needed when ONE receipt must carry the statement, that is when a contract checks it on chain
+browser). (b) is only needed when ONE proof must carry the statement, that is when a contract checks it on chain
 (§6). (b) reads the same bundle, so it can be added later without changing anything a bridge already uses.
 
 ## 3. What full validation adds, and what it does not
@@ -124,28 +126,29 @@ It does **not** add:
   many must be fully validated (default 1: the deposit's block itself, §2). Until the core proof reaches the tip, a new deposit's block is above Hc.
 - **an independent check of Bitcoin Core.** The rules are Core v28.0's code in the guest (CONSENSUS_RULES.md: 59
   rules the same, 3 stricter, 0 weaker); a consensus bug in that code is in the proof too.
-- **trust-free cryptography.** It rests on RISC Zero 3.1.0's soundness and on the image ids being the reviewed source
-  (reproducible builds, `reproduce/LIBZYNC_IDS`).
+- **trust-free cryptography.** It rests on OpenVM v2.1.0's soundness, on the pinned keys, and on the image ids being
+  the reviewed source (reproducible builds of the engine images: the Stage 4 freeze).
 
 ## 4. Trust table
 
 | part | trusted for | how a verifier limits it |
 |---|---|---|
-| RISC Zero 3.1.0 (STARK, recursion) | the receipts mean what the guests ran | pinned version; dev-mode receipts and `RISC0_DEV_MODE` refused |
-| core image `46666b6f…` (or `8888d59c…`) | full validation 0..Hc | rebuild it (`reproduce/`), compare the id |
-| header image `de54b94f…` | proof of work and header rules 0..Ht, the MMR | rebuild it, compare the id |
+| OpenVM v2.1.0 (STARK, recursion) | the proofs mean what the guests ran | pinned version; each key pinned by its SHA-256 (engine/VERIFIER.md) |
+| core image | full validation 0..Hc | rebuild it, compare the id; take its key from that build |
+| header image | proof of work and header rules 0..Ht, the MMR | rebuild it, compare the id; its key from that build |
 | the bundle builder, the path service, the node it read | nothing | every part is checked; a wrong part fails |
 | the caller's clock and tip source | freshness and chain identity | the caller's own node or several sources |
-| Groth16 wrap (optional, §6) | the wrap is of the stated receipt | a trusted setup (below) and BN254 pairing assumptions |
 
 ## 5. Using it
 
 ```sh
 # build (any machine; the core run's history.bin for the block-forest leaf, a node or the raw block)
-zapp-deposit build --core core.rcpt --history history.bin --headers headers.rcpt --headers-file headers.txt \
+zapp-deposit build --core core.hze --image <core id> --vk core.vk --history history.bin \
+             --headers headers.hze --headers-image <headers id> --headers-vk headers.vk --headers-file headers.txt \
              --height 170 --txid f4184fc5…9e16 --bitcoin-cli "bitcoin-cli" -o deposit.json
 # check (the operator; every expectation is the caller's)
-zapp-deposit --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae1a…ac \
+zapp-deposit --image <core id> --vk core.vk --headers-image <headers id> --headers-vk headers.vk \
+             --txid f4184fc5…9e16 --vout 0 --amount 1000000000 --script 4104ae1a…ac \
              --min-depth 6 --min-validated-depth 6 --expect <height>:<hash> --max-tip-age 7200 deposit.json
 ```
 
@@ -157,10 +160,11 @@ byte for byte. `--allow-demo` prints a DEMO statement (never accepted); `--no-re
 requirement (§1). `zapp-deposit build` checks what it built with the verifier and
 refuses to write a bundle that does not verify. `zapp-deposit mmr-path <headers file> <tip> <height>` prints an MMR path.
 
-The bundle (JSON, version 1): `core_receipt`, `header_receipts` (one or a chain of runs from genesis),
+The bundle (JSON, version 1): `core_receipt`, `header_receipts` (one or a chain of runs from genesis; the field names
+are the format's, the values engine proof files),
 `core_tip_mmr_path`, and `block`: `height`, `header`, `forest` (`state`, `undo`, `path`) for a block at or below Hc or
 `mmr_path` above it, `tx`, `index`, `branch`, `coinbase`, `coinbase_branch`. Hashes are hex in internal byte order,
-receipts hex of their bincode bytes. Since the review of 18.11.2026 the verifier refuses a field the format does not
+proofs hex of their `HZE1` files. Since the review of 18.11.2026 the verifier refuses a field the format does not
 name (at any level), and a block carries exactly the opening its height takes: `forest` at or below Hc, `mmr_path`
 above it, never both (`zapp-deposit build` never wrote either form, so no bundle it made changes meaning).
 
@@ -178,27 +182,19 @@ libzync's own stripped serialisation (a check of its own), so the binding does n
 a unit test pins that they agree on every real transaction in the tests, in both serialisations.
 
 With `--mempool` or `--bitcoin-cli` the CLI verifies the bundle twice: once to learn the tip to ask the sources
-about, once with their answer. That is cost only (about 60 ms each with both receipts, §7).
+about, once with their answer. That is cost only (§7 measured about 60 ms each on the RISC Zero pair).
 
 ## 6. A contract chain
 
-**Default: the STARK receipts, verified off chain** by the operator, relayer or signer set (CLI or WASM). No trusted
-setup. Measured below: about 60 ms for a bundle with both receipts.
+**Default: the STARK proofs, verified off chain** by the operator, relayer or signer set (CLI or WASM). No trusted
+setup.
 
-**Optional, on chain: Groth16.** A contract verifies one Groth16 proof with RISC Zero's verifier contract and reads
-the journal. The steps: prove the composed receipt (§2 (b)), wrap it (`ProverOpts::groth16()`; r0vm runs
-`identity_p254`, then the Docker prover `risczero/risc0-groth16-prover`), deploy or reuse RISC Zero's Groth16 verifier,
-and have the contract check the image id, the journal's txid, output, depths and tip. Groth16 needs a trusted setup:
-RISC Zero's is a ceremony for its one fixed STARK-verifier circuit, so it is universal across programs (one setup for
-every image id) and holds if at least one participant was honest. The wrap also moves the assumption from hashes to
-BN254 pairings (not post-quantum). The default stays STARK, with no trusted setup; Groth16 is an add-on.
+**On chain: not built for the engine.** On RISC Zero a contract could verify one Groth16 proof with RISC Zero's
+verifier contract; that path (the composed receipt of §2 (b) wrapped in Groth16, measured in §7) went with RISC Zero.
+OpenVM has its own on-chain path (a final SNARK over the STARK); Hazync has not built or measured it. Until then a
+contract chain relies on an off-chain verifier.
 
-Measured end to end on block 170 (§7): the composed receipt in 293.4 s on a shared CPU box, its Groth16 wrap in
-88.5 s, 3,129 bytes with a 256-byte seal. The wrap is not specific to this zyncAPP: the core repository already has
-`host libzync-snark-wrap`. Separately, the deposit verifier accepts Groth16-wrapped core and header receipts unchanged (a chain proof may be succinct or
-Groth16), so a bundle of the two wrapped receipts is the same statement in 22 KB.
-
-## 7. Measured (15.11.2026)
+## 7. Measured (15.11.2026, RISC Zero; a dated record, not re-measured on the engine)
 
 Laptop: WSL2, 16 threads. hazync-coord: x86, 16 cores, 62 GB, shared (load 11-24 from other jobs during the runs).
 
@@ -238,8 +234,9 @@ first v0.26.0 board run.
 
 ## 8. Open
 
-- A deeper v0.26.0 core receipt (a block with spends, so a non-empty undo hash): rerun the tests on the board's first
-  v0.26.0 run, with its `history.bin`.
+- A core proof whose chain has Core's minimum work (the engine chain re-proved), so OK and `accepted` are tested on
+  real proofs again; today only the unit tests reach OK (on a zero-work image).
+- Sizes and times on engine proofs (§7 is RISC Zero's).
 - Where a bridge gets `history.bin`-derived openings at mainnet scale (a path service, like `zync-serve` for coins).
-- (b) as a published image, if a contract chain wants on-chain verification: review, a reproducible id, a chain of
-  header runs (today one run from genesis), and a contract that reads its journal.
+- On-chain verification, if a contract chain wants it: (b) on the engine, OpenVM's SNARK path, review, a reproducible
+  id, and a contract that reads its journal.

@@ -1,7 +1,10 @@
 # zyncAPP: a proven SwiftSync hints file (design, #722)
 
 Status: design APPROVED 2026-11-14; built (§10: what exists, measured, tested) on the U0 undo commitment (UNDO.md), and
-released in v0.27.0 (20.11.2026), image `1894f12e`; since 21.11.2026 (strict compact sizes, v0.28) `11c72c44`. Real proofs only at H = 2 and 3 so far: treat it as early.
+released in v0.27.0 (20.11.2026) on RISC Zero (images `1894f12e`, then `11c72c44`). On the engine (OpenVM) since
+26.11.2026: proved end to end for H = 200 over the engine chain's core proof of mainnet 1..200 (engine/results/zapp_hints:
+237.1 s on CPU), and the verifier checks engine proofs only. No engine hints image is published yet (the Stage 4
+freeze), so a check names the hints image, its key and the core image. Treat it as early.
 
 SwiftSync was originally proposed by Ruben Somsen; the hints file and block-undo formats are specified in the SwiftSync
 BIP drafts
@@ -14,7 +17,7 @@ sync. The node's fallback stays.
 ## 1. What it proves and commits
 
 Statement: *the file whose SHA-256 is `hints_sha256` is the hints file, in format `format`, for height H of the chain
-that the core receipt `core_id` proves valid from genesis (scripts checked).*
+that the core proof under `core_id` proves valid from genesis (scripts checked).*
 
 ```
 HintsStatement {
@@ -64,7 +67,7 @@ positions and the two coinbases, renumber. The zAPP does not emit #34004 (could 
 
 The zAPP writes the canonical encoding (minimal CompactSize, zero padding bits); a node compares hashes, so any other
 byte string, even one that decodes to the same indices, is refused (the safe direction). The verifier decodes a file
-only after its SHA-256 and length matched the receipt's, and every size is bounded by the bytes present before
+only after its SHA-256 and length matched the proof's, and every size is bounded by the bytes present before
 anything is reserved (review H1: a 9-byte file naming H = 2^32 − 1 reserved ~103 GB and aborted).
 
 ## 3. Deriving the hints soundly
@@ -85,7 +88,7 @@ nor how many there are, and a spent leaf's preimage has no position in its block
 would let a host shift indices. So the zAPP reads every block's transactions without witnesses (non-witness bytes are
 all txids, outputs and prevouts need) and derives everything except spent-ness itself:
 
-1. Verify the core receipt; check the statement (§4).
+1. Verify the core proof (in-guest: OpenVM deferral on the engine); check the statement (§4).
 2. For h = 1..H: hash the 80-byte header to the block hash; rebuild the Merkle root from the transactions' txids and
    require the header's. Refuse a mutated list (CVE-2012-2459: duplicate last pair) and bind the tree depth by the
    coinbase as `tx_in_block` does (64-byte transactions; ZYNCAPPS.md §8). Mark same-block spends from the inputs.
@@ -103,7 +106,7 @@ all txids, outputs and prevouts need) and derives everything except spent-ness i
 No scripts, signatures or UTXO lookups are re-checked (Ruben: "you do not need to prove script validity"); the core
 proof already did. Memory is O(log n) roots plus one block.
 
-**Alternative (profile bit 6).** The published images have it (46666b6f's profile is 113: bits 0, 4, 5, 6). With
+**Alternative (profile bit 6).** The product images have it (the engine core's profile is 0xf1: bits 0, 4, 5, 6, 7). With
 `live_hash` (ECMH of the live coins) at the tip, step 3's spent leaves go: add each hinted-unspent coin to an ECMH and
 require `J.live_hash`. Both are sound; the coin log is built because it works at any H ≤ T (`live_hash` only exists at
 the tip) and needs no EC arithmetic.
@@ -116,10 +119,9 @@ guest (so the statement itself says "from genesis"), then a zero lineage and a c
 `handover_pin::PRE_UNDO_IMAGES` (included, not copied).
 `core_id` is an input, never compiled in (ZYNCAPPS.md §4).
 
-The node (or the CLI for it) checks: the receipt verifies under the published hints image id (the `zyncapp-hints`
-line of `reproduce/LIBZYNC_IDS`, rebuilt by `reproduce/libzync.Dockerfile`), not a FakeReceipt, `RISC0_DEV_MODE` unset
-(refused inside `verify_hints`, so in every entry point); `core_id`, `lineage` and the whole `profile` are a published
-core's; `anchor_id` the pinned
+The node (or the CLI for it) checks: the engine proof verifies under the hints image it names and that image's pinned
+key (the key file's SHA-256; engine/VERIFIER.md); `core_id` is the core image it names (an engine build, node format
+2), and `lineage` and the whole `profile` are that core's; `anchor_id` the pinned
 genesis anchor; `cum_work` ≥ `nMinimumChainWork`; `max_time` ≤ now + 7200; **`block_hash` is its own header chain's
 block at H** (a SwiftSync node syncs headers first, so it has it); `format` is one it reads; SHA-256 of the file
 = `hints_sha256`. The file's own height field is inside the hashed bytes.
@@ -151,15 +153,17 @@ then be over per-range digests); not in v1.
 
 ## 7. Distribution and entry points
 
-Three files per (network, H): `<net>-<H>.hints`, `<net>-<H>.undo`, `<net>-<H>.receipt` (succinct; no Groth16
-wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Served by hazync.org and anyone else: the proof decides, not the server.
+Three files per (network, H): `<net>-<H>.hints`, `<net>-<H>.undo`, and the proof (`.hze`, an engine proof; no SNARK
+wrap, so no trusted setup: nodes verify with our library, CLI, WASM or C ABI). Served by hazync.org and anyone else: the proof decides, not the server.
 
-- Host: `zyncapp hints-prove <block dir> <H> <core receipt> <out> [--format 1|2]` replays blocks 1..T natively from
-  the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the undo
-  file, runs the same derivation natively, then proves; the guest's statement must equal the native one.
-- CLI: `zapp-hints [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <receipt> <file>` (and
-  `zyncapp hints-verify`, the same library call); exit 0 OK, 2 DEMO, 1 FAIL.
-- WASM `verify_hints` / JS `verifyHints({receipt, file, undo, expect})` (the file is hashed on the device); C ABI
+- Host: `zyncapp hints-prove <block dir> <H> <state_<T>.json> <out> [--format 1|2] --stream <file>` replays blocks 1..T natively
+  from the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the
+  undo file, runs the same derivation natively, and writes the guest's input stream; `hzengine prove` proves it with the
+  core's proof as the child (engine/results/zapp_hints). The guest's statement must equal the native one.
+- CLI: `zapp-hints --image <hex> --vk <key file> --core-image <hex> [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <proof.hze> <file>`;
+  exit 0 OK, 2 DEMO, 1 FAIL.
+- WASM `verify_hints` / JS `verifyHints({receipt, file, undo, imageHex, coreImageHex, vk, pin, expect})` (`receipt`:
+  the proof file's bytes; the file is hashed on the device); C ABI
   `swiftsync_verify_hints` (zapps/hints/ffi, include/zapp_hints.h) for a node patch to call before `-utxohints`. One implementation,
   `zapp_hints::verify_hints`, in the zAPP's own module `zapps/hints` (CLI, `ffi/`, `wasm/` with `zapp-hints.js`; ZYNCAPPS.md §9), on the core verifier as a library: neither Core nor the core verifier changes.
 
@@ -170,8 +174,8 @@ wrap: no trusted setup, nodes verify with our library, CLI, WASM or C ABI). Serv
   (`rustaceanrob/bitcoin` `hintsfile-v1` and #34004's `generatetxohints` need a node rolled back to H: not run on the
   shared node.)
 - **Refused by the verifier:** a flipped bit, a truncated file, a non-canonical re-encoding of one block; a file for
-  H−1 against a journal for H; `--expect` from another chain; a receipt of another image (a core receipt, a
-  dev-built hints id); an untrusted `core_id`; a FakeReceipt or dev mode.
+  H−1 against a journal for H; `--expect` from another chain; a proof of another image, or under another key; an
+  untrusted `core_id`.
 - **Refused by the guest:** a spent leaf claimed unspent, a wrong `s`, a wrong tracked bit, a dropped or duplicated
   transaction, a mutated Merkle list, a wrong `undo_h` or `state_h`, a chain without U0 from block 1.
 - **Undo:** the undo file equals `libzync-undo-hashes 1 H`; `bspent`-format coins expanded to U0 match `undo_ref.py`.
@@ -234,15 +238,17 @@ by a proof. Proving the core further on CPU (~16 min a block here) was not attem
   586, the same Merkle root: "mutated", CVE-2012-2459), a dropped and a swapped transaction, a trailing byte, a core
   lineage, a pre-undo core image, another core id, an unknown format, an assumevalid core, a flipped leaf above H;
 - H = 1,999 under T = 10,000 gives the same file as under T = 1,999;
-- the verifier on the real receipts (`hints_verify_test.sh` 11/11, `test-hints.mjs` 5/5, `test_hints.c` 4/4, unit
-  test `hints::tests::real_receipts`): the proven file DEMO (3 blocks are below minimum work), refused: a flipped bit,
-  a truncated file, a non-canonical re-encoding, the file for H = 2, a tampered undo file, another hash or height at H,
-  a receipt of another image, an untrusted core image, `RISC0_DEV_MODE` set; H = 2 needs `--expect-tip` for T.
+- the verifier on the engine proof for H = 200 (`zapps/hints/tests/data/engine`: `test.sh`, `wasm/test-hints.mjs`
+  10/10, the C ABI's 8 cases, `tests/engine.rs`; 27.11.2026): the proven file DEMO (200 blocks are below minimum
+  work), refused: another hints or undo file (one byte), a flipped bit, a 9-byte file claiming H = 2^32 - 1, another
+  hash at H, a wrong `--expect-tip`, a changed journal or proof byte, another image id, a key that is not the pinned
+  one, no key, no or another core image, a node that names another block 200, and (WASM) a frame with a trailing byte
+  or cut short. (The RISC Zero runs at
+  H = 2 and 3, 15.11.2026, are in git history.)
 
-**Pinned** (review H2): `zyncapp-hints` `11c72c44…` since 21.11.2026 (the block walk reads compact sizes as Core does,
-with libzync::facts' reader: two agreeing `reproduce/libzync.Dockerfile` builds of `cffa2cbb` on hazync-coord); before it `1894f12e…` from the reproducible build's steps on hazync-coord (the three
-existing ids reproduced unchanged), with CI's `reproducible-image-id` as the second build; every tool trusts that id
-(`zapp_hints::HINTS_IMAGE_ID` in `zapps/hints`; `zyncapp hints-verify` too).
+**Image ids.** No engine hints image is published yet: a caller names it (`--image`) and its key (`--vk`), and
+`zapp-hints` has no built-in hints id until the Stage 4 freeze pins one (`hintsImageId()` in the WASM glue returns ""). The RISC Zero ids (`1894f12e…`, then
+`11c72c44…`) are v0.27.x's.
 
-**Not done.** A proof over a chain with spends; a cost for modern blocks; signet (the code takes `--signet`,
+**Not done.** A proof over a chain with Core's minimum work (the engine chain re-proved); a cost for modern blocks; signet (the code takes `--signet`,
 untested); `hints_test.sh` in CI (it needs block data and a prep state).

@@ -1,6 +1,8 @@
 # Balance statement zyncAPP
 
-Status: shape A, built and tested 15.11.2026 and released in v0.27.0 (#742, 20.11.2026), is its own zAPP module,
+Status: shape A, built and tested 15.11.2026 and released in v0.27.0 (#742, 20.11.2026) on RISC Zero, engine (OpenVM)
+core proofs only since 27.11.2026 (no engine image is published yet, so the checker names the core image and its key),
+is its own zAPP module,
 `zapps/statement` (ZYNCAPPS.md §9): a library on top of the core verifier, one CLI `zapp-statement` (the checker, and
 the producer as subcommands `draft`, `message`, `sign`, `add-sig`, `test-key`), and its own WASM module (`zapps/statement/wasm`). The core verifier (`swiftsync-verify`,
 `swiftsync-verify-wasm`) carries no statement code. Shape B is a measured prototype in
@@ -13,7 +15,7 @@ except for the one step every Hazync fact needs: comparing block H's hash with a
 
 ## 1. What a statement shows, and what it does not
 
-Proven, by the core receipt and the checks in §4:
+Proven, by the core proof and the checks in §4:
 
 - the chain from genesis to H is valid Bitcoin under Core's rules (the core proof);
 - block H is the block the statement names (its hash is the proof's tip; the checker compares it with the network);
@@ -45,7 +47,7 @@ Not proven:
 |---|---|---|
 | new guest | none | one zyncAPP image |
 | what the checker sees | every script, its balance, each signature | the total, the number of scripts, a salted commitment to the script list, the purpose, the nonce |
-| checker | `zapp-statement`, WASM `zapp-statement.wasm` | the zyncAPP receipt against its image id, then the same core checks as ZYNCAPPS.md §4 |
+| checker | `zapp-statement`, WASM `zapp-statement.wasm` | the core proof against its image id and pinned key, then the statement (§4) |
 | signature code | the rust-bitcoin project's `bip322` crate (CC0-1.0), outside the zkVM; P2PK hand-written on top of it (§7) | in the guest (prototype: hand-written P2WPKH and P2TR, k256) |
 | script types | what the `bip322` crate verifies, and P2PK (§6, §7) | what the guest implements (prototype: P2WPKH, P2TR key path) |
 | cost to make | none: facts and signatures | a proof per statement (cycles in §8) |
@@ -97,11 +99,11 @@ a proof valid only from a later time or age, or one the crate calls inconclusive
 
 ## 4. Checks and soundness
 
-`check_statement` (`zapps/statement/src/lib.rs`) runs only on a chain state whose receipt passed
+`check_statement` (`zapps/statement/src/lib.rs`) runs only on a chain state whose core proof passed
 `swiftsync_verify::verify`
-(real proof, not a FakeReceipt, `RISC0_DEV_MODE` unset, the image, profile, anchor, block forest, time-too-new). Then:
+(the engine proof under the image and its pinned key, profile, anchor, block forest, time-too-new). Then:
 
-1. `version` is 1; `network` is the proof's network (profile); `core_id` is the image that made the receipt
+1. `version` is 1; `network` is the proof's network (profile); `core_id` is the image that made the core proof
    (`self_id`); `height` is the proof's tip height; `block_hash` is the proof's tip hash.
 2. Purpose and nonce are well formed and, when the checker gives `--purpose` and `--nonce`, equal to them.
 3. Entries: 1 to 10,000, scripts strictly increasing.
@@ -117,10 +119,10 @@ signature; keeping the fields and swapping in a different fact fails step 4 (the
 and a fact holds only for the answer the trie gives). The balance itself comes from the counting trie, whose root the
 core proof commits and whose facts are refused for any single changed bit (`trie_fact` tests).
 
-**Binding to the core across handovers.** The statement names the image that made the receipt, and the verifier
-accepts only images it already trusts (its built-in table, or `--image` for one the reader rebuilt). A statement made
-under an earlier image stays checkable while the verifier keeps that image: v0.26.0 keeps `8888d59c` next to
-`46666b6f`, and the tests use `8888d59c`.
+**Binding to the core across handovers.** The statement names the image that made the core proof, and the verifier
+accepts only an image it trusts: today the one the reader gives with `--image` (and its key, `--vk`); once engine
+images are published, its built-in table too. A statement made under an earlier image stays checkable while the
+verifier is given that image.
 
 **A closed height.** With the coin log (profile bit 4) the trie is the coin set after every block, so the proof's tip
 H is final for that proof: there is no hints file or epoch to close. A statement is therefore only ever about the
@@ -148,10 +150,10 @@ already carries the same words. A v2 would be a new `version`, a new header line
 ## 5. Using it
 
 ```sh
-zapp-statement draft --receipt <core receipt> --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
+zapp-statement draft --receipt <core proof.hze> --image <core id> --vk core.vk --trie state_<H>.trie --purpose "<asked>" --nonce "<asked>" <scriptPubKey hex>... > s.json
 zapp-statement message s.json                      # the text to sign in another wallet
 zapp-statement sign s.json --keys <WIF file>       # or: zapp-statement add-sig s.json <spk> simple|full|legacy <base64>
-zapp-statement --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" --bitcoin-cli "<cmd>" --max-age 6 <core receipt> s.json
+zapp-statement --image <core id> --vk core.vk --expect <H>:<hash> --purpose "<asked>" --nonce "<asked>" --bitcoin-cli "<cmd>" --max-age 6 <core proof.hze> s.json
 ```
 
 `--max-age <blocks>`: block H must be at most that many blocks behind the network's tip, which `--bitcoin-cli`
@@ -164,7 +166,7 @@ Core's minimum work, the tip was not compared with a source the checker trusts, 
 the line says which), 1 `ZAPP_STATEMENT_FAIL`. Every line it prints is escaped (line breaks and other control or
 format characters as `\n`, `\u{2028}`, ...): text from the statement, or a library's error that echoes it, cannot print
 a line of its own, such as a forged verdict. Each flag is taken once; a repeat is refused. The checker is its own binary rather than a `swiftsync-verify`
-subcommand so that the core verifier carries no zAPP code; it verifies the receipt with the same library function.
+subcommand so that the core verifier carries no zAPP code; it verifies the core proof with the same library function.
 
 The checker chooses the purpose and nonce (an unpredictable nonce, a purpose naming both parties, §4), gives them to
 the holder, and sets `--max-age` to its policy. `zapp-statement` signs P2WPKH, P2SH-P2WPKH and P2TR (key path, no script tree) in BIP-322 simple
@@ -173,8 +175,10 @@ and P2PKH and P2PK (in the key's own form, compressed or uncompressed) in BIP-32
 for tests.
 
 In a browser, the page loads `zapp-statement.wasm` with `zapp-statement.js` (`loadStatementVerifier`,
-`verifyStatement({ network, receipt, statement, expect, purpose, nonce, maxAge, tipHeight })`); all of these but the
-receipt and statement are the page's, never the sender's (tipHeight: the network's tip as the page fetched it).
+`verifyStatement({ network, receipt, statement, expect, purpose, nonce, maxAge, tipHeight, imageHex, vk, pin })`); all
+of these but the core proof (`receipt`, the `.hze` file's bytes) and the statement are the page's, never the sender's
+(tipHeight: the network's tip as the page fetched it; imageHex, vk and pin: the core image, its key file and the key's
+SHA-256, which the page is published with).
 `age_checked` in the answer is false until maxAge and tipHeight are given. Only the statement page loads it; the core `hazync-verify.wasm` is unchanged. Built
 byte-reproducibly by `zapps/statement/wasm/build.sh` (the core's flags, `scripts/wasm-build.sh`: Rust 1.99.0, staged
 sources, remapped paths; it compiles C, secp256k1-sys, so in the pinned container `reproduce/wasm.Dockerfile`, clang
@@ -228,7 +232,7 @@ signature), padded DER, a non-minimal push, two pushes, a witness, a lock time, 
 the two P2PK forms' signatures swapped, a hybrid key, and the real block-9 P2PK coin (its fact holds; a signature by
 our key filed under it is refused).
 
-## 8. Shape B: measured
+## 8. Shape B: measured (RISC Zero, a dated record; not ported to the engine)
 
 The prototype guest (`experimental/libzync-bench/statement/methods/guest`) verifies the core receipt (`env::verify`,
 an assumption), decodes the ChainState and makes the ZYNCAPPS.md §4 checks, checks each balance fact against
@@ -276,31 +280,26 @@ scripts is public, and without the salt a guessed script list can be tested agai
 
 ## 9. Tests
 
-- `cargo test --release` in `zapps/statement`: 9 tests on the real mainnet 1..200 proof (image `8888d59c`,
-  `swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`) and its block-200 trie snapshot
-  (`zapps/statement/vectors/mainnet_200_8888d59c.trie`, root equal to the proof's). No key of ours was paid in blocks
-  1..200, so the positive case on the real trie is a zero balance for fresh keys; non-zero cases (P2WPKH, P2TR,
-  P2SH-P2WPKH, P2PKH full and legacy, P2PK compressed and uncompressed) use a trie built in the test under the real
-  proof's state with its trie root replaced. Refusals: tampered total and fact answer; wrong height, block, core image
-  and network; core_id and block_hash in upper case, empty, or carrying a line break; another purpose or nonce; a
-  purpose rewritten to match; another key's signature; a signature over another message; a fact relabelled to a script
-  it does not prove; a duplicate or unsorted script; more than 10,000 entries; a history fact; a fact with no answer;
-  a purpose or nonce with a line break, U+2028, U+2029, U+202E, U+200B, a tab, a non-ASCII letter, or surrounding
-  spaces; a wrong format; no entries; another version; a time-locked proof; a 65-byte P2TR signature ending 0x00 (a
-  valid 64-byte DEFAULT signature made in the test, which the crate alone accepts with 0x00 appended); the recency
-  check; the P2PK cases of §7; and a FakeReceipt.
+- `cargo test --release` in `zapps/statement`: 20 library tests and 1 engine test (`tests/engine.rs`) on the engine
+  chain's proof of mainnet 1..200 (`swiftsync-verify/vectors/mainnet_1_200_engine.hze`, its image id and key) and its
+  block-200 trie snapshot (`zapps/statement/vectors/engine_200.trie`, node format 2, root equal to the proof's). No key
+  of ours was paid in blocks 1..200, so the positive case on the real trie is a zero balance for fresh keys; non-zero
+  cases (P2WPKH, P2TR, P2SH-P2WPKH, P2PKH full and legacy, P2PK compressed and uncompressed) use a trie built in the
+  test under the real proof's state with its trie root replaced. Refusals: tampered total and fact answer; wrong height,
+  block, core image and network; core_id and block_hash in upper case, empty, or carrying a line break; another purpose
+  or nonce; a purpose rewritten to match; another key's signature; a signature over another message; a fact relabelled
+  to a script it does not prove; a duplicate or unsorted script; more than 10,000 entries; a history fact; a fact with
+  no answer; a purpose or nonce with a line break, U+2028, U+2029, U+202E, U+200B, a tab, a non-ASCII letter, or
+  surrounding spaces; a wrong format; no entries; another version; a time-locked proof; a 65-byte P2TR signature ending
+  0x00; the recency check; and the P2PK cases of §7.
 - `zapps/common`: 5 tests, among them sources that disagree giving no answer (`resolve`, `expect_at`), a node that
   gives no chainwork failing, and the network tip height for `--max-age`.
-- `zapps/statement/test_statement.sh`: `zapp-statement` (checker and producer) end to end on the real proof with fresh
-  P2WPKH, P2TR and P2PK (both forms) keys, 27 cases (with the chain-identity sources, `--max-age` 6 and 7 blocks behind
-  a node's tip and with no tip source, a node without chainwork, a purpose with U+2028 or a trailing space); 28 with
-  `STATEMENT_WASM=<zapp-statement.wasm>`, which runs `wasm/test-statement.mjs` (12 cases, the age and the untrimmed
-  purpose among them) through the zAPP's WASM module. Results: `test_statement.out`. CI's zapps job runs it all through
-  `zapps/statement/test.sh`; on 15.11.2026 it passed on hazync-coord.
+- `zapps/statement/test_statement.sh`: `zapp-statement` (checker and producer) end to end on the engine proof with
+  fresh P2WPKH, P2TR and P2PK (both forms) keys, with the chain-identity sources, `--max-age` 6 and 7 blocks behind a
+  node's tip and with no tip source, a node without chainwork, a purpose with U+2028 or a trailing space; with
+  `STATEMENT_WASM=<zapp-statement.wasm>` it also runs `wasm/test-statement.mjs` (18 cases) through the zAPP's WASM
+  module: 39/39 (`test_statement.out`, 27.11.2026). The best verdict is DEMO: 200 blocks are below Core's minimum work.
 - The `bip322` crate's own suite (77 tests, including BIP-322's official vectors) passes at 0.0.12.
-- The core `swiftsync-verify-wasm/build.sh` gives the same bytes as `fix/wasm-facts-frame` (#734), which this branch
-  merges: sha256 `f16b5b98…`, 1,249,243 bytes (15.11.2026). Main before #734 gives `12bbc9ae…`; #734 moves it, this
-  branch does not.
 
 ## 10. Open
 

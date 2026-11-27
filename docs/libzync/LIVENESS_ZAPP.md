@@ -1,17 +1,18 @@
 # libzync: coin liveness
 
 Status: built and tested 15.11.2026, independently reviewed the same day (no soundness break found) and released in
-v0.27.0 (#741, 20.11.2026). Verifier and host code only: no guest changes,
-so no image id moves. The privacy variant (§8) is an experiment, measured in execute mode only.
+v0.27.0 (#741, 20.11.2026) on RISC Zero; engine (OpenVM) core proofs only since 27.11.2026, node format 2. Verifier
+and host code only: no guest of its own. No engine image is published yet (the Stage 4 freeze), so the check names
+the core image and its key (`--image`, `--vk`). The privacy variant (§8) is an experiment, measured in execute mode only.
 
 ## 1. What it answers
 
-One outpoint's state after a block H, from a verified core receipt and a small proof, and nothing else:
+One outpoint's state after a block H, from a verified core proof and a small liveness proof, and nothing else:
 
 - **UNSPENT:** `txid:vout`, paying V sat to scriptPubKey S, created at height c, is unspent after block H;
 - **SPENT:** that coin was spent at height h ≤ H, by input `vin` of the transaction at position `tx` in block h.
 
-H is the proof's tip or any earlier height. Anyone with the receipt, the proof and a verifier (CLI, C ABI, WASM)
+H is the core proof's tip or any earlier height. Anyone with the core proof, the liveness proof and a verifier (CLI, C ABI, WASM)
 can check it. Uses:
 
 - **Bridges and pegs:** check that a deposit outpoint has not moved, at each new tip proof. A SPENT answer gives the
@@ -62,7 +63,7 @@ every bit of the five real proofs (18,904 flips): every one is refused by the pr
 ## 4. The check
 
 The verifier (`zapp_liveness::check_liveness`, in the zAPP's own module `zapps/liveness`, shared by its CLI, C ABI and
-WASM; ZYNCAPPS.md §9) runs only on a receipt that passed the core checks (`verify`: image, real proof, genesis anchor, profile, block forest, time). Then:
+WASM; ZYNCAPPS.md §9) runs only on a core proof that passed the core checks (`verify`: image and pinned key, the engine proof, genesis anchor, profile, block forest, time). Then:
 
 1. **The question is the caller's.** The proof must name the outpoint and height the caller asked about. If the
    caller gives an amount, script, creation height (`created=`), coinbase flag or claimed state, those must match the
@@ -105,9 +106,9 @@ Not proven, or left to the caller:
 # producer: the history of a proving run, and the coin's fields from block files or your own node
 zapp-liveness prove <history.bin> <tip> <at|tip> <txid>:<vout> (--blocks <dir> | --bitcoin-cli "<cmd>") [--height <h>] > p.hex
 zapp-liveness serve <history.bin> <addr:port> --blocks <dir>                GET /live/<at|tip>/<txid>/<vout>, GET /tip
-# paths in node format 2, the engine chain's (format 1 was the RISC Zero chain's; its flag went at the cutover, C7)
-# verifier: YOUR question, then the proof (the core receipt is verified by the core verifier's library)
-zapp-liveness [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <receipt>
+# paths in node format 2, the engine chain's
+# verifier: YOUR question, then the proof (the core proof is verified by the core verifier's library)
+zapp-liveness --image <core id> --vk core.vk [--expect <h>:<hash> | --mempool | --bitcoin-cli "<cmd>"] --liveness p.hex '<txid>:<vout>@<h|tip>[=unspent|=spent[:<h>[:<tx>:<vin>]]][,value=<sat>][,script=<hex>][,created=<h>][,coinbase=0|1]' <proof.hze>
 ```
 
 In the C ABI (`zapp_liveness_verify`, `zapps/liveness/ffi/include/zapp_liveness.h`) and WASM (`verifyLiveness` in
@@ -119,33 +120,33 @@ keeps the leaf the log holds. With `--bitcoin-cli` and no `--height`, the node n
 
 ## 7. Tests and measured numbers
 
-All against the real proof of mainnet 1..200 (image `8888d59c`, `swiftsync-verify/vectors/mainnet_1_200_8888d59c.rcpt`)
-and that run's `history.bin` (`zapps/liveness/vectors/`), 15.11.2026; all of it run by `zapps/liveness/test.sh`:
+All against the engine chain's proof of mainnet 1..200 (`swiftsync-verify/tests/data/engine200`: `proof.hze`, its
+image id and key, and that run's `history.bin`), the liveness proofs in `zapps/liveness/vectors/engine` (node format
+2), 27.11.2026; all of it run by `zapps/liveness/test.sh`. Every honest claim is DEMO: 200 blocks are below Core's
+minimum work.
 
 | suite | result |
 |---|---|
 | libzync unit tests (`liveness::tests`) | 2/2 |
-| zapp-liveness `tests/liveness.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed (209 positions × 2 coins), H above the tip, mismatched questions, undo misuse, a dev-mode and a tampered receipt, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped, the facts JSON's keys (18.11.2026) | 13/13 (1 timing test ignored) |
+| zapp-liveness `tests/liveness.rs` and `tests/engine.rs`: honest answers, wrong amount / script / height / flag, spent claimed unspent, unspent claimed spent, an outpoint that never existed, H above the tip, mismatched questions, undo misuse, a tampered proof, `created=` / `coinbase=`, a re-created outpoint, one spelling per question, the 0x05 undo leaf, regtest above block 200, every bit flipped, the facts JSON's keys | 13 + 4 (1 timing test ignored) |
 | `zapp-liveness serve` `/live` route | 1/1 |
-| CLI and producer, `vectors/run.sh` | 34/34 (16.11.2026: RISC0_DEV_MODE set on the real receipt, refused; `--image 46666b6f` refuses the receipt of superseded image 8888d59c; with none given it verifies as that superseded image) |
-| C ABI, `ffi/test_liveness.c` | 21/21 (18.11.2026: 8 cases on the facts JSON's keys: a misspelt key beside and alone, the key twice, `expect` inside (null too), not an object, an unknown fact field) |
-| WASM, `wasm/test-liveness.mjs` | 32/32 since 18.11.2026 (the image id pinned exactly and the image that verified reported; the raw frame: the glue's bytes, a trailing byte, cut short; the facts JSON's keys, the C ABI's 8 cases) (and the frame unit test, 1/1) |
-| C ABI beside the core's in one program, `ffi/test_with_core.c` | OK (16.11.2026) |
-| `zapps/common` | 8/8 and the zapp-checks.sh controls; `zapps/corecheck` 2/2 (16.11.2026) |
+| CLI and producer, `vectors/run.sh` | 33/33 |
+| C ABI, `ffi/test_liveness.c` | 20/20 |
+| WASM, `wasm/test-liveness.mjs` | 30/30 |
+| `zapps/common`, `zapps/corecheck` | pass (`zapps/common/test.sh`, `zapps/corecheck/test.sh`) |
 
-I ran these on hazync-coord on 15.11.2026. Single-bit flips, each refused by the proof check alone: 18,904 on the five
+The RISC Zero runs of 15.11-18.11.2026 (34, 21 and 32 cases on that chain's receipt of 1..200) are in git history. On RISC Zero, hazync-coord, 15.11.2026: single-bit flips, each refused by the proof check alone: 18,904 on the five
 mainnet proofs, 27,760 on five 0x05 undo-leaf openings, 20,840 on six regtest proofs, and every bit of the two
 synthetic re-created-outpoint proofs.
 
 Beyond mainnet 1..200, three more sets of data:
 
 - **The 0x05 undo leaf** on real data: the mainnet 1..200 run of a development image with the undo commitment
-  (`vectors/undo_dev_1_200_*`), from hazync-coord, 14.11.2026. Its receipts are dev-mode, so the test takes the
-  host's chain state, not a verified receipt. A real v0.26.0 (`46666b6f`) proof with its history waits on the
-  board's first run.
+  (`vectors/undo_dev_1_200_*`), from hazync-coord, 14.11.2026 (node format 1). The test takes the host's chain state,
+  not a verified proof; the engine chain's own proof of 1..200 has undo leaves at every block and is checked above.
 - **Above block 200:** the regtest base chain of the consensus rig, 0..232, Core 28.0 with
-  `-testactivationheight=bip34@110` (`vectors/regtest_*`), the proofs written by `zapp-liveness prove --bitcoin-cli`
-  against a copy of that node. It includes coins spent at 200 and 201, openings at 200 and 220, and two
+  `-testactivationheight=bip34@110` (`vectors/regtest_*`, node format 1), the proofs written by `zapp-liveness prove
+  --bitcoin-cli` against a copy of that node. It includes coins spent at 200 and 201, openings at 200 and 220, and two
   **BIP30-tracked coins** (flag bit 1), which mainnet 1..200 does not have. These are execute-mode states too.
 - **A re-created outpoint:** synthetic, as above (§5).
 
@@ -153,11 +154,11 @@ The real answers: block 9's coinbase (`0437cd7f…:0`) is UNSPENT after 169 and 
 The first payment's 10 BTC to Hal Finney (`f4184fc5…:0`) is UNSPENT at 200. Its 40 BTC change (`…:1`) is unspent
 after 170 and SPENT at 181.
 
-| proof | bytes | check (one core, release, Ryzen 7 7730U) |
+| proof | bytes (the engine vectors) | check (one core, release, Ryzen 7 7730U; on the RISC Zero chain's proofs, 15.11.2026) |
 |---|---|---|
 | at the tip, unspent / spent (log path 5 or 6 hashes) | 333–377 | 17.9–29.9 µs |
-| below the tip, with the opening (block path 7 hashes) | 574–734 | 20.8–32.1 µs |
-| the core receipt, once per tip | 227,362 | 49.5 ms |
+| below the tip, with the opening (block path 7 hashes) | 606–766 (574–734 on the RISC Zero chain) | 20.8–32.1 µs |
+| the core proof, once per tip (engine, `engine200/proof.hze`) | 275,183 | not re-measured (RISC Zero's 227,362-byte receipt: 49.5 ms) |
 
 Mainnet sizes are not measured here. By the format, each extra log level costs 32 bytes, and an opening costs 32
 bytes per root and per block-path level.
@@ -166,7 +167,7 @@ bytes per root and per block-path level.
 the facts, so it took the facts JSON for a lineage. Every `verifyFacts` call with facts failed, and so did `verify`
 with an expected tip. The lineage is now the last chunk in both frames (PR #734, `swiftsync-verify-wasm/test-facts-frame.mjs`).
 
-## 8. Privacy variant (experiment, `experimental/libzync-bench/liveness-anon`)
+## 8. Privacy variant (experiment, `experimental/libzync-bench/liveness-anon`; RISC Zero, execute mode, not ported to the engine)
 
 **Statement:** "I know a coin unspent at the core tip, worth at least X sat, whose script satisfies a policy."
 It is a small zyncAPP guest. It verifies the core receipt in the zkVM (`env::verify`), checks the core statement

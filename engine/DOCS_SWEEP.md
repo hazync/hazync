@@ -11,16 +11,16 @@ no record. 81 files of the 145.
 
 | file | lines | state |
 |---|---|---|
-| docs/libzync/UTREEXO_ZAPP.md | 88 | ☐ |
+| docs/libzync/UTREEXO_ZAPP.md | 88 | ◐ verifier parts done; the prover and follower sections (§5 zyncapp, §10.5-10.6) wait for Stage 3; measured sections are dated RISC Zero records |
 | docs/libzync/ROADMAP.md | 52 | ☐ |
 | docs/libzync/LIBZYNC.md | 45 | ☐ |
-| docs/libzync/DEPOSIT_ZAPP.md | 42 | ☐ |
+| docs/libzync/DEPOSIT_ZAPP.md | 42 | ✅ (§7 is a dated RISC Zero record; on-chain path: not built for the engine) |
 | docs/libzync/ZAPP_TESTING.md | 40 | ☐ |
 | docs/libzync/REORG.md | 32 | ☐ |
-| docs/libzync/LIVENESS_ZAPP.md | 26 | ☐ |
+| docs/libzync/LIVENESS_ZAPP.md | 26 | ✅ (proof sizes from the engine vectors; check times and §8 are RISC Zero records) |
 | docs/SOUNDNESS.md | 25 | ☐ |
-| docs/libzync/STATEMENT_ZAPP.md | 23 | ☐ |
-| docs/libzync/HINTS_ZAPP.md | 22 | ☐ |
+| docs/libzync/STATEMENT_ZAPP.md | 23 | ✅ (§8 shape B is a RISC Zero record) |
+| docs/libzync/HINTS_ZAPP.md | 22 | ✅ (cycle and proving measurements are RISC Zero records) |
 | docs/libzync/HANDOVER.md | 21 | ☐ |
 | docs/libzync/ZYNCAPPS.md | 18 | ☐ |
 | docs/README.md | 18 | ☐ |
