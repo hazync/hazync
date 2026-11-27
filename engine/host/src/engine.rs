@@ -497,7 +497,18 @@ pub fn write_proof(out: &Path, proof: VmStarkProof, journal: &[u8]) -> Result<()
     Ok(())
 }
 
+/// A proof as P.proof.json + P.journal, or, when `p` is itself a file starting with the HZE1 magic, that one file (the
+/// board's and the readers' proof file: `pack`), decoded under this engine's key.
 pub fn read_proof(e: &Engine, baseline: &VerificationBaseline, p: &Path) -> Result<(VmStarkProof, Vec<u8>)> {
+    if p.is_file() {
+        let f = std::fs::read(p)?;
+        if hazync_engine_verify::is_engine_proof(&f) {
+            let (pr, j) = hazync_engine_verify::unpack(&f).map_err(|x| eyre!("{}: {x}", p.display()))?;
+            let proof = VmStarkProof::decode_from_bytes_using_vk(e.agg_vk.as_ref(), baseline, pr)
+                .wrap_err_with(|| format!("{}: the proof does not decode under this key", p.display()))?;
+            return Ok((proof, j.to_vec()));
+        }
+    }
     let v: VersionedVmStarkProof = read_from_file_json(with_ext(p, "proof.json"))?;
     let proof = v.decode_using_vk(&e.agg_vk, baseline)?;
     let journal = std::fs::read(with_ext(p, "journal"))?;
@@ -515,31 +526,23 @@ pub fn with_ext(p: &Path, ext: &str) -> std::path::PathBuf {
 /// by the readers' own verifier (engine/verify-core) before it is written; the key file and its pin with `--key`.
 /// Needs only agg.vk and baseline.json (not the proving keys).
 pub fn pack(dir: &Path, proof_path: &Path, out: &Path, key_out: Option<&Path>) -> Result<()> {
-    use openvm_stark_backend::codec::Encode;
     let mvk: MultiStarkVerifyingKey<SC> = read_object_from_file(dir.join("agg.vk")).wrap_err("agg.vk")?;
     let mvk = Arc::new(mvk);
     let baseline = Engine::baseline(dir)?;
     let v: VersionedVmStarkProof = read_from_file_json(with_ext(proof_path, "proof.json"))?;
     let proof = v.decode_using_vk(&mvk, &baseline)?;
     let journal = std::fs::read(with_ext(proof_path, "journal"))?;
-    let mut enc = Vec::new();
-    proof.encode(&mut enc)?;
     let img = image_of(&baseline);
     if let Ok(have) = Engine::image(dir) {
         ensure!(have == img, "image.json {have:?} is not the baseline's {img:?}");
     }
-    let id = crate::stream::image_id(&img);
-    let key = bitcode::serialize(&VmStarkVerifyingKey { mvk: mvk.as_ref().clone(), baseline })?;
-    let pin: [u8; 32] = Sha256::digest(&key).into();
-    let file = hazync_engine_verify::pack(&enc, &journal);
-    // what every reader runs (swiftsync-verify, the zAPP modules, the wasm): a file that would fail is never written
-    let (p, j) = hazync_engine_verify::unpack(&file).map_err(|e| eyre::eyre!("pack: {e}"))?;
-    hazync_engine_verify::verify_full_bytes(&key, &pin, p, j, &id).map_err(|e| eyre::eyre!("pack: the readers' verifier refuses it: {e}"))?;
+    let (file, key, pin, id) = pack_bytes(mvk.as_ref(), baseline, &proof, &journal)?;
+    let enc_len = file.len() - 8 - journal.len();
     std::fs::write(out, &file)?;
     if let Some(k) = key_out {
         std::fs::write(k, &key)?;
     }
-    eprintln!("pack: {} ({} bytes: proof {}, journal {}), verified as the readers verify it", out.display(), file.len(), enc.len(), journal.len());
+    eprintln!("pack: {} ({} bytes: proof {}, journal {}), verified as the readers verify it", out.display(), file.len(), enc_len, journal.len());
     println!("image {}", hex::encode(id));
     println!("key_pin {}{}", hex::encode(pin), key_out.map(|k| format!(" ({}, {} bytes)", k.display(), key.len())).unwrap_or_default());
     Ok(())
@@ -589,4 +592,20 @@ pub fn verify(dir: &Path, proof_path: &Path) -> Result<()> {
     }
     eprintln!("verify: OK ({:.2} s), journal {} bytes sha256 {}", t.elapsed().as_secs_f64(), journal.len(), hex::encode(&c.pvs));
     Ok(())
+}
+
+/// The HZE1 file of a proof (OpenVM's plain encoding, then the journal), the key file, its pin and the image id,
+/// checked by the readers' own verifier (engine/verify-core) first: a file that would fail is never returned.
+pub fn pack_bytes(mvk: &MultiStarkVerifyingKey<SC>, baseline: VerificationBaseline, proof: &VmStarkProof, journal: &[u8])
+    -> Result<(Vec<u8>, Vec<u8>, [u8; 32], [u8; 32])> {
+    use openvm_stark_backend::codec::Encode;
+    let mut enc = Vec::new();
+    proof.encode(&mut enc)?;
+    let id = crate::stream::image_id(&image_of(&baseline));
+    let key = bitcode::serialize(&VmStarkVerifyingKey { mvk: mvk.clone(), baseline })?;
+    let pin: [u8; 32] = Sha256::digest(&key).into();
+    let file = hazync_engine_verify::pack(&enc, journal);
+    let (p, j) = hazync_engine_verify::unpack(&file).map_err(|e| eyre!("pack: {e}"))?;
+    hazync_engine_verify::verify_full_bytes(&key, &pin, p, j, &id).map_err(|e| eyre!("pack: the readers' verifier refuses it: {e}"))?;
+    Ok((file, key, pin, id))
 }

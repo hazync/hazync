@@ -1122,9 +1122,8 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
     // verifies both in-guest and checks they are adjacent, exactly as below.
     if crate::engine_backend::active() {
         use crate::sink::Sink;
-        let rd = |p: &str| crate::engine_backend::EngineProof {
-            path: p.into(), journal: std::fs::read(format!("{p}.journal")).unwrap_or_else(|e| panic!("{p}.journal: {e}")) };
-        let (l, r) = (rd(left), rd(right));
+        // left/right: HZE1 files (the board's) or pairs; out: HZE1 when it names one file (.bin, .hze), else a pair
+        let (l, r) = (crate::engine_backend::read_any(left), crate::engine_backend::read_any(right));
         let (ls, rs) = (crate::engine_backend::decode_state(&l.journal), crate::engine_backend::decode_state(&r.journal));
         let mut st = crate::sink::Stream::default();
         st.write(&18u32);
@@ -1134,7 +1133,13 @@ pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
         let dir = std::path::Path::new(out).parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
         let t = std::time::Instant::now();
         let j = crate::engine_backend::with(&dir, |e| e.prove("join", &st.0, &[&l, &r], true));
-        let j = crate::engine_backend::keep(&j, out);
+        let j = if crate::engine_backend::wants_hze(out) {
+            crate::engine_backend::with(&dir, |e| e.pack(&j.path, std::path::Path::new(out)));
+            for ext in ["proof.json", "journal"] { let _ = std::fs::remove_file(crate::engine_backend::with_ext(&j.path, ext)); }
+            crate::engine_backend::EngineProof { path: out.into(), journal: j.journal }
+        } else {
+            crate::engine_backend::keep(&j, out)
+        };
         let s = crate::engine_backend::decode_state(&j.journal);
         assert!(s.anchor_id == ls.anchor_id && s.height == rs.height && s.tip_hash == rs.tip_hash, "join: unexpected output state");
         use sha2::Digest;

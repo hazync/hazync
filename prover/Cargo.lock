@@ -2404,6 +2404,7 @@ dependencies = [
  "bitcoin",
  "bytemuck",
  "hazync-coinbase-smt",
+ "hazync-engine-verify",
  "hazync-utreexo",
  "libzync",
  "methods",

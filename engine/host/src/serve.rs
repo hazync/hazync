@@ -4,7 +4,9 @@
 //!   {"op":"execute","input":P,"children":[..],"self_id":b,"dry":b,"journal":P?,"log":P?}
 //!   {"op":"prove","input":P,"children":[..],"self_id":b,"journal":P?,"out":P}   journal = known (skip emit pass)
 //!   {"op":"prove_segments","input":P,"lo":n,"hi":n,"cap":n,"out":P}   segments lo..hi of a serialized stdin (segpar)
+//!   {"op":"pack","input":P,"out":F}                 P (a pair, or HZE1) -> F as HZE1, checked by verify-core first
 //!   {"op":"image"}                                  -> {"ok":true,"image_id":hex}  (needs image.json)
+//! Every proof path (input of pack, children) may be an HZE1 file instead of a P.proof.json + P.journal pair.
 //! Replies: {"ok":true,...} or {"ok":false,"error":"..."}. A request with a field this list does not name is refused
 //! (a misspelt field would otherwise fall back to its default: "self-id" for "self_id" would prove the wrong layout).
 //! Guest output never reaches stdout (it is captured), and progress goes to stderr, so stdout carries only replies.
@@ -115,6 +117,19 @@ fn handle(e: &Engine, dir: &Path, r: &Req) -> Result<serde_json::Value> {
             let n = crate::segpar::prove_segments(e, dir, input, r.lo, r.hi, cap, out)?;
             Ok(serde_json::json!({"ok": true, "segments": n, "secs": t.elapsed().as_secs_f64()}))
         }
+        "pack" => {
+            // the board's proof file: input (P.proof.json + P.journal, or HZE1) -> out as HZE1, checked by verify-core
+            let input = r.input.as_ref().ok_or_else(|| eyre::eyre!("pack: input"))?;
+            let out = r.out.as_ref().ok_or_else(|| eyre::eyre!("pack: out"))?;
+            let baseline = Engine::baseline(dir)?;
+            let (proof, journal) = crate::engine::read_proof(e, &baseline, input)?;
+            let (file, _key, pin, id) = crate::engine::pack_bytes(e.agg_vk.as_ref(), baseline, &proof, &journal)?;
+            let tmp = crate::engine::with_ext(out, "tmp");
+            std::fs::write(&tmp, &file)?;
+            std::fs::rename(&tmp, out)?;
+            Ok(serde_json::json!({"ok": true, "bytes": file.len(), "image_id": hex::encode(id), "key_pin": hex::encode(pin),
+                                  "secs": t.elapsed().as_secs_f64()}))
+        }
         "image" => {
             let img = Engine::image(dir)?;
             Ok(serde_json::json!({"ok": true, "image_id": hex::encode(crate::stream::image_id(&img))}))
@@ -133,6 +148,7 @@ mod tests {
         for ok in [r#"{"op":"execute","input":"a.in","children":["c"],"self_id":true,"dry":false,"journal":"a.journal","log":"a.log"}"#,
                    r#"{"op":"prove","input":"a.in","children":[],"self_id":false,"journal":null,"out":"a"}"#,
                    r#"{"op":"prove_segments","input":"s","lo":0,"hi":4,"cap":1048576,"out":"o"}"#,
+                   r#"{"op":"pack","input":"p","out":"p.hze"}"#,
                    r#"{"op":"image"}"#] {
             assert!(serde_json::from_str::<Req>(ok).is_ok(), "{ok}");
         }

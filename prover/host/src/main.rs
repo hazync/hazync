@@ -1577,7 +1577,14 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "method-id") {
-        // Print THIS host's guest image id so a contributor can check it matches a proof's guest.
+        // Print THIS host's guest image id so a contributor can check it matches a proof's guest. An engine host
+        // (HAZYNC_ENGINE_VK, or HAZYNC_ENGINE_KEYS) prints its engine image id: the id the board compares.
+        if let Some(r) = engine_backend::engine_image_words() {
+            let w = r.unwrap_or_else(|e| { eprintln!("method-id: {e}"); std::process::exit(1) });
+            println!("METHOD_ID {}", w.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect::<String>());
+            println!("  engine (OpenVM) image id: sha256(exe || vm)");
+            return;
+        }
         println!("METHOD_ID {}", method_id_hex());
         println!("  u32x8   {:?}", METHOD_ID);
         if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
@@ -1586,6 +1593,9 @@ fn main() {
     if args.iter().any(|a| a == "seg-po2") {
         // The segment po2 this binary would use, so the CLI's retry ladder can start from the binary's
         // own per-backend default (21 cuda / 20 CPU) instead of guessing and wasting a duplicate attempt.
+        // On the engine (HAZYNC_ENGINE) there is no such knob (it sizes its own segments): `engine`, and the worker
+        // makes one attempt instead of walking a ladder of identical runs.
+        if engine_backend::active() { println!("engine"); return; }
         println!("{}", seg_po2());
         return;
     }

@@ -27,6 +27,8 @@ risc0-binfmt = "=3.0.6"
 risc0-zkp = { version = "=3.0.6", default-features = false, features = ["std"] }
 hazync-utreexo = { path = "../../accumulator" }
 hazync-coinbase-smt = { path = "../../coinbase-smt", features = ["std", "serde"] }
+# The board on the engine (engine/STAGE3.md 3.2): verify-any checks an engine proof file (HZE1) as every reader does.
+hazync-engine-verify = { path = "../../engine/verify-core" }
 
 [features]
 cuda = ["risc0-zkvm/cuda"]

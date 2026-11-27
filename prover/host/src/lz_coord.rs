@@ -60,6 +60,14 @@ pub(crate) fn prove_bridge_cmd(h: u32) {
     std::env::set_var("HAZYNC_LEAF_BUNDLE", &p);
     let out = format!("lz_leaf_{h}");
     crate::lz::lz_prove_range_cmd(h, h, &out, "leaf", &out);
+    if crate::engine_backend::active() {
+        // the engine's leaf (block_<h>.ovm, a pair) as the board's one file: HZE1, checked by verify-core (STAGE3 3.2)
+        let src = std::path::PathBuf::from(format!("{out}/block_{h}.ovm"));
+        crate::engine_backend::with(&out, |e| e.pack(&src, std::path::Path::new(&format!("range_{h}.bin"))));
+        let _ = std::fs::remove_dir_all(&out);
+        println!("leaf engine proof for block {h} -> range_{h}.bin");
+        return;
+    }
     let r = std::fs::read(format!("{out}/block_{h}.rcpt")).unwrap();
     crate::lz::write_atomic(&format!("range_{h}.bin"), &r);
     let _ = std::fs::remove_dir_all(&out);
@@ -79,6 +87,15 @@ pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>, check_end: bool) {
 }
 
 fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String> {
+    // An engine board (HAZYNC_ENGINE_VK set) takes engine proof files only; a RISC Zero board refuses them below (the
+    // receipt decoder), as another build's (MISMATCH).
+    let raw = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    if let Some(key) = crate::engine_backend::board_key() {
+        return verify_any_engine(&raw, key?, lo, check_end);
+    }
+    if hazync_engine_verify::is_engine_proof(&raw) {
+        return Err("an engine (OpenVM) proof file, but this coordinator verifies RISC Zero receipts (METHOD_ID MISMATCH: set HAZYNC_ENGINE_VK and HAZYNC_ENGINE_VK_PIN for an engine board)".into());
+    }
     let r = crate::verify::read_receipt(path)?;
     // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in this process's environment: refuse both, as
     // libzync-verify does, so a stray dev-mode variable on the board can never let a hand-written state in.
@@ -120,6 +137,12 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
     if st.profile != crate::lz::expected_profile() {
         return Err(format!("profile {:#x}, this coordinator's image commits {:#x}", st.profile, crate::lz::expected_profile()));
     }
+    range_ok(&st, &image, lo, check_end, era_lo, fake || test_fake)
+}
+
+/// The checks the board needs beyond the proof itself, shared by both provers' files, and the RANGE-OK line: the claimed
+/// start, the anchor (the state before lo), the end (the board's own state at hi, `--check-end`), the era.
+fn range_ok(st: &ChainState, image: &[u32; 8], lo: Option<u32>, check_end: bool, era_lo: u32, fake: bool) -> Result<(), String> {
     let lo = lo.unwrap_or(st.height);
     if lo == 0 || lo > st.height { return Err(format!("claimed start {lo} for a state at {}", st.height)); }
     let before = state_before(lo)?;
@@ -135,7 +158,7 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
     if check_end {
         let after = state_before(st.height + 1)
             .map_err(|e| format!("the board has no state at block {} to check the receipt's end against ({e})", st.height))?;
-        if link_digest(&after) != link_digest(&st) || after.tip_hash != st.tip_hash {
+        if link_digest(&after) != link_digest(st) || after.tip_hash != st.tip_hash {
             return Err(format!("the receipt ends on a state at block {} that is not the board's (its tip {}, the board's {}): \
                                 not Bitcoin's chain", st.height, hex(&st.tip_hash), hex(&after.tip_hash)));
         }
@@ -144,13 +167,42 @@ fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String
     // predecessor's era and ends in this one can only be a base step on a predecessor-stamped state, which the lineage
     // check above already refuses. Stated anyway: the board keys eras on it.
     if lo != 1 && lo < era_lo {
-        return Err(format!("range starts at {lo}, before image {}'s first block {era_lo}", hex_id(&image)));
+        return Err(format!("range starts at {lo}, before image {}'s first block {era_lo}", hex_id(image)));
     }
     // image= and lineage= sit BEFORE anchored=: hazync-lz-zapp-follow.sh matches a line ENDING in `anchored=1`
     println!("RANGE-OK lo={lo} hi={} in_tip={} out_tip={} out_leaves={} range_work=0 in_bhash={} out_bhash={} image={} lineage={} anchored={}{}{}",
-             st.height, hex(&st.anchor_id), hex(&link_digest(&st)), st.utxo_leaves, hex(&before.tip_hash), hex(&st.tip_hash),
-             hex_id(&image), hex(&st.lineage), (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake || test_fake { " fake=1" } else { "" });
+             st.height, hex(&st.anchor_id), hex(&link_digest(st)), st.utxo_leaves, hex(&before.tip_hash), hex(&st.tip_hash),
+             hex_id(image), hex(&st.lineage), (lo == 1) as u8, if check_end { " end=board" } else { "" }, if fake { " fake=1" } else { "" });
     Ok(())
+}
+
+/// verify-any for an engine board: the HZE1 file verified as every reader verifies it (verify-core, under the pinned
+/// key; the image is the one the key names), the journal a ChainState of that image with no lineage (an engine chain
+/// from genesis), this board's profile, then the same range checks as a RISC Zero receipt.
+fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, check_end: bool) -> Result<(), String> {
+    use hazync_engine_verify as ev;
+    if !ev::is_engine_proof(raw) {
+        return Err("not an engine proof file (HZE1): this coordinator verifies engine proofs (METHOD_ID MISMATCH: a RISC Zero receipt?)".into());
+    }
+    let (key, pin) = key;
+    let vk = ev::decode_vk(&key).map_err(|e| format!("the board's engine key does not decode: {e}"))?;
+    let id = ev::image_id_of(&vk);
+    let (proof, journal) = ev::unpack(raw).map_err(|e| format!("not an engine proof file: {e}"))?;
+    ev::verify_full_bytes(&key, &pin, proof, journal, &id)
+        .map_err(|e| format!("does not verify against this coordinator's engine image {} (METHOD_ID MISMATCH or invalid proof): {e}", hex(&id)))?;
+    if journal.len() % 4 != 0 { return Err("journal is not whole words".into()); }
+    let w: Vec<u32> = journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let st: ChainState = risc0_zkvm::serde::from_slice(&w).map_err(|e| format!("journal is not a ChainState: {e}"))?;
+    let image: [u32; 8] = core::array::from_fn(|i| u32::from_le_bytes(id[4 * i..4 * i + 4].try_into().unwrap()));
+    if st.kind != KIND_CHAIN { return Err(format!("journal kind {:#x} is not a chain state", st.kind)); }
+    if st.self_id != image { return Err("the state's self_id is not the image that verified it".into()); }
+    if st.lineage != [0u8; 32] {
+        return Err(format!("lineage {} is not zero: this board takes one engine image from genesis (no handover)", hex(&st.lineage)));
+    }
+    if st.profile != crate::lz::expected_profile() {
+        return Err(format!("profile {:#x}, this coordinator's image commits {:#x}", st.profile, crate::lz::expected_profile()));
+    }
+    range_ok(&st, &image, lo, check_end, 1, false)
 }
 
 fn hex_id(w: &[u32; 8]) -> String {
@@ -266,5 +318,68 @@ mod strict_decode_tests {
         let mut deep = vec![0u8; 4];
         deep.extend(std::iter::repeat(0u8).take(1 << 16));
         assert!(crate::verify::decode_receipt(&deep).unwrap_err().contains("composite"));
+    }
+}
+
+#[cfg(test)]
+mod engine_board_tests {
+    //! verify-any on an engine board (engine/STAGE3.md 3.2), on the engine chain's proof of mainnet 1..200
+    //! (swiftsync-verify/tests/data/engine200: HZE1, its key and pin) and another image's key (the header zAPP's).
+    use super::{verify_any, verify_any_engine};
+    const D: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/tests/data/engine200/");
+    const OTHER: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../zapps/headers/tests/data/engine4031/");
+
+    fn key(dir: &str) -> (Vec<u8>, [u8; 32]) {
+        let k = std::fs::read(format!("{dir}vk.bin")).unwrap();
+        let h = std::fs::read_to_string(format!("{dir}vk.sha256")).unwrap();
+        let h = h.split_whitespace().next().unwrap();
+        (k, core::array::from_fn(|i| u8::from_str_radix(&h[2 * i..2 * i + 2], 16).unwrap()))
+    }
+    fn proof() -> Vec<u8> { std::fs::read(format!("{D}proof.hze")).unwrap() }
+
+    #[test]
+    fn engine_verify_any_accepts_and_refuses() {
+        // the range 1..200 from genesis, as the board checks it (no --check-end: the board's own states are not here)
+        verify_any_engine(&proof(), key(D), Some(1), false).expect("block 1..200's engine proof is RANGE-OK");
+        // the key not the pinned one
+        let (k, _) = key(D);
+        let e = verify_any_engine(&proof(), (k, [0u8; 32]), Some(1), false).unwrap_err();
+        assert!(e.contains("MISMATCH or invalid proof"), "wrong pin: {e}");
+        // another image's key (pinned correctly): not this board's image
+        let e = verify_any_engine(&proof(), key(OTHER), Some(1), false).unwrap_err();
+        assert!(e.contains("does not verify against this coordinator's engine image"), "other image: {e}");
+        // a journal byte changed: the public values no longer match
+        let mut p = proof();
+        let n = p.len();
+        p[n - 5] ^= 1;
+        let e = verify_any_engine(&p, key(D), Some(1), false).unwrap_err();
+        assert!(e.contains("invalid proof"), "tampered journal: {e}");
+        // a proof byte changed
+        let mut p = proof();
+        p[4000] ^= 1;
+        assert!(verify_any_engine(&p, key(D), Some(1), false).is_err(), "tampered proof verified");
+        // claimed starts the state cannot have: past its height, zero, and one whose state before it is unknown here
+        for lo in [201u32, 0] {
+            let e = verify_any_engine(&proof(), key(D), Some(lo), false).unwrap_err();
+            assert!(e.contains("claimed start"), "lo {lo}: {e}");
+        }
+        assert!(verify_any_engine(&proof(), key(D), Some(2), false).is_err(), "lo 2 accepted with no state before it");
+        // --check-end with no board state at 200: refused (unknown means refused)
+        let e = verify_any_engine(&proof(), key(D), Some(1), true).unwrap_err();
+        assert!(e.contains("no state at block 200"), "check-end: {e}");
+        // a RISC Zero receipt handed to an engine board
+        let r = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/risc0_vectors/mainnet_1_200_8888d59c.rcpt")).unwrap();
+        let e = verify_any_engine(&r, key(D), Some(1), false).unwrap_err();
+        assert!(e.contains("not an engine proof file"), "receipt on an engine board: {e}");
+        // a truncated file
+        let e = verify_any_engine(&proof()[..100], key(D), Some(1), false).unwrap_err();
+        assert!(e.contains("MISMATCH or invalid proof") || e.contains("not an engine proof file"), "truncated: {e}");
+    }
+
+    #[test]
+    fn a_risc0_board_refuses_an_engine_file() {
+        if std::env::var("HAZYNC_ENGINE_VK").is_ok() { return; } // this test is about a board WITHOUT the engine key
+        let e = verify_any(&format!("{D}proof.hze"), Some(1), false).unwrap_err();
+        assert!(e.contains("engine (OpenVM) proof file") && e.contains("MISMATCH"), "{e}");
     }
 }

@@ -313,3 +313,56 @@ pub(crate) fn image_id_words(keys: &str) -> [u32; 8] {
 fn hex_bytes(h: &str) -> Vec<u8> {
     (0..h.len()).step_by(2).map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex")).collect()
 }
+
+impl Engine {
+    /// `src` (a P.proof.json + P.journal pair, or HZE1) as one HZE1 file at `dst`: the board's and the readers' proof
+    /// file, checked by verify-core before it is written (engine/STAGE3.md 3.2).
+    pub(crate) fn pack(&mut self, src: &Path, dst: &Path) {
+        let r = self.req(serde_json::json!({"op": "pack", "input": src, "out": dst}));
+        println!("  engine: packed {} -> {} ({} bytes, image {})", src.display(), dst.display(), r["bytes"], r["image_id"].as_str().unwrap_or("?"));
+    }
+}
+
+/// An engine proof at `p`: an HZE1 file (the board's), or a P.proof.json + P.journal pair. Either can be a child.
+pub(crate) fn read_any(p: &str) -> EngineProof {
+    if let Ok(f) = std::fs::read(p) {
+        if hazync_engine_verify::is_engine_proof(&f) {
+            let (_, j) = hazync_engine_verify::unpack(&f).unwrap_or_else(|e| panic!("{p}: {e}"));
+            return EngineProof { path: p.into(), journal: j.to_vec() };
+        }
+    }
+    EngineProof { path: p.into(), journal: std::fs::read(format!("{p}.journal")).unwrap_or_else(|e| panic!("{p}.journal: {e}")) }
+}
+
+/// Does `out` name a one-file proof (the board's `.bin`, or `.hze`)? Then a command writes HZE1 there, else a pair.
+pub(crate) fn wants_hze(out: &str) -> bool {
+    out.ends_with(".bin") || out.ends_with(".hze")
+}
+
+/// The board's engine key (HAZYNC_ENGINE_VK = the key file `hzengine pack --key` writes, HAZYNC_ENGINE_VK_PIN = its
+/// SHA-256, hex): None when this host is not set up as an engine board. A key whose bytes are not the pin is an Err.
+pub(crate) fn board_key() -> Option<Result<(Vec<u8>, [u8; 32]), String>> {
+    let path = std::env::var("HAZYNC_ENGINE_VK").ok()?;
+    Some((|| {
+        let pin_hex = std::env::var("HAZYNC_ENGINE_VK_PIN").map_err(|_| "HAZYNC_ENGINE_VK is set without HAZYNC_ENGINE_VK_PIN (the key's SHA-256)".to_string())?;
+        let pin: [u8; 32] = hex_bytes(pin_hex.trim()).try_into().map_err(|_| "HAZYNC_ENGINE_VK_PIN is not 64 hex digits".to_string())?;
+        let key = std::fs::read(&path).map_err(|e| format!("HAZYNC_ENGINE_VK={path}: {e}"))?;
+        use sha2::Digest;
+        if sha2::Sha256::digest(&key)[..] != pin[..] { return Err(format!("HAZYNC_ENGINE_VK={path} is not the pinned key (its SHA-256 is not HAZYNC_ENGINE_VK_PIN)")); }
+        Ok((key, pin))
+    })())
+}
+
+/// The engine image id this host proves or verifies as, 8 words: the board key's image, else HAZYNC_ENGINE_KEYS'
+/// image.json; None for a RISC Zero host.
+pub(crate) fn engine_image_words() -> Option<Result<[u32; 8], String>> {
+    if let Some(k) = board_key() {
+        return Some(k.and_then(|(key, _)| {
+            let vk = hazync_engine_verify::decode_vk(&key).map_err(|e| format!("HAZYNC_ENGINE_VK does not decode: {e}"))?;
+            let id = hazync_engine_verify::image_id_of(&vk);
+            Ok(core::array::from_fn(|i| u32::from_le_bytes(id[4 * i..4 * i + 4].try_into().unwrap())))
+        }));
+    }
+    let keys = std::env::var("HAZYNC_ENGINE_KEYS").ok()?;
+    Some(Ok(image_id_words(&keys)))
+}

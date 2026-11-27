@@ -604,12 +604,18 @@ def _seg_ladder(env):
         if _SEG_TOP_CACHE["v"] is False:             # ask the binary once per run, not once per block
             _SEG_TOP_CACHE["v"] = None
             try:
-                r = subprocess.run([HOSTBIN, "seg-po2"], capture_output=True, text=True, timeout=30)
+                r = subprocess.run([HOSTBIN, "seg-po2"], capture_output=True, text=True, timeout=30, env=env)
                 if r.returncode == 0 and r.stdout.strip().isdigit():
                     _SEG_TOP_CACHE["v"] = int(r.stdout.strip())
+                elif r.returncode == 0 and r.stdout.strip() == "engine":
+                    _SEG_TOP_CACHE["v"] = "engine"
             except Exception:
                 pass
         top = _SEG_TOP_CACHE["v"]
+    # The engine (OpenVM, HAZYNC_ENGINE) sizes its own segments and has no po2 knob: smaller "segments" would be the
+    # same run again, so a failure is final after one attempt (a stall still gets its one retry, below).
+    if top == "engine":
+        return (None,)
     if top is None:
         return (None, 20, 19, 18)
     return (None, *range(top - 1, _SEG_MIN - 1, -1))
