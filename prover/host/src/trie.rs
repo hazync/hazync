@@ -227,9 +227,7 @@ pub(crate) fn trie_init_at_start(handover: bool, anchor_path: &str, prev: &Chain
         ts.hash = prev.tip_hash;
         *TS.lock().unwrap() = Some(ts);
     } else if handover {
-        let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
-        let d = std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string())
-            .filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string());
+        let d = crate::lz::handover_dir();
         trie_load(&format!("{d}/state_{}.trie", prev.height), prev);
     } else {
         trie_load(&trie_path_for(anchor_path), prev);

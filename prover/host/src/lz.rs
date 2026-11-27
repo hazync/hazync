@@ -1843,12 +1843,18 @@ pub(crate) fn cl_path_for(state_json: &str) -> String {
 }
 
 /// The coin log for a run starting after `prev`: the handover receipt's log, an empty log (genesis), or the anchor's.
+/// The directory a handover's predecessor files sit in (state_<h>.coinlog, state_<h>.trie): the one of the
+/// predecessor's receipt (HAZYNC_HANDOVER_RECEIPT) or, on the engine, of its proof (HAZYNC_HANDOVER_PROOF). A bare file
+/// name has the parent "" (review 11-03): then ".".
+pub(crate) fn handover_dir() -> String {
+    let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").or_else(|_| std::env::var("HAZYNC_HANDOVER_PROOF"))
+        .expect("a handover run names its predecessor (HAZYNC_HANDOVER_RECEIPT or HAZYNC_HANDOVER_PROOF)");
+    std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string()).filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string())
+}
+
 pub(crate) fn cl_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
     if handover {
-        let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").unwrap();
-        // A bare file name has the parent "" (review 11-03): read the log next to it, in ".".
-        let d = std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string())
-            .filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string());
+        let d = handover_dir();
         cl_load(&format!("{d}/state_{}.coinlog", prev.height));
     } else if anchor_path == "genesis" {
         cl_init_empty();
