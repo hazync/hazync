@@ -23,6 +23,10 @@ libzync = { path = "../../libzync", default-features = false, features = ["liven
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+[dev-dependencies]
+# the tests compute a fixture key's pin (corecheck::with_key requires one: review R2-5 #1); already in the graph
+sha2 = "0.10"
+
 [features]
 # TESTS ONLY (zapps/corecheck's regtest-test, scripts/zapp-regtest): the regtest harness's image for the OK-verdict
 # tests on real regtest proofs. Never in a release or WASM build (corecheck's compile_error!, scripts/wasm-build.sh).

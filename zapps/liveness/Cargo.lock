@@ -2454,6 +2454,7 @@ dependencies = [
  "libzync",
  "serde",
  "serde_json",
+ "sha2",
  "swiftsync-verify",
  "zapp-corecheck",
 ]

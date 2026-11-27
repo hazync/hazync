@@ -36,3 +36,16 @@ OpenVM circuit-level checks every report assumed (add_ne / double / exp_bytes co
 the count bus); the guest's consensus internals (hz_tx_rules, CheckTxInputs, BIP68 / MTP, the coin log's shape proof,
 the BIP30 SMT, ttree top_pass / sub_pass); the hints and utreexo Deriver logic; the assume and deposit zAPPs; a
 differential test of the Rust tx parsers against Core's.
+
+## Status (27.11.2026, fixes.md)
+
+| # | state |
+|---|---|
+| R2-6 #1 | FIXED: the reader FAILs weight > 4,000,000 or sigop cost > 80,000; tested at and over each limit |
+| R2-6 #2 | FIXED in the reader, CLI and README; the guest's comment waits for the zeroconf image's next rebuild |
+| R2-6 #3 | FIXED: --wtxid / Asked.wtxid |
+| R2-6 #4 | docs FIXED ("pass your current tip"); the guest's genesis-anchor pin waits for the zeroconf image's next rebuild |
+| R2-4 #1, #2 | FIXED (core image e3729469; 27/27 honest chunks unchanged) |
+| R2-5 #1 | FIXED: with_pinned_engine_key in every shipped path; with_engine_key_unchecked tests only; with_key needs a pin; verify_stark_bytes removed |
+| R2-1 #2 | FIXED: verify_full_trusted_key |
+| R2-2 L1 | FIXED: VERIFIER.md |
