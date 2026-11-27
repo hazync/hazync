@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """core_accept.py <bitcoind> <raw.txt> <tip height> <T.json> <port>: a throwaway regtest node (Core), the harness's
-main branch submitted to <tip height>, then testmempoolaccept on T. Prints the tip and Core's verdict."""
+main branch submitted to <tip height>, then testmempoolaccept on T. Prints the tip and Core's verdict. <T.json> may be
+a comma-separated list (T.json,T2.json): Core then tests them as one package, parents first."""
 import json, os, subprocess, sys, tempfile, time, base64, urllib.request
 B, RAW, TIP, TJ, PORT = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], int(sys.argv[5])
 d = tempfile.mkdtemp(prefix="zc-core-")
@@ -20,7 +21,7 @@ try:
             assert rpc("submitblock", hx) is None, f"block {h} refused"
     tip = rpc("getbestblockhash")
     print("tip", rpc("getblockcount"), tip)
-    t = json.load(open(TJ))
-    print("testmempoolaccept:", json.dumps(rpc("testmempoolaccept", [t["raw"]])))
+    raws = [json.load(open(f))["raw"] for f in TJ.split(",")]
+    print("testmempoolaccept:", json.dumps(rpc("testmempoolaccept", raws)))
 finally:
     p.terminate(); p.wait()
