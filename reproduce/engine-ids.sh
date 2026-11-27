@@ -5,10 +5,16 @@
 # (default reproduce/out-engine). Images: core (the production core guest, mainnet, default features) and zeroconf.
 #
 # Fixed inside the container: the commit's tracked files (`git archive HEAD`: uncommitted edits never reach an id) at
-# /hz/src, the C/C++ base at /hz/base, the assembled guests at /hz/asm and /hz/zc, keys at /hz/keys-*, HOME /root.
+# /root/engine-kit, the C/C++ base at /hz/base, the assembled guests at /hz/asm and /hz/zc, keys at /hz/keys-*, HOME /root.
 # The keys are made here by `hzengine keygen` with HZ_GUEST_MEM_BITS=29 (the production VM config, the build box's
 # keys-rt29); the vm commitment depends only on them. The guests build with their pinned locks (reproduce/engine-locks,
-# OPENVM_BUILD_LOCKED=1: cargo --locked), never re-resolved. Needs docker and the network (crates, OpenVM, Core, libsecp).
+# OPENVM_BUILD_LOCKED=1: cargo --locked), never re-resolved.
+# ⛔ /root/engine-kit is part of the id: the guests' platform crates are path dependencies there, and cargo hashes a path
+# dependency's location into its -C metadata (symbol names), which --remap-path-prefix does not touch. Measured on the
+# build box 27.11.2026 (engine/results/reproduce_engine): the same source with the kit at /root/r41/src/engine gave exe
+# 56d9b208..., at /root/engine-kit/engine 0ddcb255... (keys-ch's). The box's reference images were built from a kit at
+# /root/engine-kit, so this stage is that path. The assembled guest's own path does NOT reach the id (remapped).
+# Needs docker and the network (crates, OpenVM, Core, libsecp).
 # A cargo cache volume (hazync-engine-cargo) keeps downloads between runs; HAZYNC_ENGINE_FRESH=1 starts from an empty one.
 set -euo pipefail
 SELF=$(realpath "${BASH_SOURCE[0]}")
@@ -17,18 +23,18 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
     [ -f /etc/hazync-engine-build-container ] || { echo "$0: not the build container" >&2; exit 1; }
     for v in $(compgen -e | grep "^HAZYNC_\|^HZ_"); do [ "$v" = HAZYNC_ENGINE_IN_CONTAINER ] || unset "$v"; done
     t0=$(date +%s); say(){ echo "[$(( $(date +%s)-t0 )) s] $*"; }
-    rm -rf /hz && mkdir -p /hz/src
-    git -c safe.directory='*' -C /src archive HEAD | tar -x -C /hz/src
+    K=/root/engine-kit; rm -rf /hz $K && mkdir -p /hz $K
+    git -c safe.directory='*' -C /src archive HEAD | tar -x -C $K
     commit=$(git -c safe.directory='*' -C /src rev-parse HEAD)
     say "commit $commit (git archive HEAD); rustc $(rustc --version | cut -d' ' -f2), guest $(rustc +nightly-2026-02-28 --version | cut -d' ' -f2-4)"
-    cd /hz/src/engine/host && cargo build --release --locked -q 2>&1 | grep -v '^warning' | tail -3 || true
-    E=/hz/src/engine/host/target/release/hzengine; [ -x $E ] || { echo "hzengine did not build" >&2; exit 1; }
+    cd $K/engine/host && cargo build --release --locked -q 2>&1 | grep -v '^warning' | tail -3 || true
+    E=$K/engine/host/target/release/hzengine; [ -x $E ] || { echo "hzengine did not build" >&2; exit 1; }
     say "hzengine built"
-    /hz/src/engine/guest/base.sh /hz/base > /hz/base.log 2>&1 || { tail -5 /hz/base.log; exit 1; }
-    /hz/src/engine/guest/assemble.sh /hz/asm > /hz/asm.log 2>&1 || { tail -5 /hz/asm.log; exit 1; }
-    cp /hz/src/reproduce/engine-locks/core.Cargo.lock /hz/asm/prover/methods/guest/Cargo.lock
-    /hz/src/engine/zapps/assemble_guest.sh zeroconf /hz/zc > /hz/zc-asm.log 2>&1 || { tail -5 /hz/zc-asm.log; exit 1; }
-    cp /hz/src/reproduce/engine-locks/zeroconf.Cargo.lock /hz/zc/Cargo.lock
+    $K/engine/guest/base.sh /hz/base > /hz/base.log 2>&1 || { tail -5 /hz/base.log; exit 1; }
+    $K/engine/guest/assemble.sh /hz/asm > /hz/asm.log 2>&1 || { tail -5 /hz/asm.log; exit 1; }
+    cp $K/reproduce/engine-locks/core.Cargo.lock /hz/asm/prover/methods/guest/Cargo.lock
+    $K/engine/zapps/assemble_guest.sh zeroconf /hz/zc > /hz/zc-asm.log 2>&1 || { tail -5 /hz/zc-asm.log; exit 1; }
+    cp $K/reproduce/engine-locks/zeroconf.Cargo.lock /hz/zc/Cargo.lock
     say "base and guests assembled"
     HZ_GUEST_MEM_BITS=29 $E keygen --dir /hz/keys > /hz/keygen.log 2>&1 || { tail -5 /hz/keygen.log; exit 1; }
     say "keygen: $(grep -a '^keygen:' /hz/keygen.log); sdk.pk $(sha256sum /hz/keys/sdk.pk | cut -c1-16) agg.vk $(sha256sum /hz/keys/agg.vk | cut -c1-16) openvm.toml $(sha256sum /hz/keys/openvm.toml | cut -c1-16)"
