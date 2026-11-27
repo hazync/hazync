@@ -24,6 +24,6 @@ What the product host relies on: `hzengine serve` (engine/host/src/serve.rs) and
 4. **Engine failures panic in the host** (exit 101 with the message), as the RISC Zero path does. A proving run cannot go on
    after either failure, so this is consistent. A long-lived service would want errors instead: Stage 3 (board, tip
    controller).
-6. ✅ **Done 27.11: zeroconf's own kind (0x5A5A0001).** See engine/zapps/zeroconf/fixture/README.md.
 5. **Logs.** The SDK's progress spans are INFO on stderr and land in the host's log. RUST_LOG=warn quiets them (now in
    serve's header). The default stays INFO, because the timings in the results come from those spans.
+6. ✅ **Done 27.11: zeroconf's own kind (0x5A5A0001).** See engine/zapps/zeroconf/fixture/README.md.
