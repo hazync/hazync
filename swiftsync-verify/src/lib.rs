@@ -447,23 +447,6 @@ pub struct EngineKey<'a> {
     pub pin: [u8; 32],
 }
 
-/// For the path producers (zync-path, zync-serve): takes `--node-format 1|2` out of `args`, wherever it stands, and sets
-/// that coin log / trie node format for this thread (COINLOG.md §2). Default 2: the engine chain (profile bit 7); 1 for
-/// the RISC Zero chain. A history or trie file does not say which, and a path in the other format never verifies.
-pub fn take_node_format_flag(args: &mut Vec<String>) -> Result<u32, String> {
-    let mut f = 2;
-    while let Some(i) = args.iter().position(|x| x == "--node-format") {
-        f = match args.get(i + 1).map(String::as_str) {
-            Some("1") => 1,
-            Some("2") => 2,
-            _ => return Err("--node-format: 1 or 2".into()),
-        };
-        args.drain(i..i + 2);
-    }
-    libzync::coinlog::set_node_format(f);
-    Ok(f)
-}
-
 /// Does the file start with the engine proof magic (`HZE1`, engine/verify-core)? Checked before any decoder sees it.
 pub fn is_engine_proof(file: &[u8]) -> bool {
     file.len() >= 4 && &file[..4] == b"HZE1"
@@ -2372,4 +2355,23 @@ mod receipt_hardening_tests {
             assert!(e.contains(want), "{f}: {e}");
         }
     }
+}
+
+// At the end of the file on purpose: every line above keeps its number, and with it every panic location the wasm
+// modules embed (an item inserted above moves their hashes).
+/// For the path producers (zync-path, zync-serve): takes `--node-format 1|2` out of `args`, wherever it stands, and sets
+/// that coin log / trie node format for this thread (COINLOG.md §2). Default 2: the engine chain (profile bit 7); 1 for
+/// the RISC Zero chain. A history or trie file does not say which, and a path in the other format never verifies.
+pub fn take_node_format_flag(args: &mut Vec<String>) -> Result<u32, String> {
+    let mut f = 2;
+    while let Some(i) = args.iter().position(|x| x == "--node-format") {
+        f = match args.get(i + 1).map(String::as_str) {
+            Some("1") => 1,
+            Some("2") => 2,
+            _ => return Err("--node-format: 1 or 2".into()),
+        };
+        args.drain(i..i + 2);
+    }
+    libzync::coinlog::set_node_format(f);
+    Ok(f)
 }
