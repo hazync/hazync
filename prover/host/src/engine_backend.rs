@@ -19,7 +19,7 @@ pub(crate) struct EngineProof {
 }
 
 pub(crate) struct Engine {
-    _child: Child,
+    child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     work: PathBuf,
@@ -52,7 +52,7 @@ fn start(work: &str, gpu: Option<usize>, tag: &str) -> Engine {
     let work = PathBuf::from(work).join("engine").join(tag);
     std::fs::create_dir_all(&work).unwrap();
     println!("  engine: {bin} serving keys {keys}{}; work dir {}", gpu.map(|g| format!(" on GPU {g}")).unwrap_or_default(), work.display());
-    Engine { _child: child, stdin, stdout, work, seq: 0 }
+    Engine { child, stdin, stdout, work, seq: 0 }
 }
 
 fn gpus() -> usize {
@@ -140,9 +140,15 @@ impl Engine {
 
     /// One request; a reply that is not ok is an Err carrying the engine's error.
     fn try_req(&mut self, v: serde_json::Value) -> Result<serde_json::Value, String> {
-        writeln!(self.stdin, "{v}").and_then(|_| self.stdin.flush()).expect("engine: request");
+        // a server that died (a panic, the OOM killer) closes its pipes: say so, with its exit status, rather than
+        // reporting an empty "bad reply" (its own last words are on stderr, above)
+        if writeln!(self.stdin, "{v}").and_then(|_| self.stdin.flush()).is_err() {
+            panic!("engine: the server is gone ({}); see its stderr above", self.exit_status());
+        }
         let mut l = String::new();
-        self.stdout.read_line(&mut l).expect("engine: reply");
+        if self.stdout.read_line(&mut l).map(|n| n == 0).unwrap_or(true) {
+            panic!("engine: the server ended without replying to {} ({}); see its stderr above", v["op"], self.exit_status());
+        }
         let r: serde_json::Value = serde_json::from_str(&l).unwrap_or_else(|e| panic!("engine: bad reply {l:?}: {e}"));
         if r["ok"] != true {
             return Err(r["error"].to_string());
@@ -150,6 +156,17 @@ impl Engine {
         Ok(r)
     }
 
+    /// The server's exit status once it has ended (waits briefly: its pipes close just before it is reaped).
+    fn exit_status(&mut self) -> String {
+        for _ in 0..50 {
+            match self.child.try_wait() {
+                Ok(Some(st)) => return st.to_string(),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Err(e) => return format!("its status unknown: {e}"),
+            }
+        }
+        "still running, its pipes closed".into()
+    }
     fn file(&mut self, name: &str, ext: &str) -> PathBuf {
         self.seq += 1;
         self.work.join(format!("{:05}_{name}.{ext}", self.seq))

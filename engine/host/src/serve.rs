@@ -3,9 +3,12 @@
 //! reply per stdout line. Requests:
 //!   {"op":"execute","input":P,"children":[..],"self_id":b,"dry":b,"journal":P?,"log":P?}
 //!   {"op":"prove","input":P,"children":[..],"self_id":b,"journal":P?,"out":P}   journal = known (skip emit pass)
+//!   {"op":"prove_segments","input":P,"lo":n,"hi":n,"cap":n,"out":P}   segments lo..hi of a serialized stdin (segpar)
 //!   {"op":"image"}                                  -> {"ok":true,"image_id":hex}  (needs image.json)
-//! Replies: {"ok":true,...} or {"ok":false,"error":"..."}. Guest output never reaches stdout (it is captured), and
-//! progress goes to stderr, so stdout carries only replies.
+//! Replies: {"ok":true,...} or {"ok":false,"error":"..."}. A request with a field this list does not name is refused
+//! (a misspelt field would otherwise fall back to its default: "self-id" for "self_id" would prove the wrong layout).
+//! Guest output never reaches stdout (it is captured), and progress goes to stderr, so stdout carries only replies.
+//! The SDK's progress spans are INFO on stderr; RUST_LOG (e.g. `warn`) sets the level.
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
@@ -15,6 +18,7 @@ use serde::Deserialize;
 use crate::engine::Engine;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Req {
     op: String,
     #[serde(default)]
@@ -116,5 +120,25 @@ fn handle(e: &Engine, dir: &Path, r: &Req) -> Result<serde_json::Value> {
             Ok(serde_json::json!({"ok": true, "image_id": hex::encode(crate::r0::image_id(&img))}))
         }
         x => eyre::bail!("unknown op {x}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Req;
+
+    #[test]
+    fn requests_parse_and_unknown_fields_are_refused() {
+        // every request the product host (prover/host/src/engine_backend.rs) and block.rs send
+        for ok in [r#"{"op":"execute","input":"a.in","children":["c"],"self_id":true,"dry":false,"journal":"a.journal","log":"a.log"}"#,
+                   r#"{"op":"prove","input":"a.in","children":[],"self_id":false,"journal":null,"out":"a"}"#,
+                   r#"{"op":"prove_segments","input":"s","lo":0,"hi":4,"cap":1048576,"out":"o"}"#,
+                   r#"{"op":"image"}"#] {
+            assert!(serde_json::from_str::<Req>(ok).is_ok(), "{ok}");
+        }
+        for bad in [r#"{"op":"prove","input":"a.in","self-id":true,"out":"a"}"#, r#"{"op":"execute","input":"a.in","childs":["c"]}"#] {
+            let e = serde_json::from_str::<Req>(bad).err().expect(bad).to_string();
+            assert!(e.contains("unknown field"), "{bad}: {e}");
+        }
     }
 }
