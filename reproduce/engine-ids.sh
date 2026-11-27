@@ -24,6 +24,7 @@
 # So it is assembled under /root/engine/zg/ here, as the reference was. To fix before the freeze (4.1/4.2): a remap
 # that does not depend on the layout, which moves every zAPP id once.
 # Needs docker and the network (crates, OpenVM, Core, libsecp).
+# KEEP_VMEXE=1 also writes each guest.vmexe to DIR/<image>/.
 # A cargo cache volume (hazync-engine-cargo) keeps downloads between runs; HAZYNC_ENGINE_FRESH=1 starts from an empty one.
 set -euo pipefail
 SELF=$(realpath "${BASH_SOURCE[0]}")
@@ -68,6 +69,8 @@ if [ -n "${HAZYNC_ENGINE_IN_CONTAINER:-}" ]; then
         exe=$(python3 -c "import json;print(json.load(open('$k/image.json'))['exe'])"); vm=$(python3 -c "import json;print(json.load(open('$k/image.json'))['vm'])")
         mkdir -p /out/$n && cp $k/image.json $k/baseline.json /out/$n/ && echo "$id" > /out/$n/image_id
         sha256sum $k/guest.vmexe | cut -d' ' -f1 > /out/$n/guest.vmexe.sha256
+        # KEEP_VMEXE=1: the guest itself too (to execute it: hzengine execute --dir <a keys dir with it>)
+        [ -z "${KEEP_VMEXE:-}" ] || cp $k/guest.vmexe /out/$n/guest.vmexe
         printf '%s %s exe %s vm %s vmexe %s\n' "$n" "$id" "$exe" "$vm" "$(cat /out/$n/guest.vmexe.sha256)" | tee -a /out/ENGINE_IDS
         say "$n built"
     done
@@ -87,7 +90,7 @@ docker image inspect "$TAG" > /dev/null 2>&1 || docker build -t "$TAG" -f "$REPO
 VOL=hazync-engine-cargo
 [ "${HAZYNC_ENGINE_FRESH:-0}" = 1 ] && { docker volume rm -f "$VOL" > /dev/null; }
 rm -rf "$OUT" && mkdir -p "$OUT"
-docker run --rm -e HAZYNC_ENGINE_IN_CONTAINER=1 -e COMMIT="$COMMIT" -e IMAGES="${IMAGES:-core zeroconf}" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
+docker run --rm -e HAZYNC_ENGINE_IN_CONTAINER=1 -e KEEP_VMEXE="${KEEP_VMEXE:-}" -e COMMIT="$COMMIT" -e IMAGES="${IMAGES:-core zeroconf}" -e OUT_UID="$(id -u)" -e OUT_GID="$(id -g)" \
     -v "$REPO":/src:ro -v "$IN":/in:ro -v "$OUT":/out -v "$VOL":/root/.cargo/registry \
     "$TAG" bash /src/reproduce/engine-ids.sh
 cat "$OUT/ENGINE_IDS"
