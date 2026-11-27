@@ -38,6 +38,8 @@ txlog = ["libzync"]
 test-lineage = ["coinlog"]
 xver-v3_0_5 = []
 xver-v3_1_0 = []
+# ENGINE: a handover from an engine predecessor of another OpenVM version (xver_ovm.rs; assemble.sh with HZ_OVM_XVER_KEYS)
+ovm-xver = ["dep:hazync-engine-verify"]
 # TEST ONLY (hazync#794, as the product's): poison C-heap blocks on free and on reuse (src/c_heap.rs). Moves the image.
 heap-poison = ["libzync"]
 # metering only, see the platform crate (hzengine build with HZ_GUEST_FEATURES=bench-noverify)
@@ -52,6 +54,7 @@ openvm = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", fea
 openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }
+hazync-engine-verify = { path = "@ENGINE@/verify-core", optional = true }
 
 [build-dependencies]
 cc = "1"

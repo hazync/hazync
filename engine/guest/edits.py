@@ -7,9 +7,15 @@ def rep(old, new):
     global s
     assert s.count(old) == 1, ("anchor not unique / missing", old[:70], s.count(old))
     s = s.replace(old, new)
-# 1) Cross-version handover (vendored old RISC Zero recursion circuits): an engine chain starts at genesis and has no
-#    RISC Zero predecessor, so this path must be unreachable. The stub panics if called; `carried` says no.
-rep("mod xver;", """mod xver {   // ENGINE: no RISC Zero predecessor; cross-version handover is unreachable
+# 1) Cross-version handover. The product's src/xver checks an OLDER RISC Zero's receipt; an engine chain has no RISC Zero
+#    predecessor. With the engine feature `ovm-xver` (an image that pins an engine predecessor of ANOTHER OpenVM
+#    version, engine/HANDOVER.md step 2) xver is the engine's own (xver_ovm.rs: the predecessor's proof checked by
+#    OpenVM's verifier under its pinned key). Without it, the stub: the path is unreachable, `carried` says no.
+rep("mod xver;", """#[cfg(feature = "ovm-xver")]
+#[path = "xver_ovm.rs"]
+mod xver;
+#[cfg(not(feature = "ovm-xver"))]
+mod xver {   // ENGINE: no cross-version predecessor in this image; the path is unreachable
     pub const fn carried(_v: &[u8; 32]) -> bool { false }
     pub mod accel { pub fn suite() {} }
     pub fn verify<A, B, C, D, E>(_: A, _: B, _: C, _: D, _: E) -> Result<(), &'static str> { panic!("engine: no cross-version handover") }
