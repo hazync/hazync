@@ -1,0 +1,8 @@
+[package]
+name = "hazync-batch-test-r0shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+name = "risc0_zkvm"

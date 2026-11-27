@@ -1,0 +1,25 @@
+[package]
+name = "hazync-batch-test"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Native test harness for engine/guest/batch_ecdsa_ovm.rs + msm_ovm.rs (review R1-3 verification)"
+
+# `cargo test` runs the CURRENT guest files (../batch_ecdsa_ovm.rs, ../msm_ovm.rs); `cargo test --features old` the
+# files as they were before the R1-3 fixes (old/, from 0382bb3f^). build.rs inlines them into one module.
+[features]
+old = []
+
+[dependencies]
+openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
+k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }
+sha2 = { path = "sha2shim", package = "hazync-batch-test-sha2shim" }
+risc0_zkvm = { path = "r0shim", package = "hazync-batch-test-r0shim" }
+
+[dev-dependencies]
+# an independent secp256k1 (RustCrypto) to build test points and scalars
+rk256 = { package = "k256", version = "0.13", features = ["arithmetic"] }
+rand = "0.8"
+
+[workspace]
