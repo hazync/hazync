@@ -88,6 +88,16 @@ What this needs from OpenVM, none of it a fork: the verifier crate building for 
    - **Two OpenVM versions in one guest are still ahead (step 3):** across a real upgrade the new guest must compile
      the OLD version's verifier next to its own runtime. Step 2 is rehearsed with a predecessor of the SAME OpenVM
      (keys-ch) forced through the software path.
-3. A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
+3. **Sized 27.11.2026 (night):** OpenVM's tags after v2.1.0: only `v2.x.0-preview.1/.2`, which are NOT a target
+   (dated 04.09.2026, Cargo version still 2.1.0, stark-backend on `branch = "main"`, unpinned). So the rehearsal runs
+   from the previous release, **v2.0.2** (14.08.2026; stark-backend tag v2.0.1; has the deferral extension and
+   verify-stark), as the predecessor, to v2.1.0. v2.0.2 -> v2.1.0: extensions/deferral and sdk-config identical;
+   guest-libs/verify-stark 18 lines, toolchain/openvm 11, sdk 284, continuations 202, vm 318 lines differ; the
+   abi-stable and nozstd patches apply to v2.0.2 as they are. Work: (a) the engine (host, platform, guest build) on
+   v2.0.2: retag + the few API changes; keys on v2.0.2; a short chain proved there; (b) the v2.1.0 image's xver built
+   against v2.0.2's verifier crate (a second OpenVM in the guest's graph: openvm-verify-stark-host v2.0.2 renamed,
+   with its own stark-backend v2.0.1), since an upgrade's xver must run the PREDECESSOR's verifier; (c) the handover
+   at the chain's next height with the negative controls.
+   A rehearsal: two images from different OpenVM tags (2.1.0 -> a 2.1.x or the next minor), a short chain on the old,
    handed over to the new, verified end to end; negative controls (a wrong pin, a tampered old proof, a journal that
    is not the old proof's).
