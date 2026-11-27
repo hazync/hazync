@@ -36,3 +36,8 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
   module's test.sh passes up to its wasm steps (build, README pin, .mjs glue), which are C5's. The regtest harness's
   OK-verdict scripts (test-regtest.sh of assume, deposit, liveness, statement) are deleted with its RISC Zero
   receipts, until the harness is proved on the engine.
+- 27.11.2026 C5 done: every WASM module engine only (engine/scripts/wasm_ovm.sh; one core module; engine-graph locks).
+  Eight modules built on the laptop (twice) and in a fresh clone of ba9ec0b8 on hazync-coord, published image,
+  REQUIRE_CLEAN + REQUIRE_PUBLISHED: equal; READMEs pinned. Core 423,774 bytes (1,241,166 with RISC Zero). Node tests
+  ported to engine proofs, all pass (counts in VERIFIER.md). Not done: the site and deploy.sh (with the release),
+  swiftsync-verify-wasm/zapp/check.mjs (needs the RISC Zero board's live server), the page in a browser.

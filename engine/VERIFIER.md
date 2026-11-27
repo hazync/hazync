@@ -214,6 +214,16 @@ Done on this branch (engine/CUTOVER.md C2-C4). The sections above are the record
   messages list them). The regtest harness's RISC Zero receipts are no longer checked by any test: its OK-verdict
   tests wait until the harness is proved on the engine.
 
+- WASM (C5): every module is engine only. engine/scripts/wasm_ovm.sh (sourced by swiftsync-verify-wasm/build.sh and
+  scripts/wasm-build.sh) makes the patched OpenVM tree once per checkout (target/wasm-openvm-src, digest 38eccd09,
+  re-checked in the container) and stages it for every build; `build.sh --engine` is a no-op and there is one core
+  module, swiftsync_verify_wasm.wasm. Each crate's Cargo.lock is the engine graph's (host and container cargo resolve the
+  same file); each module carries the refusing random source. Measured 27.11.2026, laptop and a fresh clone on
+  hazync-coord equal: core 423,774 bytes (167,586 gzipped; 1,241,166 before), assume 350,201, deposit 389,072, headers
+  320,971, hints 285,545, liveness 382,030, statement 1,680,473, utreexo 299,448 (the READMEs pin each sha). Node tests
+  on engine proofs: core vectors 14/14, engine frame 1 + 4 refusals, facts frame 7/7; assume 18/18, deposit 28, headers
+  40, hints 10/10, liveness 30/30, statement 18/18 (and its CLI flow 39/39), utreexo 23.
+
 ## Making the files a reader takes (27.11.2026)
 
 `hzengine pack --dir <keys> --proof <P> --out P.hze --key key.bin` writes the proof file (HZE1) and the image's key
