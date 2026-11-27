@@ -69,3 +69,40 @@ added the optional verify-core dependency, which a lock lists) without any packa
 - A third machine, and a second host toolchain.
 - reproduce/engine.Dockerfile pulls apt packages from snapshot.ubuntu.com: one box run failed on a transient 503 and
   passed when re-run; apt retries would help (a Dockerfile change gives a new image tag, nothing else).
+
+## Every engine image, and the assemble scripts pin the lock (27.11.2026, later)
+
+`reproduce/engine-ids.sh` builds any of eight images (IMAGES="core core-signet zeroconf hints utreexo utreexo-tip
+headers handover-verifier"), each assembled at the build box's reference layout (core /hz/asm, zAPPs
+/root/engine/zg/<zAPP>, headers /root/engine/hdr/guest29, the handover verifier /root/engine/hv/w) with its lock pinned
+in reproduce/engine-locks (the box's locks behind the reference keys dirs, 26.11.2026). core-signet is the core guest
+with the `signet` feature and HAZYNC_NETWORK=signet (the guest's build.rs requires both). Laptop only (the box was busy).
+
+| image | run 1 (ab376686) | run 2 (750db597) | reference (build box) |
+|---|---|---|---|
+| core | c7fe0eb8... (exe 0ddcb255) | the same | keys-ch c7fe0eb8: equal |
+| core-signet | d8ed9383... (exe e7490552) | the same | none built |
+| zeroconf | 1ee5f2d7... (exe b16bc53d) | the same | keys-z-zeroconf3 1ee5f2d7: equal |
+| hints | 84b54258... (exe d1c3c572) | the same | keys-z-hints 84b54258: equal |
+| utreexo | 340f6675... (exe feb4b140) | the same | keys-z-utreexo 340f6675: equal |
+| utreexo-tip | 6ecf6f43... (exe b640b916) | the same | keys-z-utreexo-tip 6ecf6f43: equal |
+| headers | 25b32ac5... (exe a080482e) | the same | keys-hdr29 25b32ac5: equal |
+| handover verifier | 7992e373... (exe a5382774) | the same | keys-hv 7992e373: equal |
+
+vm 00e00077... for all (the 2^29 production keys; keygen 33.4 s, sdk.pk f0155abe, agg.vk 15d415ec). Every reference
+agrees, so no input differs. Run 1 and run 2 give the same ENGINE_IDS line for every image (exe, vm, guest.vmexe
+sha256) and the same baseline.json; each run 808 / 811 s on the laptop with a warm cargo cache. Full ids:
+reproduce/out-engine after a run, or the table's run directories in the session.
+
+The reference images were built on 26.11.2026 morning; later source changes (libzync/src/coinlog.rs 90d8fef0, the
+zAPP manifest's `bench-noverify` feature ecfbf940) did not move hints', utreexo's or utreexo-tip's ids (measured above).
+
+**The assemble scripts write the pinned lock** (750db597): engine/guest/assemble.sh (not for an ovm-xver build, whose
+manifest differs), engine/zapps/assemble_guest.sh (when the zAPP has one), engine/zapps/headers/assemble.sh and
+engine/handover/assemble.sh copy reproduce/engine-locks/<image>.Cargo.lock; HZ_UNPINNED_LOCK=1 leaves it out (a
+manifest change that needs a new lock). Checked natively: each zAPP's and the headers guest's assembled lock is
+byte-identical to the pinned one; with HZ_UNPINNED_LOCK=1 none is written. Run 2 builds on that commit: ids unchanged.
+
+Still open: a second machine for the six new images IN the container (the references agree, but they are native box
+builds, a second machine only for the native path); the layout-independent remap (moves every zAPP id: a freeze-time
+decision); a third machine and a second host toolchain; regtest-test (not built: a test image).
