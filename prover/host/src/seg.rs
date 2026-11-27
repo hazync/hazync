@@ -2943,10 +2943,10 @@ fn early_claim_of(f: &str) -> Option<risc0_zkvm::sha::Digest> {
 #[cfg(test)]
 mod worker_wire_strict_tests {
     //! A worker's lift/join/resolve comes back as a bare SuccinctReceipt: it is decoded as strictly as verify-any's
-    //! receipts (no trailing bytes, BabyBear words), on the succinct proof inside swiftsync-verify/vectors' receipts.
+    //! receipts (no trailing bytes, BabyBear words), on the succinct proof inside tests/data/risc0_vectors' receipts (the old swiftsync-verify/vectors).
     use risc0_zkvm::{InnerReceipt, Receipt, ReceiptClaim};
     use crate::verify::decode_succinct;
-    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/");
+    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/risc0_vectors/");
 
     fn wire(file: &str) -> Vec<u8> {
         let r: Receipt = bincode::deserialize(&std::fs::read(format!("{V}{file}")).unwrap()).unwrap();

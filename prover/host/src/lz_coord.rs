@@ -178,10 +178,10 @@ pub(crate) fn handover_cmd(pred: &str, bundle: &str, out: &str) {
 
 #[cfg(test)]
 mod strict_decode_tests {
-    //! verify-any reads a contributor's upload: the fuzz round 11-17 receipts (swiftsync-verify/vectors) must be REFUSED
+    //! verify-any reads a contributor's upload: the fuzz round 11-17 receipts (tests/data/risc0_vectors, from the old swiftsync-verify/vectors) must be REFUSED
     //! with an error, not verified (trailing byte) and not abort the process (unreduced word, ragged journal).
     use super::verify_any;
-    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../swiftsync-verify/vectors/");
+    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/risc0_vectors/");
 
     fn refused(file: &str) -> String {
         verify_any(&format!("{V}{file}"), Some(1), false).expect_err(file)

@@ -583,9 +583,6 @@ fn hints_prove(a: &[String]) {
     if elf.is_empty() && stream.is_none() { die("no hints guest: built with RISC0_SKIP_BUILD, so give --elf <zyncapp-hints.bin>"); }
     let elf_id = if stream.is_some() { String::from("(engine stream)") } else {
         hex(risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))).as_bytes()) };
-    if stream.is_none() && elf_id != zapp_hints::HINTS_IMAGE_ID {
-        println!("HINTS_ID_NOT_PUBLISHED this guest is {elf_id}, the published hints id is {}: its receipts will not verify under the published id", zapp_hints::HINTS_IMAGE_ID);
-    }
     let (cs, journal, receipt): (ChainStateJ, Vec<u8>, Option<Receipt>) = if a[3].ends_with(".json") {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
         let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
@@ -699,26 +696,11 @@ fn hints_prove(a: &[String]) {
 
 /// The verifier: the same `zapp_hints::verify_hints` as `zapp-hints`, the WASM and the C ABI,
 /// against the published hints image id. Exit 0 OK, 2 DEMO, 1 FAIL.
-fn hints_verify(a: &[String]) {
-    let fail = |m: String| -> ! { println!("ZYNCAPP_FAIL: {m}"); std::process::exit(1) };
-    if std::env::var("RISC0_DEV_MODE").map(|v| !v.is_empty() && v != "0").unwrap_or(false) { fail("RISC0_DEV_MODE is set: unset it to verify".into()); }
-    let rd = |p: &str| std::fs::read(p).unwrap_or_else(|e| fail(format!("{p}: {e}")));
-    let (r, f) = (rd(&a[1]), rd(&a[2]));
-    let u = flag(a, "--undo").map(|p| rd(p));
-    let pe = |k: &str| flag(a, k).map(|e| swiftsync_verify::parse_expect(e).unwrap_or_else(|| fail(format!("{k}: want <height>:<64 hex digits>"))));
-    let (e1, e2) = (pe("--expect"), pe("--expect-tip"));
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
-    // the PUBLISHED hints id (reproduce/LIBZYNC_IDS), the same every tool trusts, not this build's (review H2)
-    let rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), zapp_hints::HINTS_IMAGE_ID, flag(a, "--core-image").map(|x| x.as_str()), now,
-                                                    e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
-    for (ok, what) in &rep.checks { println!("  [{}] {what}", if *ok { " ok " } else { "FAIL" }); }
-    let z = match (&rep.verdict, &rep.statement) {
-        (swiftsync_verify::Verdict::Fail, _) | (_, None) => fail(rep.checks.iter().find(|c| !c.0).map(|c| c.1.clone()).unwrap_or_default()),
-        (_, Some(z)) => z,
-    };
-    let line = format!("ZYNCAPP_HINTS_OK: {} is the hints file (format {}) for block {} {}: {} outputs indexed, {} unspent ({} sat); undo hashes 1..{} sha256 {}",
-                       a[2], z.format, z.height, disp(&z.block_hash), z.n_counted, z.n_unspent, z.unspent_value, z.height, hex(&z.undo_sha256));
-    verdict(Ok(rep.verdict == swiftsync_verify::Verdict::Ok), line);
+fn hints_verify(_a: &[String]) {
+    // Engine proofs only since the cutover (engine/CUTOVER.md C4): zapp_hints no longer reads a RISC Zero receipt, and
+    // there is no published hints image until the Stage 4 freeze.
+    println!("ZYNCAPP_FAIL: verify-hints moved to zapp-hints (engine proofs: --image, --vk, --core-image)");
+    std::process::exit(1)
 }
 
 /// The utreexo zyncAPP's statement (the guest's UtreexoStatement, field for field).
@@ -1003,7 +985,7 @@ fn utreexo_tip_prove(a: &[String]) {
         risc0_zkvm::compute_image_id(&elf).unwrap_or_else(|e| die(&format!("image id: {e}"))) };
     let self_id: [u32; 8] = self_id_d.as_words().try_into().unwrap();
     let base_id: [u32; 8] = match flag(a, "--base-id") {
-        Some(x) => swiftsync_verify::words(&risc0_zkvm::sha::Digest::from_bytes(h32(x))),
+        Some(x) => swiftsync_verify::words(&h32(x)),
         None => ZYNCAPP_UTREEXO_ID,
     };
     let tc = std::env::var("UTREEXO_TIP_TAMPER").ok();
