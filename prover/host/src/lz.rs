@@ -1763,14 +1763,30 @@ pub(crate) fn cl_synth(block: &str, spends: &[ClSpend]) -> (Vec<Option<[u8; 32]>
         let ((h0, c0), (h1, c1)) = (tc[i - 1], tc[i]);
         k * (c0 + (c1 - c0) * (x - h0) / (h1 - h0))
     };
-    let n = cum(h - 1.0) as u64;
+    // The modelled log must hold every coin the block spends: a block that spends more earlier coins than the counts
+    // file models (an attack block on regtest, or HAZYNC_COINLOG_TXCOUNTS of another network) left fewer positions than
+    // spends, and the probe below then never found a free slot (engine-export of mem_k1140: 859 positions, 24,374
+    // spends, an endless loop on one thread). Grow the model to twice the spends in that case, and say so.
+    let modelled = cum(h - 1.0) as u64;
+    let n = modelled.max(2 * spends.len() as u64);
+    if n != modelled { println!("  coinlog SYNTH: the counts model {modelled} coins, fewer than the block's {} spends: log size {n}", spends.len()); }
     let rnd = |tag: &[u8], i: u64| -> [u8; 32] { sha256_host(&[tag, &i.to_le_bytes()].concat()) };
-    let mut taken = std::collections::HashSet::new();
+    // Next free position (union-find with path compression): linear probing is quadratic when many spends start in
+    // the same narrow range (24,374 spends from 13 coin heights: 297M probes); this is near-linear and gives distinct
+    // positions the same way (the first free one at or after the drawn one, wrapping).
+    let mut next: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
+    fn free(next: &mut std::collections::HashMap<u64, u64>, p: u64) -> u64 {
+        let mut r = p;
+        while let Some(&q) = next.get(&r) { r = q; }
+        let mut x = p;
+        while let Some(&q) = next.get(&x) { if q == r { break; } next.insert(x, r); x = q; }
+        r
+    }
     let positions: Vec<u64> = heights.iter().enumerate().map(|(i, &c)| {
         let (a, b) = (cum(c - 1.0), cum(c).max(cum(c - 1.0) + 1.0));
         let u = u64::from_le_bytes(rnd(b"rank", i as u64)[..8].try_into().unwrap()) as f64 / u64::MAX as f64;
-        let mut p = ((a + u * (b - a)) as u64).min(n - 1);
-        while !taken.insert(p) { p = (p + 1) % n; }
+        let p = free(&mut next, ((a + u * (b - a)) as u64).min(n - 1));
+        next.insert(p, (p + 1) % n);
         p
     }).collect();
     let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().copied()).collect();
@@ -2072,6 +2088,33 @@ mod journal_tests {
             // the index is the state's too: every live coin found at its position
             for p in 0..store.len() { let l = store.leaf(p); if let Some(q) = pos.get(&l) { assert_eq!(q, p); } }
         }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+#[cfg(test)]
+mod cl_synth_tests {
+    /// engine/results/attack_export_stall: an attack block spending more earlier coins than the counts file models
+    /// (mem_k1140: 859 positions for 24,374 spends) made cl_synth's linear probe loop forever. The model now holds at
+    /// least twice the spends and places them by "next free", so such a block finishes, every spend at its own position.
+    #[test]
+    fn more_spends_than_the_modelled_log_finishes() {
+        let d = std::env::temp_dir().join(format!("cl_synth_test_{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        // 5,000 spends of coins made at heights 1..13 by a block at 126; the counts model 1.64 x 312 = 511 coins
+        let prevouts: Vec<serde_json::Value> = (0..5000).map(|i| serde_json::json!({"coin_height": 1 + i % 13})).collect();
+        let block = serde_json::json!({"height": 126, "txs": [{"prevouts": prevouts}]});
+        let bp = d.join("block_126.json");
+        std::fs::write(&bp, block.to_string()).unwrap();
+        let tc = d.join("txcounts.txt");
+        std::fs::write(&tc, "0 0\n200 500\n").unwrap();
+        std::env::set_var("HAZYNC_COINLOG_TXCOUNTS", &tc);
+        let spends: Vec<super::ClSpend> = (0..5000u32).map(|i| (crate::sha256_host(&i.to_le_bytes()), 0, 0)).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let b = bp.display().to_string();
+        std::thread::spawn(move || { let _ = tx.send(super::cl_synth(&b, &spends)); });
+        let (_, n, _) = rx.recv_timeout(std::time::Duration::from_secs(60)).expect("cl_synth did not finish in 60 s (the probe loop)");
+        assert!(n >= 10_000, "the modelled log holds at least twice the spends: {n}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }
