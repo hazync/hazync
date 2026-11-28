@@ -54,3 +54,11 @@ reader to reproduce the ids.
 - **28.11.2026 (user):** (1) the old product host's CUDA build is DROPPED from the release assets (hzengine proves; the
   product host stays for prep, export and the board); (2) the zeroconf zAPP NEEDS a browser (wasm) module before the
   release, like every other zAPP.
+
+## For the freeze (open)
+
+- **Caller-named images** (review round 3, R3-4 M1): every reader gives OK on an image id the caller names (the
+  "image you rebuilt" path) and now says so ("one you named, not a published one: trust it only if you built it").
+  Once the freeze publishes records, decide whether a caller-named id should cap the verdict at DEMO unless an
+  explicit flag says the caller built it (engine/reviews/round3/ASSESSMENT.md).
+- **The Windows app's key pin** (CANONICAL_ENGINE_VK_PIN, tools/win-gui) and image id are set with the published records.
