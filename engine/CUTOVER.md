@@ -51,3 +51,10 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
   200's engine proof with its image id, key and pin gives DEMO (every check ok; below the minimum work and the
   checkpoint), a wrong pin FAIL ("the verifying key is not the image's pinned key"); 390 px wide at phone width, no
   console errors or warnings.
+- 28.11.2026 C8 begun (engine/C8_PLAN.md: the survey, the order, two decisions): step 1 both hosts encode with
+  hazync-journal (real blocks' streams byte-identical to risc0 serde; host suite 109 passed); step 2 the zAPP host
+  writes engine streams only and prover/zyncapps/methods is gone (every stream byte-identical to the RISC Zero-era
+  host's on the repo's fixtures); step 3 history/verifier* deleted. Step 4 (prover/host engine only: the profile crate,
+  METHOD_ID, engine-export without RISC Zero, the RISC Zero commands, risc0 and vendor/ out) and steps 5-6 (CI,
+  reproduce, notices) remain: step 4d first needs the core-vectors and regtest-rig runners on the engine (consensus
+  evidence), and the Windows CPU driver host is built by windows-prove.yml with the RISC Zero guest until step 5.
