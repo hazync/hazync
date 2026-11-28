@@ -48,7 +48,7 @@ configuration and child key; the same-OpenVM handover's env::verify binding (R1-
 |---|---|
 | R1-1 #1 | FIXED: bench images reveal sha256(tag \|\| journal), marked BENCH_NOVERIFY; pack / wasm-inputs refuse them; checked on the headers guest |
 | R1-5 #1 | FIXED: build-time provenance check (check_xver_provenance.py, reproduce/engine-records); HANDOVER.md corrected; ovm-xver pinned lock NOT done (freeze) |
-| R1-5 #3 | PREPARED, not run: hv_neg_r1.sh (needs hazync-coord and rebuilt images) |
+| R1-5 #3 | DONE 28.11.2026: control passes; cases 4-8 each refused IN THE GUEST with its own reason (height, key not its pin, another image's key, lineage mismatch, non-chain journal); engine/results/handover_step2/RESULTS.md, r1_guest_messages.out |
 | R1-2 #1, #3, R1-4 A4 | FIXED |
 | R1-4 A1 | CHECKED: no use-after-free in cached_tx / the sighash cache; heap-poison core image: 29/29 edge chunks byte-identical; generation tag not feasible (reason in fixes_guest.md) |
 | R1-4 B3 | FIXED at the entry points; make_liveness kept caller-driven (documented) |

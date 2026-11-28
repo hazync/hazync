@@ -1,0 +1,22 @@
+== key_not_pin
+thread 'main' (1) panicked at src/main.rs:2284:18:
+predecessor chain proof invalid (cross-version): "the carried key is not its pin's"
+== other_key
+thread 'main' (1) panicked at src/main.rs:2284:18:
+predecessor chain proof invalid (cross-version): "the predecessor proof's key is not the pinned image's"
+== lineage_mismatch
+thread 'main' (1) panicked at src/main.rs:2306:9:
+handover: predecessor lineage mismatch
+== other_height3
+thread 'main' (1) panicked at src/main.rs:2311:5:
+aggregate: block height 200 != chain height 201
+== non_chain3
+thread 'main' (1) panicked at src/main.rs:2289:66:
+decode prev: Custom("invalid value: integer `130000`, expected u8")
+== control, control3
+HZEXIT:2
+00001_b200_agg_collect.log
+00002_b200_trie_exec.in
+HZEXIT:2
+00001_b200_agg_collect.log
+00002_b200_trie_exec.in

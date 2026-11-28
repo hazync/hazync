@@ -1,0 +1,4 @@
+CONTROL-UNCLEAR control (bypass host): the genuine predecessor proof of 199 (keys-xv) :: thread 'main' (1) panicked at /hz-engine/platform/risc0-zkvm/src/lib.rs:205:13: guest exit(2)  :: 
+refused-in-guest 4. a genuine predecessor proof at height 200, not 199 (keys-xv, bypass host) (rc 101, 105 s): thread 'main' (1) panicked at src/main.rs:2311:5: aggregate: block height 200 != chain height 201 
+refused-in-guest 8. a non-chain journal: a genuine chunk proof of keys-ch (block 130,000) (keys-xv, bypass host) (rc 101, 125 s): thread 'main' (1) panicked at src/main.rs:2289:66: decode prev: Custom("invalid value: integer `130000`, expected u8") 
+RUNS3_DONE

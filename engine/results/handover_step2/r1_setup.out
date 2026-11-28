@@ -1,0 +1,13 @@
+[0 s] kit f5207731 3.1 tip path on the engine (laptop, no pods): coord
+[284 s] hzengine built
+[287 s] base made
+[391 s] keys-def: image e3729469cd8222cce0c60b881b8ce3feb12c895209630bf7ca0cc988a25d4024
+[414 s] key B (default image) pin ec0a81b279edac0cb97ed9221f3757ae1892c674f82fde900cb583c703820a1f
+image A c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+[514 s] keys-xv: image 839a464627550f690645b72405e178d44ddb4ee1747fc352b93f0de88447fdbe
+[619 s] keys-k5: image 91c0679db38e693f6a1e703575d46c71ec51280c03edb9cc9ade388135704b25
+[716 s] keys-k6: image 29e81e2bfe10d0a9a302cc2cc93af40c782e2e7eaf6fa77be1026f1e22c8a87d
+[806 s] keys-k7: image 0c268a6668843b866407a1057f31c30aeadd83e66f6a836dcb13f0f748327333
+[808 s] host src 58047ec3 zeroconf genesis-anchor pin tested (review R2-6 #2,
+[3260 s] test-lineage host built: HANDOVER k=0 image=c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 first_height=200 verifier=b5b94f9c0eb4e4e90ee3653da7b1f521b056a994b6d486b90e1e19622a16da7a (NOT CARRIED BY THIS HOST
+SETUP_DONE

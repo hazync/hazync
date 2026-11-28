@@ -1,0 +1,7 @@
+CONTROL-UNCLEAR control: the genuine predecessor proof of 199 (keys-xv) :: thread 'main' (1) panicked at /hz-engine/platform/risc0-zkvm/src/lib.rs:205:13: guest exit(2)  :: 
+refused-NOT-in-guest 4. a genuine predecessor proof at height 200, not 199 (keys-xv) (rc 101, 5 s): thread 'main' (3254270) panicked at host/src/lz.rs:1254:9: 
+refused-in-guest 5. the embedded key file is not the pinned key (image k5) (rc 101, 90 s): thread 'main' (1) panicked at src/main.rs:2284:18: predecessor chain proof invalid (cross-version): "the carried key is not its pin's" 
+refused-in-guest 6. the lineage carries another image's genuine key (image k6) (rc 101, 90 s): thread 'main' (1) panicked at src/main.rs:2284:18: predecessor chain proof invalid (cross-version): "the predecessor proof's key is not the pinned image's" 
+refused-in-guest 7. predecessor lineage mismatch (image k7, two-entry lineage) (rc 101, 90 s): thread 'main' (1) panicked at src/main.rs:2306:9: handover: predecessor lineage mismatch 
+refused-NOT-in-guest 8. a non-chain journal: a genuine chunk proof of keys-ch (block 130,000) (keys-xv) (rc 101, 5 s): thread 'main' (3258339) panicked at host/src/engine_backend.rs:297:39: 
+RUNS_DONE
