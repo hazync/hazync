@@ -79,7 +79,7 @@ fn main() {
         Some("core-info") if a.len() == 2 => {
             // the core statement's height and tip (for a follower choosing H), from a receipt or a state JSON; not a check
             let (cs, _) = load_core(&a[1]);
-            println!("CORE height={} tip={} image={}{}", cs.height, disp(&cs.tip_hash), id_hex(&cs.self_id),
+            println!("CORE height={} tip={} image={} utxo_value={}{}", cs.height, disp(&cs.tip_hash), id_hex(&cs.self_id), cs.utxo_value,
                      if a[1].ends_with(".json") { " (a state JSON)" } else { "" });
         }
         Some("utreexo-count") if a.len() >= 2 => {
