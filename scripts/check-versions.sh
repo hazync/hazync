@@ -75,13 +75,20 @@ f=docs/OPERATIONS.md
 while IFS= read -r hit; do
     f=${hit%%:*}; rest=${hit#*:}; ln=${rest%%:*}; tok=${rest##*:}
     [ "$tok" = "$CANON8" ] && continue
+    # a commit of this repo is not a guest id (a line on an image id often names the commit it was built at)
+    git cat-file -e "$tok^{commit}" 2>/dev/null && continue
     if ! grep -qx "$tok" <<<"$KNOWN"; then
         bad "$f:$ln claims guest id '$tok', which is neither canonical nor listed in $CANON_FILE"
     fi
 # experimental/ (and its retired parts under history/experimental/) is left out of this check only: it records libzync experiment images (their own lineage, pinned per
-# experiment, not reproduce/METHOD_ID's), so their ids can never be in this list, by design.
-done < <(git ls-files '*.md' | grep -vE '^(experimental|history/experimental)/' | while read -r f; do
+# experiment, not reproduce/METHOD_ID's), so their ids can never be in this list, by design. So are the engine's dated
+# records, engine/results/ and engine/reviews/: OpenVM images built and measured on the way to the freeze, none of them
+# RISC Zero's METHOD_ID (the engine's published ids come with the freeze: reproduce/engine-release.tsv, CUTOVER C8.5).
+# A browser module's pinned-hash row (`| sha256 (this commit, ...) |` in each wasm README) holds module hashes and the
+# commits that built them, never a guest id (its build note may mention image ids in passing).
+done < <(git ls-files '*.md' | grep -vE '^(experimental|history/experimental|engine/results|engine/reviews)/' | while read -r f; do
              grep -nE 'METHOD_ID|image id|guest id|canonical id|Superseded' "$f" 2>/dev/null \
+             | grep -vE '^[0-9]+:\| *sha256 \(this commit' \
              | while IFS= read -r line; do
                  n=${line%%:*}
                  grep -oE '`?\b[0-9a-f]{8}\b(…|\.\.\.)?`?|\b[0-9a-f]{64}\b' <<<"${line#*:}" \
