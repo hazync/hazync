@@ -148,6 +148,8 @@ pub(crate) struct Exec {
     pub exit: Option<u32>,
     pub log: String,
     pub journal: Option<Vec<u8>>,
+    /// The engine's cost of the run (its metered cells; the scheduler's measure of a chunk's size).
+    pub cost: u64,
 }
 
 impl Engine {
@@ -219,6 +221,7 @@ impl Engine {
             exit,
             log: std::fs::read_to_string(&log).unwrap_or_default(),
             journal: if exit.is_none() { Some(std::fs::read(&journal).expect("engine: journal")) } else { None },
+            cost: r["cost"].as_u64().unwrap_or(0),
         };
         let _ = std::fs::remove_file(&input);
         out
@@ -243,6 +246,7 @@ impl Engine {
             exit,
             log: text,
             journal: if exit.is_none() { Some(std::fs::read(&journal).expect("engine: journal")) } else { None },
+            cost: r["cost"].as_u64().unwrap_or(0),
         })
     }
 

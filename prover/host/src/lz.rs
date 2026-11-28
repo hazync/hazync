@@ -448,6 +448,7 @@ pub(crate) fn agg_exec_fake() {
 /// guest reads, with RISC Zero's journal for each (*.r0journal) to compare against and this image's id (method_id).
 /// The aggregate stream carries this image's METHOD_ID at bytes 4..36; the engine puts its own image there.
 pub(crate) fn engine_export(dir: &str) {
+    if crate::engine_backend::active() { return engine_export_on_engine(dir); }
     use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
     use crate::sink::Stream;
     std::fs::create_dir_all(dir).unwrap();
@@ -506,6 +507,59 @@ pub(crate) fn engine_export(dir: &str) {
     println!("ENGINE_EXPORT_DONE {dir}: {} chunks, aggregate stream {} bytes", bounds.len(), st.0.len());
 }
 
+/// `engine-export <dir>` with HAZYNC_ENGINE set (CUTOVER C8): the same files, every execution on the ENGINE (its key dir:
+/// HAZYNC_ENGINE_KEYS), none on RISC Zero. The chunks' journals (chunk_NN.r0journal: the name kept, it is the reference
+/// journal the aggregate's stream carries and hzengine prove-block checks; here the engine's own execution's) and their
+/// engine cost (chunk_NN.cycles: the scheduler's size, largest first); the collect run on the engine (dry: it takes no
+/// proofs); the trie update (and its split parts) executed on the engine (trie.r0journal). The aggregate itself is not
+/// executed here: it verifies its children in-guest and there are no proofs yet (hzengine prove-block proves it with the
+/// chunk and trie proofs as children); agg.in is written as before.
+fn engine_export_on_engine(dir: &str) {
+    use crate::sink::Stream;
+    use crate::engine_backend::JournalOnly;
+    std::fs::create_dir_all(dir).unwrap();
+    let put = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
+    let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
+    put("method_id", &idb);
+    *EXPORT_DIR.lock().unwrap() = Some(dir.to_string());
+    *crate::engine_backend::TRIE.lock().unwrap() = None;
+    let (anchor, mut w) = build_full();
+    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
+    let pred: u64 = crate::chunks::input_costs(&w).iter().sum();
+    println!("  predicted cost {pred} ({} inputs, {} chunks); executions on the ENGINE", w.inputs.len(), bounds.len());
+    put("predicted_cost", format!("{pred}\n").as_bytes());
+    let mut receipts: Vec<JournalOnly> = Vec::with_capacity(bounds.len());
+    for (i, &(lo, hi)) in bounds.iter().enumerate() {
+        let mut st = Stream::default();
+        {
+            use crate::sink::Sink;
+            st.write(&4u32);
+            st.write(&w.height);
+            st.write(&chunk_block_hash(&w.header));
+        }
+        write_chunk_inputs(&mut st, &w, lo, hi);
+        put(&format!("chunk_{i:02}.in"), &st.0);
+        let x = crate::engine_backend::with(dir, |e| e.try_execute(&format!("chunk_{i:02}"), &st.0))
+            .unwrap_or_else(|e| panic!("chunk {i} execution on the engine: {e}"));
+        let j = x.journal.unwrap_or_else(|| panic!("chunk {i}: exit {:?}, no journal", x.exit));
+        put(&format!("chunk_{i:02}.r0journal"), &j);
+        put(&format!("chunk_{i:02}.cycles"), format!("{}\n", x.cost).as_bytes());
+        println!("  chunk {i:>3} [{lo}..{hi}) exported: {} bytes in, engine cost {}", st.0.len(), x.cost);
+        receipts.push(JournalOnly(j));
+    }
+    libzync_agg_prep(&mut w);
+    let mut anchor = anchor;
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
+    if let Some(t) = crate::engine_backend::TRIE.lock().unwrap().as_ref() { put("trie.r0journal", &t.journal); }
+    let mut st = Stream::default();
+    write_aggregate_env(&mut st, &receipts, &anchor, &w);
+    libzync_agg_tail(&mut st, &w);
+    assert!(st.0[4..36] == idb[..], "aggregate stream: METHOD_ID is not at bytes 4..36");
+    put("agg.in", &st.0);
+    put("chunks", format!("{}\n", bounds.len()).as_bytes());
+    println!("ENGINE_EXPORT_DONE {dir}: {} chunks, aggregate stream {} bytes (executed on the engine; the aggregate is proved by prove-block)", bounds.len(), st.0.len());
+}
+
 /// Coin log, single-block measurement (agg-exec-fake, agg-chunks): a collect run for the block's spends, then a
 /// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
 /// `prove`: the modelled trie update (mode 17) is PROVED (succinct), for an aggregate that will be proved for real
@@ -513,7 +567,9 @@ pub(crate) fn engine_export(dir: &str) {
 /// Set by engine_export: where cl_synth_around writes the collect run's stream (agg_collect.in).
 static EXPORT_DIR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut ChainState, w: &mut BlockWitness, prove: bool) {
+pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], anchor: &mut ChainState, w: &mut BlockWitness, prove: bool) {
+    let eng = crate::engine_backend::active();
+    let edir = EXPORT_DIR.lock().unwrap().clone().unwrap_or_else(|| ".".into());
     // collect run for the block's spends, then a modelled log around them (cl_synth)
     let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
     std::env::remove_var("HAZYNC_LZ_HINTS");
@@ -526,7 +582,15 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         libzync_agg_tail(&mut st, w);
         std::fs::write(format!("{dir}/agg_collect.in"), &st.0).unwrap_or_else(|e| panic!("{dir}/agg_collect.in: {e}"));
     }
-    {
+    if eng {
+        // the collect run on the engine: DRY (it takes no proofs and can never commit), as libzync-prove-range's
+        let mut st = crate::sink::Stream::default();
+        write_aggregate_env(&mut st, receipts, anchor, w);
+        libzync_agg_tail(&mut st, w);
+        let x = crate::engine_backend::with(&edir, |e| e.execute_ex("agg_collect", &st.0, &[], true, true));
+        assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "coin-log collect run: exit {:?}, not a finished collect run", x.exit);
+        log = x.log.into_bytes();
+    } else {
         let mut b = ExecutorEnv::builder();
         b.stdout(&mut log);
         write_aggregate_env(&mut b, receipts, anchor, w);
@@ -569,14 +633,21 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
                     Some((parts, comb)) => {
                         for (i, (st, j)) in parts.iter().enumerate() {
                             std::fs::write(format!("{d}/trie_part_{i:02}.in"), &st.0).expect("engine export: trie part");
-                            let words: Vec<u32> = st.0.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-                            let mut b = ExecutorEnv::builder();
-                            b.write_slice(&words);
-                            let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie part (mode 19)", &e)));
                             let jb: Vec<u8> = j.iter().flat_map(|x| x.to_le_bytes()).collect();
-                            assert!(t.journal.bytes == jb, "trie part {i}: RISC Zero's journal != the host's");
-                            std::fs::write(format!("{d}/trie_part_{i:02}.r0journal"), &t.journal.bytes).expect("engine export: part journal");
-                            println!("  trie part {i}: {} bytes in, {} cycles", st.0.len(), t.cycles);
+                            let (got, size) = if eng {
+                                let x = crate::engine_backend::with(&edir, |e| e.try_execute(&format!("trie_part_{i:02}"), &st.0))
+                                    .unwrap_or_else(|e| panic!("trie part (mode 19) on the engine: {e}"));
+                                (x.journal.unwrap_or_default(), format!("engine cost {}", x.cost))
+                            } else {
+                                let words: Vec<u32> = st.0.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+                                let mut b = ExecutorEnv::builder();
+                                b.write_slice(&words);
+                                let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie part (mode 19)", &e)));
+                                (t.journal.bytes.clone(), format!("{} cycles", t.cycles))
+                            };
+                            assert!(got == jb, "trie part {i}: the guest's journal != the host's");
+                            std::fs::write(format!("{d}/trie_part_{i:02}.r0journal"), &got).expect("engine export: part journal");
+                            println!("  trie part {i}: {} bytes in, {size}", st.0.len());
                         }
                         std::fs::write(format!("{d}/trie_combine.in"), &comb.0).expect("engine export: trie_combine.in");
                         std::fs::write(format!("{d}/trie_parts"), format!("{}\n", parts.len())).expect("engine export: trie_parts");
@@ -585,6 +656,20 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
                 }
             }
         }
+        if eng {
+            // the trie update executed on the engine; its journal is what the aggregate's stream carries (engine TRIE)
+            assert!(!prove, "cl_synth_around on the engine: execute only");
+            let mut st = crate::sink::Stream::default();
+            crate::trie::trie_env(&mut st, &wit, &marks, &ins);
+            let x = crate::engine_backend::with(&edir, |e| e.try_execute("trie", &st.0)).unwrap_or_else(|e| panic!("trie update (mode 17) on the engine: {e}"));
+            let tj = x.journal.unwrap_or_else(|| panic!("trie update: exit {:?}, no journal", x.exit));
+            println!("  trie: {} marks, {} inserts, witness {} words; trie update executed on the engine: cost {}", marks.len(), ins.len(), wit.len(), x.cost);
+            *crate::engine_backend::TRIE.lock().unwrap() = if neg == "none" { None } else {
+                Some(crate::engine_backend::EngineProof { path: std::path::PathBuf::from(format!("{edir}/trie_exec")), journal: tj }) };
+            anchor.trie_root = libzync::coinlog::h_of(&root);
+            if neg == "root" { anchor.trie_root[0] ^= 1; }
+            if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
+        } else {
         let mut b = ExecutorEnv::builder();
         crate::trie::trie_env(&mut b, &wit, &marks, &ins);
         b.segment_limit_po2(seg_po2()); // trie_env sets it too; restated for check_seg_guards.sh's 25-line window
@@ -607,6 +692,7 @@ pub(crate) fn cl_synth_around(receipts: &[risc0_zkvm::Receipt], anchor: &mut Cha
         anchor.trie_root = libzync::coinlog::h_of(&root);
         if neg == "root" { anchor.trie_root[0] ^= 1; }
         if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
+        }
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
     anchor.utxo_roots = roots.clone();
@@ -983,6 +1069,70 @@ pub(crate) fn hint_threads() -> usize {
         .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1)
 }
 
+/// `libzync-hints <out>` with HAZYNC_ENGINE set (CUTOVER C8): the same bundle from runs on the ENGINE (HAZYNC_ENGINE_KEYS),
+/// none on RISC Zero: every chunk in collect mode (in turn, one engine server; a chunk out of guest memory re-split as
+/// below), R from its BATCHREC records, then the aggregate's DRY collect run (it takes no proofs) for the ECMH leaves.
+/// The same work libzync-prove-range's engine path does before it proves (its collect pass); the bundle file is the same
+/// format, so engine-export and the multi-process paths read it as before.
+fn libzync_hints_on_engine(out: &str) {
+    use std::time::Instant;
+    use crate::engine_backend::JournalOnly;
+    let t0 = Instant::now();
+    std::env::remove_var("HAZYNC_LZ_HINTS");
+    let (anchor, mut w) = build_full();
+    let work = format!("{out}.work");
+    let packed = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
+    let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
+    let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w.inputs, costs.get_or_init(|| crate::chunks::input_costs(&w)), lo, hi);
+    let h = w.height;
+    let done = resplit_on_oom(&packed, &split, &mut |todo: &[Span]| {
+        let mut r = Vec::with_capacity(todo.len());
+        for &(lo, hi) in todo {
+            let x = engine_chunk_exec(&work, &w, h, "hint", lo, hi);
+            let stop = matches!(&x, Err(e) if !is_guest_oom(e));
+            r.push(x);
+            if stop { break }
+        }
+        r
+    }).unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution on the engine", &e)));
+    let bounds: Vec<Span> = done.iter().map(|(b, _)| *b).collect();
+    if bounds != packed {
+        eprintln!("WARNING: block {}: chunks ran out of guest memory and were re-split ({} chunks instead of {}): this bundle \
+                   serves libzync-prove-range only (#794)", w.height, bounds.len(), packed.len());
+    }
+    let t_chunks = t0.elapsed().as_secs_f64();
+    let mut bundle = libzync::host::BlockBundle { height: w.height, block_hash: header_hash(&w.header), ..Default::default() };
+    let (mut nrec, mut nvalid) = (0usize, 0usize);
+    let mut journals: Vec<JournalOnly> = Vec::with_capacity(done.len());
+    for ((lo, hi), x) in &done {
+        let mut blob = Vec::new();
+        for rec in libzync::host::sig_records(&x.log) {
+            let hint = libzync::host::sig_hint(&rec);
+            nrec += 1;
+            nvalid += (hint[0] == 1) as usize;
+            blob.extend_from_slice(&hint);
+        }
+        bundle.chunks.push((*lo as u32, *hi as u32, blob));
+        journals.push(JournalOnly(x.journal.clone().expect("a committed chunk has a journal")));
+    }
+    let t_batch = t0.elapsed().as_secs_f64();
+    libzync_agg_prep(&mut w);
+    let mut st = crate::sink::Stream::default();
+    write_aggregate_env(&mut st, &journals, &anchor, &w);
+    libzync_agg_tail(&mut st, &w);
+    let x = crate::engine_backend::with(&work, |e| e.execute_ex(&format!("b{h}_agg_collect"), &st.0, &[], true, true));
+    assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "collect aggregate: exit {:?}, not a finished collect run", x.exit);
+    let leaves = libzync::host::ecmh_leaves(&x.log);
+    for leaf in &leaves { bundle.ecmh.extend_from_slice(&libzync::host::ecmh_hint(leaf)); }
+    bundle.write(out).unwrap_or_else(|e| panic!("{out}: {e}"));
+    let _ = std::fs::remove_dir_all(&work);
+    println!("libzync-hints: block {} {} chunks on the ENGINE -> {out}", w.height, bounds.len());
+    println!("  batch: {nrec} verifies, {nvalid} valid, {} left to libsecp", nrec - nvalid);
+    println!("  ecmh: {} operations, {} bytes", leaves.len(), bundle.ecmh.len());
+    println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
+             t_batch - t_chunks, t0.elapsed().as_secs_f64() - t_batch, t0.elapsed().as_secs_f64());
+}
+
 /// libzync: `libzync-hints <out>` — the block's hint bundle (libzync::host::BlockBundle), in ONE pass.
 ///
 /// - Every chunk executes in COLLECT mode at once, one thread each; the guest's BATCHREC lines come back
@@ -996,6 +1146,7 @@ pub(crate) fn hint_threads() -> usize {
 /// A chunk that runs out of guest memory is re-split (#794), and the bundle then records the re-split layout, which only
 /// libzync-prove-range uses (it prints a WARNING): the multi-process paths keep chunk_bounds' layout.
 pub(crate) fn libzync_hints_cmd(out: &str) {
+    if crate::engine_backend::active() { return libzync_hints_on_engine(out); }
     use risc0_zkvm::Receipt;
     use std::time::Instant;
     let t0 = Instant::now();
