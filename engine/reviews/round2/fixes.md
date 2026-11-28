@@ -55,8 +55,9 @@ Each fix against ASSESSMENT.md's tables, with the test that shows it.
 - engine/VERIFIER.md "Every consumer checks the anchor": a base step accepts any anchor state; every consumer compares
   anchor_id with the pinned genesis anchor (or a state it trusts: at most DEMO).
 
-## Wasm modules (re-pinned; laptop build at e053e1f8, second machine PENDING: hazync-coord was compiling for another
-## agent's cost measurement)
+## Wasm modules (re-pinned; laptop build at e053e1f8; second machine DONE 28.11.2026: hazync-coord, a fresh clone of
+## a297fe2e, `./build.sh` with HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1: all eight equal, full sha256
+## and size)
 
 | module | sha256 | raw | gzipped |
 |---|---|---|---|
