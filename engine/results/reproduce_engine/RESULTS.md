@@ -106,3 +106,46 @@ byte-identical to the pinned one; with HZ_UNPINNED_LOCK=1 none is written. Run 2
 Still open: a second machine for the six new images IN the container (the references agree, but they are native box
 builds, a second machine only for the native path); the layout-independent remap (moves every zAPP id: a freeze-time
 decision); a third machine and a second host toolchain; regtest-test (not built: a test image).
+
+## All eight images on a second machine, in the container (28.11.2026)
+
+Commit b203967a (after review round 2's guest fix 0880427c; with the Dockerfile's apt / curl retries, 6bb144b1, so a
+new image tag): `IMAGES="core core-signet zeroconf hints utreexo utreexo-tip headers handover-verifier"
+reproduce/engine-ids.sh`, hazync-coord, a fresh clone, the container limited to 8 CPUs. Compared with the laptop's
+container builds of the same source.
+
+| image | hazync-coord, container (b203967a) | laptop, container | |
+|---|---|---|---|
+| core | e3729469... exe e6d76a5f, vmexe 07a1152e | e3729469..., exe e6d76a5f, vmexe 07a1152e (e053e1f8, round 2 fixes.md) | equal |
+| core-signet | 848c4dd3... exe 369cde74, vmexe b39f5253 | 848c4dd3..., exe 369cde74, vmexe b39f5253 (b203967a, this day) | equal |
+| zeroconf | 1ee5f2d7... exe b16bc53d | 1ee5f2d7... (above) | equal |
+| hints | 84b54258... exe d1c3c572 | 84b54258... (above) | equal |
+| utreexo | 340f6675... exe feb4b140 | 340f6675... (above) | equal |
+| utreexo-tip | 6ecf6f43... exe b640b916 | 6ecf6f43... (above) | equal |
+| headers | 25b32ac5... exe a080482e | 25b32ac5... (above) | equal |
+| handover verifier | 7992e373... exe a5382774, vmexe 313c1b61 | 7992e373... (above) | equal |
+
+vm 00e00077... for all; keygen in the container 39-42 s, sdk.pk f0155abe, agg.vk 15d415ec, openvm.toml 75b745db (the
+keys-rt29 bytes). Times on the box: hzengine 156-171 s, then 66-107 s per image.
+
+- **core-signet moved** with round 2's guest fix (the secp patch is in every core build): d8ed9383 above is the older
+  source (750db597). 848c4dd3 is its id at b203967a, the same on both machines.
+- **One failed build, not reproduced.** In the eight-image run the handover verifier stopped with `cannot update the
+  lock file ... because --locked was passed` (the seven before it built). Run alone it built (7992e373), and after
+  headers in one container as well (7992e373): the source and its pinned lock are not the cause, and locally `cargo
+  metadata --locked` on the assembled guest with the pinned lock passes. Cause not found; if it comes back, the build
+  log inside the container (/hz/handover-verifier.build.log) is the place to look.
+- The apt / curl retries changed the image tag only: every id equals the earlier image's.
+
+### Later ids (other agents' builds, 28.11.2026; not rebuilt here)
+
+| image | id | from | built |
+|---|---|---|---|
+| zeroconf | 132969d821982852161a4a4a92833980438992d12e0e21cf9695cf98c9629084 (exe 68ad2f6e) | 977439f0 (the genesis anchor pinned in the guest, review R2-6 #4) | container, 977439f0 |
+| core | 755f5c5af4688606ac17e516161d870077ef40fdfe39f104c79f253845119c77 (exe 0ee7ff3e, vm 00e00077) | 5cb6724e (review round 3's guest fix) | laptop container (IMAGES=core) and hazync-coord's reference layout, equal; 27/27 honest chunks byte-identical |
+
+At heads from those commits on, zeroconf is 132969d8 (not 1ee5f2d7) and core 755f5c5a (not e3729469). core-signet is
+built from the same core guest, so 5cb6724e moves it too; its id there is not measured.
+
+Still open: a third machine and a second host toolchain; the layout-independent remap (moves every zAPP id: a
+freeze-time decision); core-signet at 5cb6724e; regtest-test (a test image, not built).
