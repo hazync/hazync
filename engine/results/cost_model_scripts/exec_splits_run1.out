@@ -1,0 +1,38 @@
+source c9c9006 board_dryrun: the fold and spine logs (filtered of the SDK's progress sp
+host main built in 2240 s
+host rt built in 2226 s
+91880 v1: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 6,739,959 max 6,739,959 mean 6,739,959 straggler 1.00
+   per chunk: 00:6739959
+91880 new: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 6,739,959 max 6,739,959 mean 6,739,959 straggler 1.00
+   per chunk: 00:6739959
+185956 v1: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 1,282,171,230 max 1,282,171,230 mean 1,282,171,230 straggler 1.00
+   per chunk: 00:1282171230
+185956 new: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 1,282,171,230 max 1,282,171,230 mean 1,282,171,230 straggler 1.00
+   per chunk: 00:1282171230
+227931 v1: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 1,524,425,736 max 1,524,425,736 mean 1,524,425,736 straggler 1.00
+   per chunk: 00:1524425736
+227931 new: 1 chunks, exit!=0 0, journals = RISC Zero's 1/1; total 1,524,425,736 max 1,524,425,736 mean 1,524,425,736 straggler 1.00
+   per chunk: 00:1524425736
+364292 v1: 16 chunks, exit!=0 0, journals = RISC Zero's 16/16; total 498,086,667,120 max 36,816,000,288 mean 31,130,416,695 straggler 1.18
+   per chunk: 00:36816000288 01:35858304575 02:35148491047 03:34435708130 04:33740368526 05:33002662568 06:32276641998 07:31532160751 08:30818769327 09:30090842062 10:29376913185 11:28649213829 12:27921271584 13:27213879219 14:26495122053 15:24710317978
+364292 new: 16 chunks, exit!=0 0, journals = RISC Zero's 16/16; total 109,272,063,299 max 7,153,965,924 mean 6,829,503,956 straggler 1.05
+   per chunk: 00:7153965924 01:6883523321 02:6882756246 03:6885307035 04:6888165385 05:6883296466 06:6863812970 07:6874287496 08:6860517801 09:6857066708 10:6845985510 11:6836167266 12:6804912694 13:6759125669 14:6685078679 15:6308094129
+388381 v1: 2 chunks, exit!=0 0, journals = RISC Zero's 2/2; total 160,538,281,620 max 80,573,017,458 mean 80,269,140,810 straggler 1.00
+   per chunk: 00:80573017458 01:79965264162
+388381 new: 2 chunks, exit!=0 0, journals = RISC Zero's 2/2; total 4,723,189,692 max 2,385,069,972 mean 2,361,594,846 straggler 1.01
+   per chunk: 00:2338119720 01:2385069972
+419328 v1: 4 chunks, exit!=0 0, journals = RISC Zero's 4/4; total 408,762,952,957 max 119,693,775,156 mean 102,190,738,239 straggler 1.17
+   per chunk: 00:119693775156 01:96679927464 02:84038261201 03:108350989136
+419328 new: 4 chunks, exit!=0 0, journals = RISC Zero's 4/4; total 14,141,848,084 max 3,714,017,221 mean 3,535,462,021 straggler 1.05
+   per chunk: 00:3673903157 01:3398758438 02:3355169268 03:3714017221
+481824 v1: 4 chunks, exit!=0 0, journals = RISC Zero's 4/4; total 421,721,516,524 max 112,128,295,902 mean 105,430,379,131 straggler 1.06
+   per chunk: 00:108456169023 01:97125382609 02:104011668990 03:112128295902
+481824 new: 4 chunks, exit!=0 0, journals = RISC Zero's 4/4; total 12,544,494,113 max 3,379,189,788 mean 3,136,123,528 straggler 1.08
+   per chunk: 00:3379189788 01:3015066098 02:2881713149 03:3268525078
+mem_k1140 v1 EXPORT_FAIL: thread 'main' (2906646) panicked at host/src/lz.rs:2390:56:
+mem_k1140 new EXPORT_FAIL: thread 'main' (2907591) panicked at host/src/lz.rs:2390:56:
+tap_small v1 EXPORT_FAIL: thread 'main' (2908977) panicked at host/src/lz.rs:2390:56:
+tap_small new EXPORT_FAIL: thread 'main' (2909003) panicked at host/src/lz.rs:2390:56:
+tap_full v1 EXPORT_FAIL: thread 'main' (2909142) panicked at host/src/lz.rs:2390:56:
+tap_full new EXPORT_FAIL: thread 'main' (2909313) panicked at host/src/lz.rs:2390:56:
+EXEC_SPLITS_DONE
