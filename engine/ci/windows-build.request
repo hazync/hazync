@@ -11,3 +11,4 @@ request 10, 25.11.2026: Fp ExclusiveSum in opening.cu, GNU ?: in initial_opened_
 request 11, 25.11.2026: package the exe without running it (no nvcuda.dll on the runner; run 45655298948 BUILT hzengine.exe, 73 MB)
 request 12, 25.11.2026: sm_61..sm_120 with the Pascal histogram fallback; package without running (build 11 cancelled)
 request 13, 27.11.2026: today's engine (HZE1 pack, board commands, stream.rs) for the first Windows prove on Xesktop (ROADMAP 2.9; Windows is in the first release)
+14 28.11.2026 at 2d9be0e5: core image e3729469 (after review rounds 1 and 2) for the Xesktop prove (2.9)
