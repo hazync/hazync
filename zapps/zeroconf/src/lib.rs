@@ -107,6 +107,8 @@ pub fn verify_zeroconf_asked(file: &[u8], image_hex: &str, key: &EngineKey, core
     let journal = match engine_run(file, key, &id) {
         Ok(j) => {
             rep.check(true, format!("the engine proof verifies against the zeroconf image {image_hex} under the pinned key {}", hex(&key.pin)));
+            // no zeroconf image is built in until the Stage 4 freeze: every one is the caller's (review R3-4 M1)
+            rep.checks.push((true, swiftsync_verify::caller_image_note("zeroconf image", image_hex)));
             j
         }
         Err(e) => {
@@ -170,6 +172,9 @@ pub fn check_statement(mut rep: ZeroconfReport, z: ZeroconfStatement, core: &Ima
     // the core chain it rests on: the core verifier's policy
     let net = core.network;
     rep.check(words(&core.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", core.method_id_hex));
+    if !core.is_published() {
+        rep.checks.push((true, swiftsync_verify::caller_image_note("core image", core.method_id_hex)));
+    }
     rep.check(z.profile == core.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, core.profile,
                                                  swiftsync_verify::describe_profile(z.profile)));
     rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(core.lineage), "the core lineage is zero or the image's");

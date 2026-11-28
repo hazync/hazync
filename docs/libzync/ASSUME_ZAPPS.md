@@ -78,8 +78,11 @@ block in its best header chain, minimum chain work, two weeks of work below the 
 
 ### 3.1 What the proof commits
 
-Every libzync chain proof with profile bit 6 (every published image: `0x71` mainnet, `0x75` signet) commits, at its
-tip and only there, `live_set` / `live_hash`: an ECMH multiset hash of the **live** coins (`prover/methods/guest/src/swiftsync.rs`).
+Every libzync chain proof with profile bit 6 (every engine image: `0xf1` mainnet, `0xf5` signet, bit 7 being node
+format 2; the RISC Zero chain's were `0x71` / `0x75`) commits, at its tip and only there, `live_set` / `live_hash`: an
+ECMH multiset hash of the **live** coins (`prover/methods/guest/src/swiftsync.rs`; the engine guest is assembled from
+that source, engine/guest/assemble.sh, with edit 10 of engine/guest/edits.py computing the same x coordinate on
+OpenVM's SHA-256: `x_for`'s point is unchanged).
 
 **The element.** Each live coin contributes the point of its 32-byte coin leaf (UTREEXO_FORMAT.md §2):
 
@@ -183,17 +186,18 @@ or a reader comparing with the one compiled into a release, can use it without t
 |---|---|
 | proven by the core proof | the chain 0..H is valid under Core v28's rules as compiled into image M, scripts and signatures included; the `ChainState` at H, including `live_set`, `live_hash`, `utxo_value`, `tip_hash` (the live hash is bound to the coin log, below) |
 | checked by the verifier | the proof (SWIFTSYNC_PROOFS.md §5); the headers link to `tip_hash`; the block named is among them; the snapshot's coins hash to the proven ECMH and sum to the proven value; base block and network |
-| trusted | the image id M (rebuild it: `reproduce/`), RISC Zero's soundness, SHA-256 and SHA-256d collision resistance, the ECMH's collision resistance, the verifier's code, and the source used for the chain identity (`--expect`, your node, mempool.space) |
+| trusted | the image id M and its verifying key, pinned by SHA-256 (rebuild both: `reproduce/engine.Dockerfile`, engine/results/reproduce_engine), OpenVM's soundness (engine/results/security_params), SHA-256 and SHA-256d collision resistance, the ECMH's collision resistance, the verifier's code, and the source used for the chain identity (`--expect`, your node, mempool.space) |
 | not trusted | the snapshot, the headers file and the tracked list: each is checked or can only cause a refusal |
 | not proven | that the proven chain is the network's (the identity check is the user's); anything above H |
 
 **How the guest binds `live_hash` to the coin log.** In each block's aggregate (`prover/methods/guest/src/agg_lite.rs`,
-`validate_block_lite`): every spend of an earlier coin pushes that coin's leaf onto `ext` (line 688), and every coin
-the block creates and does not spend is pushed onto `appends` (line 709). The live hash then adds exactly `appends` and
-subtracts exactly `ext` (lines 719-720), and the coin log is updated with the same two lists: each `ext` leaf is
-flipped at its position, which must hold that unspent leaf under the previous roots, and `appends` are appended
-(`coinlog_forest::apply`, line 736; a mismatch is `REJECT coin log`). The sum starts from the previous proven state's
-(`main.rs` line 2294, `swiftsync::start`, which checks the carried point) and is committed after the block (line 2335).
+`validate_block_lite`; line numbers at engine/openvm 28.11.2026, the source the engine guest is assembled from): every
+spend of an earlier coin pushes that coin's leaf onto `ext` (line 703), and every coin the block creates and does not
+spend is pushed onto `appends` (line 724). The live hash then adds exactly `appends` and subtracts exactly `ext` (lines
+734-735), and the coin log is updated with the same two lists: each `ext` leaf is flipped at its position, which must
+hold that unspent leaf under the previous roots, and `appends` are appended (`coinlog_forest::apply`, line 751; a
+mismatch is `REJECT coin log`). The sum starts from the previous proven state's (`main.rs` line 2316,
+`swiftsync::start`, which checks the carried point) and is committed after the block (line 2357).
 From the genesis identity on, `live_hash` is therefore the ECMH of the coin log's unspent leaves. The header comment of
 `prover/methods/guest/src/swiftsync.rs` (lines 1-9: "Not sound on its own … no inclusion proofs") is left from the
 retired design B, where the sum stood alone; it is stale, but it is guest source, so changing it would move the image

@@ -162,6 +162,12 @@ impl Image {
     pub fn has_image(&self) -> bool {
         hex32(self.method_id_hex).is_some()
     }
+    /// Is the image one of this verifier's built-in, published records (not an id a reader gave)? None is until the
+    /// Stage 4 freeze. A reader-named image is the reader's own rebuild (§5 step 9): the verdict is the same, and every
+    /// report says where the id came from (review R3-4 M1).
+    pub fn is_published(&self) -> bool {
+        self.has_image() && Image::by_id(self.network, self.method_id_hex).is_some_and(|i| i.has_image())
+    }
     /// The first height whose block leaf carries an undo hash (docs/libzync/UNDO.md) in a chain this image proved with
     /// its whole lineage, or [`pin::NO_UNDO`]: from the image that proved each block (`pin::leaf_has_undo`). A proof by
     /// this image with a ZERO lineage (it proved the chain from genesis alone) is [`undo_from_of`]`(id, &[])`.
@@ -461,7 +467,18 @@ fn engine_front(inp: &Inputs, m: &[u8; 32], key: &EngineKey, rep: &mut Report) -
     let ok = rep.check(r.is_ok(), format!("engine proof verifies against image {} ({}) under the pinned key {}{}",
                        inp.image.method_id_hex, inp.image.network, hex(&key.pin),
                        r.as_ref().err().map(|e| format!(": {e}")).unwrap_or_default()));
+    if ok && !inp.image.is_published() {
+        rep.checks.push((true, caller_image_note("core image", inp.image.method_id_hex)));
+    }
     if ok { r.ok() } else { None }
+}
+
+/// The line every reader adds for an image id the CALLER named rather than one built into the reader (review R3-4 M1):
+/// the reader cannot know which code such an id stands for, so the verdict rests on the caller having built it.
+/// `what`: "core image", "hints image", ...
+pub fn caller_image_note(what: &str, id_hex: &str) -> String {
+    format!("the {what} {} is one you named, not a published one: this checker does not know its code (trust it only if you built it)",
+            id_hex.to_lowercase())
 }
 
 /// Any engine proof file (a core proof or a zAPP's) checked against image `image_id` under the pinned `key`: the

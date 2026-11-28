@@ -78,8 +78,24 @@ fn core_only_block_170_is_demo_and_says_what_it_shows() {
     assert_eq!(s.output, Some((0, 1_000_000_000, unhex(HAL_SPK).unwrap())));
     assert_eq!(s.core_image, CORE_ID.trim());
     assert_eq!(s.headers_image, None);
-    // the coinbase of the same block, through the same core proof
-    assert_eq!(run(&b_core(&coinbase_170()), &ask(coinbase_170())).verdict, Verdict::Demo);
+    // the coinbase of the same block, through the same core proof: in the block, but 31 confirmations are not Core's
+    // 100 (review R3-5 L5: a deposit names coins someone can spend, and a younger coinbase cannot be)
+    refused(&b_core(&coinbase_170()), &ask(coinbase_170()), "coinbase not mature");
+}
+
+/// Review R3-5 L5: a coinbase deposit needs COINBASE_MATURITY (100) confirmations; at 3,862 (bound to the header chain)
+/// it passes, at 31 (the core proof alone) it FAILs, and a non-coinbase transaction is not held to it.
+#[test]
+fn a_coinbase_deposit_needs_maturity() {
+    let cb = coinbase_170();
+    let tip = make_bundle("mainnet", CORE, &[HDR.to_vec()], Some(HIST), &block_170(), 170, &cb, &lines(PATH_200), None).unwrap();
+    let a = DepositAsk { expect_tip: Some((TIP.0, TIP.1.into())), ..ask(cb) };
+    let r = run(&tip, &a);
+    assert_eq!(r.verdict, Verdict::Demo, "{:?}", r.checks.iter().filter(|c| !c.0).collect::<Vec<_>>());
+    assert!(r.checks.iter().any(|c| c.0 && c.1.starts_with("coinbase maturity") && c.1.contains("3862 as of tip")), "{:?}", r.checks);
+    refused(&b_core(&cb), &ask(cb), "coinbase not mature");
+    let t = run(&b_core(&id(T170)), &ask(id(T170)));
+    assert!(t.checks.iter().all(|c| !c.1.starts_with("coinbase maturity")), "a non-coinbase transaction is not held to maturity");
 }
 
 #[test]

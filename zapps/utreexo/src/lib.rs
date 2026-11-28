@@ -223,6 +223,9 @@ pub fn judge_verified_statement(z: UtreexoStatement, id: &[u8; 32], img: &Image,
         None => rep.check(false, format!("the network is mainnet or signet ({net:?})")),
     };
     rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
+    if !img.is_published() {
+        rep.checks.push((true, swiftsync_verify::caller_image_note("core image", img.method_id_hex)));
+    }
     rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the {net} image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
     rep.check(hex32(img.genesis_anchor_hex) == Some(z.anchor_id), format!("anchored at the {net} genesis"));
     rep.check(z.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME), "time-too-new: no core block more than 2 h ahead of this clock");

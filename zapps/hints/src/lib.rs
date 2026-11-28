@@ -9,7 +9,7 @@
 //! receipt's verification covers it; what the zyncAPP could not know (which core images to trust, the genesis anchor,
 //! the network's work and checkpoint, the clock, and that block `height` is the node's own) is checked here, as for a
 //! core proof.
-use swiftsync_verify::{hex, hex32, identity_matches, lineage_of, work_at_least, EngineKey, Image, Journal, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
+use swiftsync_verify::{hex, hex32, identity_matches, work_at_least, EngineKey, Image, Journal, Verdict, MAX_FUTURE_BLOCK_TIME, PROFILE_SIGNET};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
@@ -56,6 +56,34 @@ impl HintsReport {
     }
 }
 
+/// What the reader's NODE expects (review R3-4 L1, L2): the network it runs on, and the hints format it reads. Both are
+/// the caller's, never the proof's: a genuine hints file for another network, or in the other bit order, is a FAIL.
+#[derive(Clone, Copy, Debug)]
+pub struct HintsAsk<'a> {
+    /// "mainnet" or "signet": compared with the network the proof's core chain is on.
+    pub network: &'a str,
+    /// The format the node reads ([`libzync::hints::FORMAT_BIP`] or [`libzync::hints::FORMAT_CRATE`]): compared with the
+    /// proven file's. None: not compared, and the verdict is at most DEMO (an OK file in the other bit order would be
+    /// misread, and the SwiftSync sync it was meant to save would fail at its end).
+    pub format: Option<u32>,
+}
+
+impl Default for HintsAsk<'_> {
+    fn default() -> Self {
+        HintsAsk { network: "mainnet", format: None }
+    }
+}
+
+/// A format's name as the CLI flag spells it.
+pub fn format_name(f: u32) -> &'static str {
+    match f { libzync::hints::FORMAT_BIP => "bip", libzync::hints::FORMAT_CRATE => "crate", _ => "unknown" }
+}
+
+/// The CLI / wasm spelling of a format ("bip" or "crate", or the number 1 / 2).
+pub fn parse_format(s: &str) -> Option<u32> {
+    match s { "bip" | "1" => Some(libzync::hints::FORMAT_BIP), "crate" | "2" => Some(libzync::hints::FORMAT_CRATE), _ => None }
+}
+
 fn disp(b: &[u8; 32]) -> String {
     b.iter().rev().map(|x| format!("{x:02x}")).collect()
 }
@@ -65,10 +93,11 @@ fn disp(b: &[u8; 32]) -> String {
 /// id, authenticates it); `core_image_hex`: the engine core image it rests on (node format 2: an engine zAPP proof can
 /// only rest on an engine core proof, its child verified in the same VM); `now`: the verifier's clock; `expect`: (H,
 /// hash at H as `getblockhash` prints it) from the node's own header chain; `expect_tip`: the same for the core tip;
-/// compared whenever given (also when the core tip is H). A RISC Zero receipt is checked with v0.27.1's verifier.
+/// compared whenever given (also when the core tip is H); `ask`: the node's network and the format it reads. A RISC
+/// Zero receipt is checked with v0.27.1's verifier.
 #[allow(clippy::too_many_arguments)]
 pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex: &str, key: &EngineKey, core_image_hex: &str,
-                    now: u64, expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
+                    ask: &HintsAsk, now: u64, expect: Option<(u32, &str)>, expect_tip: Option<(u32, &str)>) -> HintsReport {
     let mut rep = HintsReport { checks: Vec::new(), statement: None, verdict: Verdict::Fail, identity_checked: false };
     let Some(id) = hex32(image_hex) else {
         rep.check(false, format!("the hints image id is 32 bytes of hex ({image_hex})"));
@@ -77,6 +106,8 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     let journal = match engine_run(receipt, key, &id) {
         Ok(j) => {
             rep.check(true, format!("the engine proof verifies against the hints image {image_hex} under the pinned key {}", hex(&key.pin)));
+            // no hints image is built in until the Stage 4 freeze: every one is the caller's (review R3-4 M1)
+            rep.checks.push((true, swiftsync_verify::caller_image_note("hints image", image_hex)));
             j
         }
         Err(e) => { rep.check(false, format!("the engine proof verifies against the hints image {image_hex}: {e}")); return rep; }
@@ -87,6 +118,12 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     };
     rep.check(z.kind == libzync::hints::KIND_HINTS, "a hints statement (kind 'ZH' 1)");
     rep.check(z.format == libzync::hints::FORMAT_BIP || z.format == libzync::hints::FORMAT_CRATE, format!("a known hints format ({})", z.format));
+    let format_ok = match ask.format {
+        Some(f) => rep.check(z.format == f, format!("the file is in the format your node reads ({}, {}; the file is {}, {})",
+                                                      format_name(f), f, format_name(z.format), z.format)),
+        None => { rep.checks.push((true, format!("the file's format ({}, {}) was not compared with the one your node reads: at most DEMO",
+                                                 format_name(z.format), z.format))); false }
+    };
     let fs: [u8; 32] = Sha256::digest(file).into();
     rep.check(fs == z.hints_sha256 && file.len() as u64 == z.hints_len,
               format!("the file is the proven one (sha256 {}, {} bytes; proven {}, {} bytes)", hex(&fs), file.len(), hex(&z.hints_sha256), z.hints_len));
@@ -99,18 +136,26 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     if let Some(u) = undo {
         let us: [u8; 32] = Sha256::digest(u).into();
         rep.check(u.len() == 32 * z.height as usize && us == z.undo_sha256, format!("the undo-hash file is the proven one (sha256 {})", hex(&z.undo_sha256)));
+    } else {
+        // review R3-4 L3: say so, so an OK is not read as covering the undo hashes too
+        rep.checks.push((true, format!("no undo-hash file given: the undo hashes (proven sha256 {}) were not checked", hex(&z.undo_sha256))));
     }
     rep.check(z.undo_from == 1 && z.lineage == [0u8; 32], "every block 1..H carries the undo commitment (one core image since genesis)");
-    // the core statement, as for a core proof
+    // the core statement, as for a core proof, on the network the CALLER's node runs (review R3-4 L1)
     let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
+    if !rep.check(net == ask.network, format!("the proof's core chain is {net}; your node is on {}", ask.network)) {
+        return rep;
+    }
     let Some(img) = Image::by_network(net).and_then(|i| i.with_method_id(&core_image_hex.to_lowercase())) else {
         rep.check(false, format!("the core image id is 64 hex digits ({core_image_hex})"));
         return rep;
     };
     rep.check(swiftsync_verify::words(&img.method_id()) == z.core_id, format!("rests on the trusted {net} core image {}", img.method_id_hex));
+    if !img.is_published() {
+        rep.checks.push((true, swiftsync_verify::caller_image_note("core image", img.method_id_hex)));
+    }
     // the whole profile, as the core verifier compares it (review H5): network, scripts checked, coin log, trie, live hash
     rep.check(z.profile == img.profile, format!("core profile 0x{:x} == the image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));
-    rep.check(z.lineage == [0u8; 32] || z.lineage == lineage_of(img.lineage), "the core lineage is the image's");
     rep.check(hex32(img.genesis_anchor_hex) == Some(z.anchor_id), format!("anchored at the {net} genesis"));
     rep.check(z.max_time as u64 <= now.saturating_add(MAX_FUTURE_BLOCK_TIME), "time-too-new: no core block more than 2 h ahead of this clock");
     if let Some((h, x)) = expect {
@@ -127,7 +172,7 @@ pub fn verify_hints(receipt: &[u8], file: &[u8], undo: Option<&[u8]>, image_hex:
     let failed = rep.checks.iter().any(|(ok, _)| !ok);
     let enough = work_at_least(&z.cum_work, img.min_work_hex) && z.core_height >= img.checkpoint_height;
     rep.checks.push((true, (if enough { "the core chain reaches Core's minimum work and the checkpoint" } else { "the core chain is below Core's minimum work or the checkpoint" }).to_string()));
-    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok { Verdict::Ok } else { Verdict::Demo };
+    rep.verdict = if failed { Verdict::Fail } else if enough && rep.identity_checked && tip_ok && format_ok { Verdict::Ok } else { Verdict::Demo };
     rep.statement = Some(z);
     rep
 }

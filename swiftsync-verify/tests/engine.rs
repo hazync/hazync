@@ -55,6 +55,9 @@ fn engine_chain_block_200() {
     let cs = r.state.as_ref().unwrap();
     assert_eq!((cs.height, cs.profile), (200, 0xf1));
     assert!(r.checks[0].1.starts_with("engine proof verifies against image"));
+    // review R3-4 M1: a caller-named image says so in the report (no image is published yet)
+    assert!(!img.is_published());
+    assert!(r.checks.iter().any(|(ok, l)| *ok && l.contains("is one you named, not a published one")), "{:?}", r.checks);
 }
 
 #[test]

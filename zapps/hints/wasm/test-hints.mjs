@@ -19,7 +19,15 @@ const cases = [
   ['a proof of another image', { ...id, receipt, file, imageHex: 'ab'.repeat(32) }, 'fail'],
   ['a key that is not the pinned one', { ...id, receipt, file, vk: (() => { const k = vk.slice(); k[100] ^= 1; return k; })() }, 'fail'],
   ['no key (no engine image is published yet)', { receipt, file, imageHex, coreImageHex: core }, 'fail'],
+  // review R3-4 L1, L2: the node's network and format are the caller's
+  ['a signet node', { ...id, receipt, file, expect: `200:${h}`, network: 'signet' }, 'fail'],
+  ['an unknown network', { ...id, receipt, file, expect: `200:${h}`, network: 'testnet3' }, 'fail'],
+  ['an unknown format', { ...id, receipt, file, expect: `200:${h}`, format: 'v9' }, 'fail'],
 ];
+// the file's own format, then a node that reads the other one
+const real = v.verifyHints({ ...id, receipt, file, expect: `200:${h}` }).format;
+cases.push(['the node reads the file\'s format (still demo: below minimum work)', { ...id, receipt, file, expect: `200:${h}`, network: 'mainnet', format: real === 1 ? 'bip' : 'crate' }, 'demo']);
+cases.push(['a node that reads the other format', { ...id, receipt, file, expect: `200:${h}`, format: real === 1 ? 'crate' : 'bip' }, 'fail']);
 let bad = 0;
 for (const [n, a, want] of cases) {
   const r = v.verifyHints(a);
@@ -37,7 +45,8 @@ const raw = (bytes) => {
   return JSON.parse(new TextDecoder().decode(new Uint8Array(ex.memory.buffer, r + 4, n)));
 };
 const enc = new TextEncoder();
-const parts = [receipt, file, undo, enc.encode(imageHex), enc.encode(core), enc.encode(`200:${h}`), new Uint8Array(0), vk, pin];
+const parts = [receipt, file, undo, enc.encode(imageHex), enc.encode(core), enc.encode(`200:${h}`), new Uint8Array(0), vk, pin,
+               new Uint8Array(0), new Uint8Array(0)];
 const frame = new Uint8Array(8 + parts.reduce((n, p) => n + 4 + p.length, 0));
 new DataView(frame.buffer).setBigUint64(0, BigInt(Math.floor(Date.now() / 1000)), true);
 let o = 8;

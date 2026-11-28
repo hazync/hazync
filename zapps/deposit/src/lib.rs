@@ -80,6 +80,9 @@ pub struct ForestOpening {
     pub path: Vec<String>,
 }
 
+/// Core's COINBASE_MATURITY (consensus/consensus.h): a coinbase's outputs are spendable 100 blocks after it.
+pub const COINBASE_MATURITY: u64 = 100;
+
 /// What the CALLER asks: never read from the bundle. `Default` requires the chain identity and withholds a DEMO
 /// statement (`require_identity` true, `allow_demo` false).
 #[derive(Clone, Debug)]
@@ -381,6 +384,15 @@ pub fn verify_deposit(b: &DepositBundle, ask: &DepositAsk, network: &str, core_i
     rep.check(confirmations >= ask.min_depth.max(1),
               format!("depth: {confirmations} confirmation(s) as of tip {tip_height} >= {} asked ({validated_confirmations} \
                        fully validated, {} proof of work only)", ask.min_depth.max(1), confirmations - validated_confirmations));
+    // review R3-5 L5: a coinbase (position 0) is in the block, but its outputs are spendable only COINBASE_MATURITY = 100
+    // blocks later (Core consensus/consensus.h; tx_verify.cpp "bad-txns-premature-spend-of-coinbase"): the next block
+    // may spend it once 100 confirmations stand. A deposit names coins someone can spend, so a younger coinbase FAILs.
+    if d.index == 0 {
+        rep.check(confirmations >= COINBASE_MATURITY,
+                  format!("coinbase maturity: the transaction is the block's coinbase, spendable only after {COINBASE_MATURITY} \
+                           confirmations ({confirmations} as of tip {tip_height}){}",
+                          if confirmations >= COINBASE_MATURITY { "" } else { ": coinbase not mature" }));
+    }
     if ask.min_validated_depth > 0 {
         rep.check(validated_confirmations >= ask.min_validated_depth,
                   format!("validated depth: {validated_confirmations} fully validated confirmation(s) >= {} asked{}",

@@ -39,6 +39,10 @@ verdicts:
 
 A caller that compares the tip by other means can turn the identity requirement off (`--no-require-identity`,
 `"require_identity": false`); then `OK` and `accepted` need only the checks and the work, and saying so is its choice.
+Minimum work alone does NOT make such an `OK` unforgeable (review R3-5 L1): anyone can take the real chain's headers
+to the height where it passes Core's minimum work (and, for a core proof, block 970,000), mine `min_depth` blocks of
+their own at the current difficulty, one of them holding the "deposit", and prove both chains on that fork. It costs
+exactly `min_depth` real blocks, the usual light-client trade-off; the tip comparison is what rules it out.
 
 **Whose work counts.** "The tip proof" is the header-chain proof when header proofs are given (and bound, §2), else
 the core proof. With headers, `OK` does NOT also require the core proof's own verdict to be `OK`: a core proof that is
@@ -120,6 +124,10 @@ It does **not** add:
   says nothing about whether it was spent later, at or before tip X. A bridge that needs "still unspent" uses the coin
   liveness zAPP (`zapps/liveness`, [LIVENESS_ZAPP.md](LIVENESS_ZAPP.md)), which answers it against the core proof's coin log.
 - **anything, at DEMO.** A DEMO statement can be shown by a cheap fork (§1); only `accepted` means something.
+- **a young coinbase.** A deposit names coins someone can spend. A coinbase (position 0) is spendable only 100 blocks
+  after its block (Core's `COINBASE_MATURITY`), so a coinbase deposit FAILs below 100 confirmations ("coinbase not
+  mature"; review R3-5 L5). Block 0's coinbase and the two BIP30 duplicate coinbases are never spendable at all; a
+  deposit is not the tool for them.
 
 - **finality or recency.** The statement is "as of tip X with work W". A reorg deeper than the burial after X makes
   it stale, and the proof cannot show that. A caller compares X with its own node or several sources (`--expect`) and

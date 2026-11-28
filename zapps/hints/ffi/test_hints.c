@@ -27,9 +27,28 @@ int main(int argc, char** argv) {
     snprintf(exp, sizeof exp, "200:%s", argv[2]);
     uint64_t now = (uint64_t)time(NULL);
     SwiftsyncHints out; memset(&out, 0, sizeof out);
-    #define CALL(R, RN, F, FN, U, UN, ID, CORE, P, E) swiftsync_verify_hints(R, RN, F, FN, U, UN, ID, CORE, vk, vn, P, now, E, &out, msg, sizeof msg)
+    const char* net = NULL; uint32_t fmt = 0;  /* NULL: mainnet; 0: the format not compared */
+    #define CALL(R, RN, F, FN, U, UN, ID, CORE, P, E) swiftsync_verify_hints(R, RN, F, FN, U, UN, ID, CORE, vk, vn, P, net, fmt, now, E, &out, msg, sizeof msg)
     int rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
     printf("%s proven file: rc %d height %u unspent %llu (%s)\n", rc == 2 && out.height == 200 ? "PASS" : "WRONG", rc, out.height, (unsigned long long)out.n_unspent, msg); bad += !(rc == 2 && out.height == 200);
+    /* review R3-4 L1, L2: the node's network and format are the caller's */
+    uint32_t real_fmt = out.format;
+    fmt = real_fmt; net = "mainnet";
+    rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
+    printf("%s the node's network and format (still DEMO: below minimum work): rc %d (%.90s)\n", rc == 2 ? "PASS" : "WRONG", rc, msg); bad += rc != 2;
+    fmt = real_fmt == 1 ? 2 : 1;
+    rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
+    printf("%s a node that reads the other format: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    fmt = 0; net = "signet";
+    rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
+    printf("%s a signet node: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    net = "testnet3";
+    rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
+    printf("%s an unknown network: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    net = NULL; fmt = 7;
+    rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
+    printf("%s an unknown format number: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;
+    fmt = 0;
     f[fn - 1] ^= 1;
     rc = CALL(r, rn, f, fn, u, un, id, core, pin, exp);
     printf("%s flipped bit: rc %d (%.90s)\n", rc == 1 ? "PASS" : "WRONG", rc, msg); bad += rc != 1;

@@ -148,6 +148,8 @@ pub fn verify_headers(receipts: &[&[u8]], image_hex: &str, key: &EngineKey, now:
         let journal = match engine_run(bytes, key, &id) {
             Ok(j) => {
                 rep.check(true, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex} under the pinned key {}", swiftsync_verify::hex(&key.pin)));
+                // no headers image is built in until the Stage 4 freeze: every one is the caller's (review R3-4 M1)
+                if n == 1 { rep.checks.push((true, swiftsync_verify::caller_image_note("headers image", image_hex))); }
                 j
             }
             Err(e) => { rep.check(false, format!("receipt {n} (an engine proof) verifies against the headers image {image_hex}: {e}")); return rep; }

@@ -13,7 +13,10 @@ extern "C" {
 /* The SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md): `receipt` proves that `file` is the hints file for block H
    of a chain a trusted core image proved from genesis. `undo` (may be NULL) is the per-block undo-hash file 1..H. `expect`
    (NUL-terminated "H:hash", may be NULL) is block H from YOUR node's header chain: without it the verdict is at most DEMO.
-   Returns 0 OK, 2 DEMO, 1 FAIL (reason in msg); `out` is filled unless FAIL. A core tip above H is DEMO here (use the CLI). */
+   Returns 0 OK, 2 DEMO, 1 FAIL (reason in msg); `out` is filled unless FAIL. A core tip above H is DEMO here (use the CLI).
+   `network` (NUL-terminated "mainnet" or "signet"; NULL: mainnet) is YOUR node's network, compared with the proof's;
+   `format` the hints format your node reads (1: bip, 2: crate; 0: not compared, and the verdict is at most DEMO).
+   Pointers that are optional (undo, expect, network) are absent when NULL; undo with undo_len 0 is absent too. */
 typedef struct {
     uint32_t height;
     uint8_t block_hash[32];   /* internal byte order */
@@ -27,7 +30,8 @@ typedef struct {
  * 27.11.2026; no engine image is published yet, so every one of these is required. */
 int swiftsync_verify_hints(const uint8_t* receipt, size_t receipt_len, const uint8_t* file, size_t file_len,
                            const uint8_t* undo, size_t undo_len, const char* image_hex, const char* core_image_hex,
-                           const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin, uint64_t now, const char* expect,
+                           const uint8_t* vk, size_t vk_len, const uint8_t* vk_pin, const char* network, uint32_t format,
+                           uint64_t now, const char* expect,
                            SwiftsyncHints* out, char* msg, size_t msg_len);
 
 #ifdef __cplusplus

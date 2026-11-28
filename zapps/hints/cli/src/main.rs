@@ -3,12 +3,12 @@
 //! the flags, verdict lines and exit codes are unchanged.
 
 use std::process::exit;
-use swiftsync_verify::{Verdict, PROFILE_SIGNET};
+use swiftsync_verify::Verdict;
 use zapp_common::{Identity, IDENTITY_USAGE};
 
 fn usage() -> ! {
     println!("SWIFTSYNC_VERIFY_FAIL: bad arguments (see usage on stderr)");
-    eprintln!("usage: zapp-hints --image <hex> --vk <key file> --vk-sha256 <hex> --core-image <hex> {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>");
+    eprintln!("usage: zapp-hints --image <hex> --vk <key file> --vk-sha256 <hex> --core-image <hex> [--network mainnet|signet] [--format bip|crate] {IDENTITY_USAGE} [--expect-tip <T>:<hash>] [--undo <file>] [--now <unix seconds>] <proof.hze> <hints file>");
     exit(1);
 }
 
@@ -38,12 +38,16 @@ fn main() {
 /// chain-identity flags) are asked for block H, and for the core tip when it is above H and no `--expect-tip` is given. Exit 0 OK, 2 DEMO (below minimum work or the checkpoint, or the
 /// block at H / the core tip not compared), 1 FAIL. The proof is an ENGINE (OpenVM) proof file; `--vk` is the key file
 /// of the hints image that proved it, from your own build of that image: its SHA-256 is the pin (engine/VERIFIER.md).
-/// No engine image is published yet, so `--image`, `--vk` and `--core-image` are all required.
+/// No engine image is published yet, so `--image`, `--vk` and `--core-image` are all required. `--network` (default
+/// mainnet) is YOUR node's network, compared with the proof's; `--format` (bip or crate) the hints format your node reads,
+/// compared with the file's: without it the verdict is at most DEMO (review R3-4 L1, L2).
 fn run(a: Vec<String>) -> ! {
     let (mut image, mut core, mut id, mut expect_tip, mut undo, mut now, mut files) =
         (String::new(), None, Identity::default(), None, None, None, Vec::new());
     let mut vk_path: Option<String> = None;
     let mut vk_pin: Option<String> = None;
+    let mut network = "mainnet".to_string();
+    let mut format: Option<u32> = None;
     let mut it = a.into_iter();
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -51,6 +55,9 @@ fn run(a: Vec<String>) -> ! {
             "--vk" => vk_path = Some(it.next().unwrap_or_else(|| usage())),
             "--vk-sha256" => vk_pin = Some(it.next().unwrap_or_else(|| usage())),
             "--core-image" => core = Some(it.next().unwrap_or_else(|| usage())),
+            "--network" => network = it.next().unwrap_or_else(|| usage()),
+            "--format" => format = Some(zapp_hints::parse_format(&it.next().unwrap_or_else(|| usage()))
+                .unwrap_or_else(|| fail("--format: bip or crate"))),
             "--expect-tip" => expect_tip = Some(it.next().unwrap_or_else(|| usage())),
             "--undo" => undo = Some(it.next().unwrap_or_else(|| usage())),
             "--now" => now = Some(it.next().unwrap_or_else(|| usage()).parse::<u64>().unwrap_or_else(|_| fail("--now: not a number"))),
@@ -60,6 +67,8 @@ fn run(a: Vec<String>) -> ! {
         }
     }
     if files.len() != 2 { usage(); }
+    if network != "mainnet" && network != "signet" { fail("--network: mainnet or signet") }
+    let ask = zapp_hints::HintsAsk { network: &network, format };
     let clock = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let now = match now { Some(t) if t <= clock => t, Some(_) => fail("--now must not be later than this clock"), None => clock };
     let rd = |f: &str| std::fs::read(f).unwrap_or_else(|e| fail(&format!("{}: {e}", esc(f))));
@@ -80,9 +89,10 @@ fn run(a: Vec<String>) -> ! {
     // above H and no --expect-tip is given), which the receipt names, and their answers are checked as --expect is
     let (mut expect, mut extra) = (id.expect.clone(), Vec::new());
     if id.needs_lookup() {
-        let pre = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, now, None, None);
+        let pre = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, &ask, now, None, None);
         if let Some(z) = pre.statement.as_ref().filter(|_| pre.verdict != Verdict::Fail) {
-            let net = if z.profile & PROFILE_SIGNET != 0 { "signet" } else { "mainnet" };
+            // the CALLER's network (review R3-4 L1): a proof for another one has already failed above
+            let net = network.as_str();
             // the proof's chainwork is the core tip's: it is block H's only when H is the tip
             let (x, c) = zapp_common::expect_at(&id, net, z.height, (z.height == z.core_height).then_some(&z.cum_work));
             expect = x;
@@ -95,7 +105,7 @@ fn run(a: Vec<String>) -> ! {
         }
     }
     let (e1, e2) = (pe(&expect), pe(&expect_tip));
-    let mut rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, now,
+    let mut rep = zapp_hints::verify_hints(&r, &f, u.as_deref(), &image, &key, &core, &ask, now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     if extra.iter().any(|c| !c.0) { rep.verdict = Verdict::Fail; }
     rep.checks.splice(0..0, extra);
@@ -104,10 +114,14 @@ fn run(a: Vec<String>) -> ! {
         (Verdict::Fail, _) | (_, None) => { println!("SWIFTSYNC_VERIFY_FAIL: {} check(s) failed", rep.checks.iter().filter(|c| !c.0).count()); exit(1) }
         (v, Some(z)) => {
             let h: String = z.block_hash.iter().rev().map(|b| format!("{b:02x}")).collect();
-            let what = format!("{} is the hints file (format {}) for block {} {h}: {} outputs indexed, {} unspent ({} sat)",
-                               esc(&files[1]), z.format, z.height, z.n_counted, z.n_unspent, z.unspent_value);
-            if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what}"); exit(0) }
-            let why = if !rep.identity_checked { "block H not compared with your header chain (--expect, --mempool or --bitcoin-cli)" } else { "the core chain is below Core's minimum work or the checkpoint, or its tip was not compared (--expect-tip)" };
+            let what = format!("{} is the {network} hints file (format {}, {}) for block {} {h}: {} outputs indexed, {} unspent ({} sat){}",
+                               esc(&files[1]), zapp_hints::format_name(z.format), z.format, z.height, z.n_counted, z.n_unspent, z.unspent_value,
+                               if u.is_some() { "" } else { "; undo hashes not checked (no --undo)" });
+            // every hints image is one the caller named until the Stage 4 freeze (review R3-4 M1)
+            if matches!(v, Verdict::Ok) { println!("SWIFTSYNC_VERIFY_OK: {what} (under the images you named: trust it only if you built them)"); exit(0) }
+            let why = if !rep.identity_checked { "block H not compared with your header chain (--expect, --mempool or --bitcoin-cli)" }
+                      else if format.is_none() { "the format was not compared with your node's (--format bip|crate)" }
+                      else { "the core chain is below Core's minimum work or the checkpoint, or its tip was not compared (--expect-tip)" };
             println!("SWIFTSYNC_VERIFY_DEMO: {what} -- but {why}"); exit(2)
         }
     }

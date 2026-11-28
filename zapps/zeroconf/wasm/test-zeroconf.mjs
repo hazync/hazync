@@ -83,6 +83,19 @@ for (const [n, bytes, why] of [['the frame as the glue writes it', frame, NET],
   cases.push([n]);
   console.log(`${ok ? 'PASS' : 'WRONG'} ${n}: ${r.verdict} (${(failed[0] || {}).what})`);
 }
+// review R3-6 #5: the module frees the input frame and the glue the report, so many calls do not grow memory. 40 calls
+// leaked 40 proofs' worth (about 11 MB) before; now the memory a warm call needs is reused.
+{
+  const mem = () => v._memoryBytes();
+  v.verifyZeroconf(base); v.verifyZeroconf(base);
+  const before = mem();
+  for (let i = 0; i < 40; i++) v.verifyZeroconf(base);
+  const grew = mem() - before;
+  const ok = grew < 4 * proof.length;
+  bad += !ok;
+  cases.push(['40 calls do not leak the input frame']);
+  console.log(`${ok ? 'PASS' : 'WRONG'} 40 calls do not leak the input frame: memory grew ${grew} bytes (a proof is ${proof.length})`);
+}
 const id = v.zeroconfImageId();
 bad += id !== '';
 cases.push(['no built-in image id yet']);

@@ -46,28 +46,36 @@ impl<'a> Frame<'a> {
 }
 
 /// The SwiftSync hints zyncAPP (docs/libzync/HINTS_ZAPP.md), by the same `zapp_hints::verify_hints` the CLI
-/// `zapp-hints` uses. Input frame (little-endian): `[u64 now]` then nine chunks `[u32 n][bytes]`: the engine proof
+/// `zapp-hints` uses. Input frame (little-endian): `[u64 now]` then eleven chunks `[u32 n][bytes]`: the engine proof
 /// file, the hints file, the undo-hash file (n = 0: not checked), the hints image id hex, the core image id hex, "H:hash"
 /// from the node's header chain (n = 0: none), "T:hash" for the core tip when it is above H (n = 0: none), the hints
-/// image's verifying key file, and its 32-byte pin (SHA-256 of that file, a constant the page is published with). No
+/// image's verifying key file, its 32-byte pin (SHA-256 of that file, a constant the page is published with), the
+/// node's network ("mainnet" or "signet"; n = 0: mainnet) and the format it reads ("bip" or "crate"; n = 0: not
+/// compared, so at most DEMO; review R3-4 L1, L2). No
 /// engine image is published yet, so both ids and the key are required. The file is hashed here: a page streams
 /// nothing to a server.
 #[no_mangle]
 pub extern "C" fn verify_hints(ptr: *const u8, len: usize) -> *const u8 {
     let input = unsafe { std::slice::from_raw_parts(ptr, len) };
-    type In<'a> = (u64, [&'a [u8]; 9]);
+    type In<'a> = (u64, [&'a [u8]; 11]);
     let parsed = (|| -> Result<In, String> {
         let mut f = Frame { b: input, i: 0 };
         let now = u64::from_le_bytes(f.take(8)?.try_into().unwrap());
-        let c = [f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?];
+        let c = [f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?, f.chunk()?,
+                 f.chunk()?, f.chunk()?];
         if f.i != input.len() { return Err("input frame has trailing bytes".into()); }
         Ok((now, c))
     })();
     let (now, c) = match parsed { Ok(p) => p, Err(e) => return fail(e) };
     let s = |b: &[u8]| -> Result<String, String> { std::str::from_utf8(b).map(|x| x.to_string()).map_err(|_| "not UTF-8".to_string()) };
-    let (image, core, exp, tip) = match (s(c[3]), s(c[4]), s(c[5]), s(c[6])) {
-        (Ok(a), Ok(b), Ok(d), Ok(e)) => (a, b, d, e),
+    let (image, core, exp, tip, net, fmt) = match (s(c[3]), s(c[4]), s(c[5]), s(c[6]), s(c[9]), s(c[10])) {
+        (Ok(a), Ok(b), Ok(d), Ok(e), Ok(n), Ok(m)) => (a, b, d, e, n, m),
         _ => return fail("a text field is not UTF-8".into()),
+    };
+    let network = if net.is_empty() { "mainnet".to_string() } else { net };
+    if network != "mainnet" && network != "signet" { return fail(format!("{network:?}: the network is mainnet or signet")); }
+    let format = if fmt.is_empty() { None } else {
+        match zapp_hints::parse_format(&fmt) { Some(f) => Some(f), None => return fail(format!("{fmt:?}: the format is bip or crate")) }
     };
     if image.is_empty() || core.is_empty() || c[7].is_empty() {
         return fail("no engine hints image is published yet: give the hints image id, the core image id and the key".into());
@@ -79,13 +87,16 @@ pub extern "C" fn verify_hints(ptr: *const u8, len: usize) -> *const u8 {
     };
     let (e1, e2) = match (pe(&exp), pe(&tip)) { (Ok(a), Ok(b)) => (a, b), (Err(e), _) | (_, Err(e)) => return fail(e) };
     let rep = zapp_hints::verify_hints(c[0], c[1], (!c[2].is_empty()).then_some(c[2]), &image,
-                                                    &swiftsync_verify::EngineKey { bytes: c[7], pin }, &core, now,
+                                                    &swiftsync_verify::EngineKey { bytes: c[7], pin }, &core,
+                                                    &zapp_hints::HintsAsk { network: &network, format }, now,
                                                     e1.as_ref().map(|(h, x)| (*h, x.as_str())), e2.as_ref().map(|(h, x)| (*h, x.as_str())));
     let z = rep.statement.as_ref().filter(|_| rep.verdict != Verdict::Fail);
     let d = |b: &[u8; 32]| -> String { b.iter().rev().map(|x| format!("{x:02x}")).collect() };
     ret(serde_json::json!({
         "verdict": match rep.verdict { Verdict::Ok => "ok", Verdict::Demo => "demo", Verdict::Fail => "fail" },
         "image": image,
+        "network": network,
+        "undo_checked": !c[2].is_empty(),
         "checks": rep.checks.iter().map(|(ok, what)| serde_json::json!({"ok": ok, "what": what})).collect::<Vec<_>>(),
         "height": z.map(|z| z.height),
         "hash": z.map(|z| d(&z.block_hash)),

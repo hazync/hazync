@@ -4,9 +4,16 @@
 //!
 //! ```text
 //!   alloc(len) -> ptr              reserve len bytes for the caller to write the input frame into
-//!   verify_zeroconf(ptr, len) -> p p points to [u32 LE length][UTF-8 JSON]
+//!   verify_zeroconf(ptr, len) -> p p points to [u32 LE length][UTF-8 JSON]. The call TAKES the input frame: ptr must
+//!                                  be alloc(len)'s, written in full, and is freed before it returns (review R3-6 #5:
+//!                                  a page verifying many times leaked a proof's worth of memory per call)
 //!   zeroconf_image_id() -> p       the published zeroconf image id ("" until the Stage 4 freeze publishes one)
+//!   free_result(p)                 frees a result p of either call once the caller has read it
 //! ```
+//!
+//! `now` is the CALLER's clock (the glue passes this device's, Date.now()): a module has no clock of its own, so unlike
+//! the CLI (which refuses a --now later than its clock) it cannot bound it. A page that lets a user type `now` lets them
+//! move time-too-new; the glue's default does not.
 //!
 //! Input frame (little-endian): `[u8 network: 0 mainnet, 1 signet][u64 now]` then nine chunks `[u32 n][bytes]`: the
 //! engine proof file (HZE1), the anchor ChainState JSON (n = 0: genesis), the zeroconf image id hex, the core image id
@@ -31,9 +38,19 @@ fn ret(s: String) -> *const u8 {
     let mut out = Vec::with_capacity(4 + bytes.len());
     out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
     out.extend_from_slice(&bytes);
-    let ptr = out.as_ptr();
-    std::mem::forget(out);
-    ptr
+    // a boxed slice: exactly 4 + n bytes, so free_result can rebuild it from the length in front
+    Box::into_raw(out.into_boxed_slice()) as *const u8
+}
+
+/// Frees a result of [`verify_zeroconf`] or [`zeroconf_image_id`] (its length is the u32 in front of it). Each result
+/// is freed at most once, and only one of these two calls' results.
+#[no_mangle]
+pub extern "C" fn free_result(p: *mut u8) {
+    if p.is_null() { return; }
+    unsafe {
+        let n = u32::from_le_bytes(std::slice::from_raw_parts(p, 4).try_into().unwrap()) as usize;
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(p, 4 + n)));
+    }
 }
 
 fn fail(msg: String) -> *const u8 {
@@ -65,8 +82,11 @@ fn text(b: &[u8], what: &str) -> Result<String, String> {
 /// The zero-confirmation zyncAPP, by the same `zapp_zeroconf::verify_zeroconf_asked` the CLI uses (frame: the module
 /// doc above).
 #[no_mangle]
-pub extern "C" fn verify_zeroconf(ptr: *const u8, len: usize) -> *const u8 {
-    let input = unsafe { std::slice::from_raw_parts(ptr, len) };
+pub extern "C" fn verify_zeroconf(ptr: *mut u8, len: usize) -> *const u8 {
+    // the frame is ours from here (alloc(len) made it with capacity exactly len, and the caller wrote all len bytes);
+    // dropped when this returns, after the report is built (review R3-6 #5)
+    let owned = unsafe { Vec::from_raw_parts(ptr, len, len) };
+    let input = &owned[..];
     type In<'a> = (&'static str, u64, [&'a [u8]; 9]);
     let parsed = (|| -> Result<In, String> {
         let mut f = Frame { b: input, i: 0 };

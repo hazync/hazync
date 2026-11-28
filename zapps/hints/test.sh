@@ -34,6 +34,22 @@ want 1 "no --core-image (no engine image is published yet)" "$Z" --image "$(cat 
 want 1 "another core image" "$Z" --image "$(cat $V/image_id)" --vk $V/vk.bin --vk-sha256 "$(pin $V/vk.bin)" --core-image "$(cat $V/image_id)" $V/proof.hze $V/mainnet-200.hints
 want 1 "the key without --vk-sha256 (review R1-6 #1)" "$Z" --image "$(cat $V/image_id)" --vk $V/vk.bin --core-image "$(cat $V/image_id)" $V/proof.hze $V/mainnet-200.hints
 want 1 "the key with another pin" "$Z" --image "$(cat $V/image_id)" --vk $V/vk.bin --vk-sha256 0000000000000000000000000000000000000000000000000000000000000000 --core-image "$(cat $V/image_id)" $V/proof.hze $V/mainnet-200.hints
+# review R3-4 L1, L2: the node's network and format are the caller's. The fixture's format is one of the two: that one
+# passes (DEMO, below minimum work) and the other FAILs.
+want 1 "--network signet: a mainnet proof is not a signet node's" "$Z" "${K[@]}" --network signet --expect 200:$H200 $V/proof.hze $V/mainnet-200.hints
+want 1 "--network testnet3: unknown" "$Z" "${K[@]}" --network testnet3 --expect 200:$H200 $V/proof.hze $V/mainnet-200.hints
+want 1 "--format v9: unknown" "$Z" "${K[@]}" --format v9 --expect 200:$H200 $V/proof.hze $V/mainnet-200.hints
+fx=""
+for f in bip crate; do
+    set +e; "$Z" "${K[@]}" --format $f --expect 200:$H200 $V/proof.hze $V/mainnet-200.hints > "$W/out" 2>&1; e=$?; set -e
+    fx="$fx$e"
+done
+[ "$fx" = "21" ] || [ "$fx" = "12" ] || { cat "$W/out"; echo "::error::--format bip / crate gave exits $fx, want one 2 and one 1"; exit 1; }
+echo "ok   --format: the file's format passes, the other FAILs (exits $fx)"
+"$Z" "${K[@]}" --expect 200:$H200 $V/proof.hze $V/mainnet-200.hints > "$W/out" 2>&1 || true
+grep -q "undo hashes not checked" "$W/out" && grep -q "is one you named, not a published one" "$W/out" \
+    || { cat "$W/out"; echo "::error::the DEMO report does not say the undo hashes were not checked and the images are the caller's"; exit 1; }
+echo "ok   no --undo and caller-named images are said (review R3-4 L3, M1)"
 # the chain identity through the other sources (zapp-common, every zAPP CLI's flags). A fake node answers getblockhash
 # 200, and getblockheader with that block's chainwork (difficulty 1: 0x100010001 per block).
 mknode() { # mknode <file> <hash at 200>

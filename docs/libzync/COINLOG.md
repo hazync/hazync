@@ -49,12 +49,19 @@ s               = height u32 LE ‖ tx u32 LE ‖ vin u32 LE ‖ 20 zero bytes
 - An unspent leaf is the coin leaf of UTREEXO_FORMAT.md §2 (tag 0x00, a full SHA-256). A spent leaf is a compression
   output from another IV, so it never equals a coin leaf.
 
-Test vectors (`coinlog_forest.rs` test `refusals`, from `coinlog_ref.py`): with x = SHA-256("c"), y = SHA-256("d"),
-`spent(x, s(974000, 5, 1)) = cdcc3dda…388993e`, `parent(3, x, y) = fcd6a122…6c29f14f`.
+Test vectors in **node format 2** (the engine's, since 26.11.2026; `coinlog_forest.rs` test `refusals`, from
+`coinlog_ref.py`): with x = SHA-256("c"), y = SHA-256("d"), `spent(x, s(974000, 5, 1)) = da3dcccd…3e9988b3`,
+`parent(3, x, y) = 22a1d6fc…4ff1296c`.
 
-**Chain vector** (mainnet blocks 1..200, `coinlog_ref.py`, equal to the guest's proof in `handover/retest_c4.out`):
-209 leaves appended, 204 live, 10^12 sat; roots[0] `70d43a0c…`, roots[4] `74d46d9b…`, roots[6] `707a6708…`,
-roots[7] `ba3401d0…` (levels 1-3 and 5 empty).
+**Chain vector**, format 2 (mainnet blocks 1..200: the engine chain's verified state at 200,
+swiftsync-verify/vectors/manifest.json `coin_log_mainnet_200`): 209 leaves appended, 204 live, 10^12 sat; roots[0]
+`70d43a0c…`, roots[4] `c34c2706…`, roots[6] `de27fb95…`, roots[7] `c7c8b7ba…` (levels 1-3 and 5 empty). roots[0] is a
+single leaf, a full SHA-256, the same in both formats.
+
+Format 1 (the RISC Zero chain's, each node's state words byte-swapped into SHA-256's digest order; a reader of that
+chain's proofs): `spent(…) = cdcc3dda…388993e`, `parent(3, x, y) = fcd6a122…6c29f14f`; chain vector roots[4]
+`74d46d9b…`, roots[6] `707a6708…`, roots[7] `ba3401d0…` (`coinlog_ref.py`, equal to the guest's proof in
+`handover/retest_c4.out`).
 
 ## 3. Shape and order
 

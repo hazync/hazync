@@ -160,10 +160,15 @@ wrap, so no trusted setup: nodes verify with our library, CLI, WASM or C ABI). S
   from the block files (`fetch_block_rpc.py`), checks its block forest against the core state, writes the file and the
   undo file, runs the same derivation natively, and writes the guest's input stream; `hzengine prove` proves it with the
   core's proof as the child (engine/results/zapp_hints). The guest's statement must equal the native one.
-- CLI: `zapp-hints --image <hex> --vk <key file> --vk-sha256 <the key file's pin> --core-image <hex> [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <proof.hze> <file>`;
-  exit 0 OK, 2 DEMO, 1 FAIL.
-- WASM `verify_hints` / JS `verifyHints({receipt, file, undo, imageHex, coreImageHex, vk, pin, expect})` (`receipt`:
-  the proof file's bytes; the file is hashed on the device); C ABI
+- CLI: `zapp-hints --image <hex> --vk <key file> --vk-sha256 <the key file's pin> --core-image <hex> [--network mainnet|signet] [--format bip|crate] [--expect <H>:<hash> | --mempool | --bitcoin-cli "<cmd>"] [--expect-tip <T>:<hash>] [--undo <file>] <proof.hze> <file>`;
+  exit 0 OK, 2 DEMO, 1 FAIL. `--network` (default mainnet) is YOUR node's, compared with the proof's; `--format` is the
+  hints format your node reads, compared with the file's: a genuine file in the other bit order would be misread and
+  the sync it was meant to save would fail at its end, so without `--format` the verdict is at most DEMO. The verdict
+  line names the network, says when the undo hashes were not checked (no `--undo`), and, as every reader does for an
+  image id the caller named rather than a published one, that the images are yours to have built (review R3-4 L1-L3, M1,
+  28.11.2026).
+- WASM `verify_hints` / JS `verifyHints({receipt, file, undo, imageHex, coreImageHex, vk, pin, expect, network, format})`
+  (`receipt`: the proof file's bytes; the file is hashed on the device; `network`, `format` as the CLI's); C ABI
   `swiftsync_verify_hints` (zapps/hints/ffi, include/zapp_hints.h) for a node patch to call before `-utxohints`. One implementation,
   `zapp_hints::verify_hints`, in the zAPP's own module `zapps/hints` (CLI, `ffi/`, `wasm/` with `zapp-hints.js`; ZYNCAPPS.md §9), on the core verifier as a library: neither Core nor the core verifier changes.
 

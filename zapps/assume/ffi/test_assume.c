@@ -50,6 +50,26 @@ int main(void) {
     run_assume("assumeutxo_wrong_tip", R, "../vectors/utxo_200.dat", -1, NULL, "200:00000000d1145790a8694403d4063f323d499e655c83426834d4ce2f8dd4a2ee", ZAPP_ASSUME_FAIL, NULL);
     const uint8_t NOT_IN[32] = {7};
     run_assume("assumevalid_not_in_chain", R, NULL, -1, NOT_IN, NULL, ZAPP_ASSUME_FAIL, NULL);
+    /* review R3-5 L3: NULL is "not given"; a non-NULL pointer with length 0 is GIVEN, and empty. The WASM frame has no
+       NULL, so there an empty chunk means "not given": the C ABI's absent input is NULL, as zapp_assume.h says. */
+    {
+        size_t rn, hn; char msg[512]; static const uint8_t EMPTY[1] = {0};
+        unsigned char *r = slurp(R, &rn), *h = slurp("../vectors/headers_0_200.bin", &hn);
+        zapp_assume_chain out; swiftsync_assume_result a;
+        memset(&out, 0, sizeof out); memset(&a, 0, sizeof a);
+        int absent = swiftsync_verify_assume(r, rn, ZAPP_ASSUME_NET_MAINNET, (uint64_t)time(NULL), id, vk, vn, pin, TIP, ZERO, h, hn,
+                                             NULL, 0, NULL, &out, &a, msg, sizeof msg);
+        int ok = absent == ZAPP_ASSUME_DEMO;
+        printf("%s  %-24s verdict %d (want %d)  %s\n", ok ? "PASS" : "WRONG", "snapshot_NULL_absent", absent, ZAPP_ASSUME_DEMO, msg);
+        bad += !ok; n++;
+        memset(&out, 0, sizeof out); memset(&a, 0, sizeof a);
+        int given = swiftsync_verify_assume(r, rn, ZAPP_ASSUME_NET_MAINNET, (uint64_t)time(NULL), id, vk, vn, pin, TIP, ZERO, h, hn,
+                                            EMPTY, 0, NULL, &out, &a, msg, sizeof msg);
+        ok = given == ZAPP_ASSUME_FAIL;
+        printf("%s  %-24s verdict %d (want %d)  %s\n", ok ? "PASS" : "WRONG", "snapshot_empty_is_given", given, ZAPP_ASSUME_FAIL, msg);
+        bad += !ok; n++;
+        free(r); free(h);
+    }
     printf("ASSUME_C_ABI %d/%d %s\n", n - bad, n, bad ? "SOME CASES WRONG" : "all cases as expected");
     return bad != 0;
 }

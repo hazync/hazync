@@ -41,7 +41,7 @@ pub struct SwiftsyncHints {
 pub unsafe extern "C" fn swiftsync_verify_hints(receipt: *const u8, receipt_len: usize, file: *const u8, file_len: usize,
                                                 undo: *const u8, undo_len: usize, image_hex: *const c_char,
                                                 core_image_hex: *const c_char, vk: *const u8, vk_len: usize, vk_pin: *const u8,
-                                                now: u64, expect: *const c_char,
+                                                network: *const c_char, format: u32, now: u64, expect: *const c_char,
                                                 out: *mut SwiftsyncHints, msg: *mut c_char, msg_len: usize) -> i32 {
     let fail = |m: &str| { write_msg(msg, msg_len, m); FAIL };
     let exp = if expect.is_null() { None } else {
@@ -66,16 +66,24 @@ pub unsafe extern "C" fn swiftsync_verify_hints(receipt: *const u8, receipt_len:
             return fail("the verifying key is not the image's pinned key (its SHA-256 is not vk_pin)");
         }
     }
+    // review R3-4 L1, L2: the node's network (NULL: mainnet) and the format it reads (0: not compared, at most DEMO)
+    let net = if network.is_null() { "mainnet".to_string() } else {
+        match CStr::from_ptr(network).to_str() { Ok(n) => n.to_string(), Err(_) => return fail("network is not UTF-8") }
+    };
+    if net != "mainnet" && net != "signet" { return fail("network: mainnet or signet"); }
+    let fmt = match format { 0 => None, 1 | 2 => Some(format), _ => return fail("format: 0 (not compared), 1 (bip) or 2 (crate)") };
     let u = slice(undo, undo_len);
     let rep = zapp_hints::verify_hints(slice(receipt, receipt_len), slice(file, file_len), (!u.is_empty()).then_some(u),
-                                                    &image, &swiftsync_verify::EngineKey { bytes: vkb, pin }, &core, now,
+                                                    &image, &swiftsync_verify::EngineKey { bytes: vkb, pin }, &core,
+                                                    &zapp_hints::HintsAsk { network: &net, format: fmt }, now,
                                                     exp.as_ref().map(|(h, x)| (*h, x.as_str())), None);
     if let (Some(z), false, false) = (&rep.statement, out.is_null(), rep.verdict == Verdict::Fail) {
         *out = SwiftsyncHints { height: z.height, block_hash: z.block_hash, format: z.format, n_unspent: z.n_unspent, unspent_value: z.unspent_value };
     }
     match rep.verdict {
-        Verdict::Ok => { write_msg(msg, msg_len, "the hints file is proven for block H, and block H is the one expect names"); OK }
-        Verdict::Demo => { write_msg(msg, msg_len, "a proven hints file, but block H was not compared with your header chain (expect), or the core chain is below minimum work or the checkpoint"); DEMO }
+        Verdict::Ok => { write_msg(msg, msg_len, &format!("the {net} hints file is proven for block H, and block H is the one expect names{} (under the images you named: trust it only if you built them)",
+                                                       if u.is_empty() { "; undo hashes not checked" } else { "" })); OK }
+        Verdict::Demo => { write_msg(msg, msg_len, "a proven hints file, but block H was not compared with your header chain (expect), the format was not compared (format 0), or the core chain is below minimum work or the checkpoint"); DEMO }
         Verdict::Fail => fail(rep.checks.iter().find(|(ok, _)| !ok).map(|(_, w)| w.as_str()).unwrap_or("failed")),
     }
 }

@@ -152,6 +152,9 @@ pub fn judge_tip_statement(z: TipStatement, id: &[u8; 32], base: &[u8; 32], img:
     // the base's coin-state claims were bound by ITS core receipt: that image must be trusted too
     rep_check(&mut rep, z.base_core_id == core_words, format!("the base rested on the trusted {net} core image {}", img.method_id_hex));
     rep_check(&mut rep, z.core_id == core_words, format!("this step rests on the trusted {net} core image {}", img.method_id_hex));
+    if !img.is_published() {
+        rep.checks.push((true, swiftsync_verify::caller_image_note("core image", img.method_id_hex)));
+    }
     // the core verifier's lineage rule: a step needs no undo commitment, so a handover lineage of the image is fine
     rep_check(&mut rep, z.lineage == [0u8; 32] || z.lineage == swiftsync_verify::lineage_of(img.lineage), "the core lineage is zero or the core image's own");
     rep_check(&mut rep, z.profile == img.profile, format!("core profile 0x{:x} == the {net} image's 0x{:x} ({})", z.profile, img.profile, swiftsync_verify::describe_profile(z.profile)));

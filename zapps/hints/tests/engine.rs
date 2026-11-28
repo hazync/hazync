@@ -25,7 +25,7 @@ fn engine_hints_200() {
     let (hints, undo) = (rd("mainnet-200.hints"), rd("mainnet-200.undo"));
     let key = EngineKey { bytes: &vk, pin: hex32(&txt("vk.sha256")).unwrap() };
     let run = |f: &[u8], h: &[u8], u: Option<&[u8]>, id: &str, k: Option<&EngineKey>, core: &str, at: Option<(u32, &str)>| {
-        verify_hints(f, h, u, id, k.unwrap(), core, NOW, at, None)
+        verify_hints(f, h, u, id, k.unwrap(), core, &HintsAsk::default(), NOW, at, None)
     };
     let r = run(&file, &hints, Some(&undo), &id, Some(&key), CORE_ID, Some((200, H200)));
     for (ok, s) in &r.checks {
@@ -60,4 +60,38 @@ fn engine_hints_200() {
     // not an engine proof file (a RISC Zero receipt's first bytes); and a core image id that is not hex
     refused(run(&[1, 0, 0, 0, 9, 9], &hints, None, &id, Some(&key), CORE_ID, None), "not an engine proof");
     refused(run(&file, &hints, None, &id, Some(&key), "xyz", None), "a core image id that is not hex");
+}
+
+/// Review R3-4: the node's network (L1) and format (L2) are the caller's; a missing undo file is said (L3); every
+/// image here is one the caller named (M1). Each of these fails on the code before the review.
+#[test]
+fn engine_hints_review_r3() {
+    let (file, vk, id) = (rd("proof.hze"), rd("vk.bin"), txt("image_id"));
+    let (hints, undo) = (rd("mainnet-200.hints"), rd("mainnet-200.undo"));
+    let key = EngineKey { bytes: &vk, pin: hex32(&txt("vk.sha256")).unwrap() };
+    let go = |ask: &HintsAsk, u: Option<&[u8]>| verify_hints(&file, &hints, u, &id, &key, CORE_ID, ask, NOW, Some((200, H200)), None);
+    let base = go(&HintsAsk::default(), Some(&undo));
+    assert_eq!(base.verdict, Verdict::Demo);
+    let fmt = base.statement.as_ref().unwrap().format;
+    let has = |r: &HintsReport, s: &str| r.checks.iter().any(|(ok, l)| *ok && l.contains(s));
+    assert!(has(&base, "hints image") && has(&base, "is one you named, not a published one"), "{:?}", base.checks);
+    assert!(has(&base, "core image") , "{:?}", base.checks);
+    assert!(has(&base, "was not compared with the one your node reads: at most DEMO"), "{:?}", base.checks);
+    // the node's format: the same passes (DEMO only for low work), the other one FAILs
+    let same = go(&HintsAsk { network: "mainnet", format: Some(fmt) }, Some(&undo));
+    assert_eq!(same.verdict, Verdict::Demo, "{:?}", same.checks);
+    assert!(same.checks.iter().all(|(ok, _)| *ok));
+    let other = if fmt == libzync::hints::FORMAT_BIP { libzync::hints::FORMAT_CRATE } else { libzync::hints::FORMAT_BIP };
+    assert_eq!(go(&HintsAsk { network: "mainnet", format: Some(other) }, Some(&undo)).verdict, Verdict::Fail);
+    // the node's network: a mainnet proof is not a signet node's
+    let sig = go(&HintsAsk { network: "signet", format: Some(fmt) }, Some(&undo));
+    assert_eq!(sig.verdict, Verdict::Fail);
+    assert!(sig.checks.iter().any(|(ok, l)| !ok && l.contains("your node is on signet")), "{:?}", sig.checks);
+    // no undo file: said, not silently skipped
+    let nou = go(&HintsAsk::default(), None);
+    assert!(has(&nou, "no undo-hash file given"), "{:?}", nou.checks);
+    assert!(!has(&base, "no undo-hash file given"));
+    // the parsers the CLI and wasm use
+    assert_eq!((parse_format("bip"), parse_format("crate"), parse_format("2"), parse_format("x")),
+               (Some(libzync::hints::FORMAT_BIP), Some(libzync::hints::FORMAT_CRATE), Some(libzync::hints::FORMAT_CRATE), None));
 }

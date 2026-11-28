@@ -41,6 +41,9 @@ typedef struct {
  *   tracked:           NUL-terminated "<txid>:<vout>" lines, the BIP30-tracked coins (scripts/libzync/assume_inputs.py), or NULL.
  *   aout:              under OK and DEMO: the block and height named, the snapshot's coin count and amount, and Core's
  *                      hash_serialized_3 of it (64 hex digits and a NUL; the value a node pins in m_assumeutxo_data).
+ * Optional inputs (assumevalid_block, headers, snapshot, tracked) are ABSENT only when NULL: a non-NULL pointer with
+ * length 0 is an input given and empty (an empty snapshot or headers file), which FAILs. The WASM frame has no NULL, so
+ * there an empty chunk means absent (review R3-5 L3).
  * A wrong headers file or tracked list can only make a true snapshot fail. Returns OK, DEMO or FAIL (reason in msg). */
 typedef struct {
     uint8_t  assumevalid_block[32];  /* internal order */
