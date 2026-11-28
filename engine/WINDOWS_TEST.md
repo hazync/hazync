@@ -45,3 +45,9 @@ afterwards). Nothing here is measured yet: every number below is a Linux referen
   5's measurement.
 - CANONICAL_ENGINE_IMAGE_ID (supervisor.py) is today's core image e3729469..., not a published one: it follows
   reproduce/engine-release.tsv at the Stage 4 freeze.
+
+## The CPU build (28.11.2026)
+
+engine-windows run 46136261146 (request 15): the CPU `hzengine.exe` BUILDS under MSVC and runs on the runner; artifact
+hzengine-windows-x86_64-cpu, 6,829,292 bytes (zipped), beside the CUDA one (52,623,366). Proving with it on a real Windows
+machine: in the Xesktop session (CPU-only step above).
