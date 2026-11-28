@@ -12,7 +12,7 @@
 # Heights (env): BASE_H (1999), STEPS ("10000:A 20000:B 50000:B 91722:B 91812:B 91842:B 91880:B 100000:B": the last is
 # the restart step, the one before it its previous step, OLD (50000) an older kept forest), LIE_H (9000: the lying-node
 # and lying-source steps from the base, under A; the node's lie is in a block above BASE_H). The engine chain 1..200:
-# BASE_H=50 STEPS="100:A 120:A 150:A 170:A 200:A" OLD=120 LIE_H=90.
+# BASE_H=50 STEPS="100:A 120:A 150:A 170:A 200:A" OLD=120 LIE_H=180 (its first spend is at block 170: the lies need one).
 set -uo pipefail
 Z=$1; E=$2; KU=$3; KT=$4; B=$5; SA=$6; SB=$7; W=$8
 BASE_H=${BASE_H:-1999}; STEPS=${STEPS:-10000:A 20000:B 50000:B 91722:B 91812:B 91842:B 91880:B 100000:B}
