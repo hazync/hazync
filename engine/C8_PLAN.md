@@ -110,3 +110,12 @@ coordinator/deploy/headers/test/test_follow.sh (the RISC Zero followers: 3.4 reb
 reproduce/libzync-ids.sh (`zyncapp id`), and adversarial.yml's RISC Zero jobs (reproducible-image-id, libzync-hosts,
 libzync-chain, libzync-blocks, libzync-vectors, libzync-rig, libzync-signet; they run on main and pull requests, not on
 pushes to engine/openvm).
+
+**Step 3 done (28.11.2026):** history/verifier, verifier-ffi and verifier-wasm deleted (the CORE design's verifiers, a
+record that built on risc0-zkvm; nothing built, tested or ran them: history/README.md; v0.22.1 released them).
+history/rangestate stays (no zkVM dependency; accumulator's comment points at it). Comments elsewhere that say "as
+history/verifier-wasm/build.sh did" are left: they describe where a method came from.
+
+**Step 4 (prover/host engine only) not started here.** It needs the decisions above first (the consensus evidence's
+runners, the Windows driver build), and it is the change that touches prep, the board's commands and the coin log
+store: several commits, each checked on the box (the board dry run's commands on blocks 1..8) as well as here.
