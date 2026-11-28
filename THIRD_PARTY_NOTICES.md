@@ -29,10 +29,11 @@ libsecp256k1 v0.5.1, without the RISC Zero field and group patches (0005 0006 00
 ## Build / proving stack (linked, not part of the consensus path)
 
 - **RISC Zero (risc0)** zkVM, `risc0-zkvm` `=3.1.0` (circuits 4.1.0; since v0.24.0, before that 3.0.5) /
-  `risc0-build` `=3.0.7`, and the rzup
-  cross-toolchain — Apache-2.0. The `prover/` crate was scaffolded from the risc0 project template and
-  carries an additional Apache-2.0 notice at [`prover/LICENSE`](prover/LICENSE) covering that
-  risc0-derived build scaffolding. Copyright (c) RISC Zero, Inc.
+  `risc0-build` `=3.0.7`, and the rzup cross-toolchain — Apache-2.0, Copyright (c) RISC Zero, Inc. The prover and
+  every release up to v0.27.1, the last on RISC Zero; since CUTOVER C8 (28.11.2026) this tree neither builds nor links
+  any RISC Zero crate (the engine below proves). The `prover/` crate was scaffolded from the risc0 project template
+  and carries an additional Apache-2.0 notice at [`prover/LICENSE`](prover/LICENSE) covering that risc0-derived build
+  scaffolding; RISC Zero's serde lives on in `engine/journal` (below).
 - **RustCrypto `sha2`** — MIT/Apache-2.0, pinned to an immutable commit, routed through the risc0
   SHA-256 accelerator (byte-identical output).
 
@@ -45,31 +46,13 @@ libsecp256k1 v0.5.1, without the RISC Zero field and group patches (0005 0006 00
   (`src/serde`) is risc0-zkvm 3.1.0's `src/serde`, copied with one change (`WORD_SIZE` a local constant), Apache-2.0,
   Copyright (c) RISC Zero, Inc.; the files keep RISC Zero's licence header. The engine guests and every verifier use it.
 
-## Vendored and modified (Apache-2.0)
+## Vendored and modified (until CUTOVER C8)
 
-Copied into `vendor/` and wired in through `[patch.crates-io]` in `prover/Cargo.toml`. All but `sppark` are RISC
-Zero crates, Copyright (c) RISC Zero, Inc. Each is upstream's published crate except for the changes stated here,
-which are marked in the source (`hazync patch`, `hazync#…`). Every change is prover-side: the image ids, the circuit
-and the verifier are unchanged.
-
-- **`vendor/risc0-zkvm`** — `risc0-zkvm` 3.1.0. Modified in `src/host/server/prove/mod.rs` and
-  `src/host/server/prove/prover_impl.rs` only: an API to assemble a receipt from segment receipts
-  proved on other machines (segment distribution, hazync#148, #153, #161), and a balanced join tree
-  in place of the linear fold. Host-side proving only.
-- **`vendor/risc0-circuit-rv32im-sys`** — `risc0-circuit-rv32im-sys` 4.1.0. Modified in `build.rs`
-  only (marked `HAZYNC_631_MSVC_FLAGS`): the CUDA flags MSVC needs to build on Windows (hazync#631).
-  The hazync#119 accum-pass fix we used to carry is upstream since 4.1.0. Prover-only.
-- **`vendor/risc0-circuit-keccak`** — 4.1.0. Modified in `build.rs` only (`HAZYNC_WINDOWS_PATH_ESCAPE`):
-  backslashes in a generated path are escaped so it builds on Windows (hazync#616). Never executed by Hazync.
-- **`vendor/risc0-circuit-keccak-sys`** — 4.1.0. Modified in `build.rs` only (`HAZYNC_631_MSVC_FLAGS`): MSVC flags.
-- **`vendor/risc0-build-kernel`** — 2.0.1. Modified in `src/lib.rs` only (`HAZYNC_631_MSVC_HOST_FLAGS`): host
-  compiler flags for MSVC; the non-MSVC branch is unchanged.
-- **`vendor/risc0-groth16-sys`** — 0.1.0. Modified in `kernels/cuda/groth16_coeffs.cuh` only
-  (`HAZYNC_631_WIN_NO_MMAP`): the POSIX `mmap` path is gated off on MSVC, where SNARK wrapping fails with a clear
-  error.
-- **`vendor/sppark`** — 0.1.15, Apache-2.0, Copyright Supranational LLC
-  (https://github.com/supranational/sppark). Modified in `sppark/ff/mont_t.cuh` only (`HAZYNC_631_QUALIFY_N`): a
-  default argument qualified as `mont_t::n` so MSVC accepts it; the same value on every compiler.
+Until C8 step 4f (28.11.2026) `vendor/` held six RISC Zero crates (risc0-zkvm 3.1.0, risc0-circuit-rv32im-sys,
+risc0-circuit-keccak, risc0-circuit-keccak-sys 4.1.0, risc0-build-kernel 2.0.1, risc0-groth16-sys 0.1.0; Copyright (c)
+RISC Zero, Inc.) and sppark 0.1.15 (Copyright Supranational LLC), Apache-2.0, each with prover-side changes marked in
+its source (segment distribution, a balanced join tree, the Windows / MSVC CUDA build). They left with the RISC Zero
+backend; v0.27.1's source carries them and this file's text as it was.
 
 ## Our own code
 
@@ -77,9 +60,8 @@ and the verifier are unchanged.
   libzync (`libzync/`), the host/prover driver (`prover/host/`), the guest glue
   (`prover/methods/guest/`), the libzync verifiers (`swiftsync-verify/`, `swiftsync-verify-ffi/`,
   `swiftsync-verify-wasm/`), the coordinator (`coordinator/`), and the retired CORE design's code under
-  `history/` (including its range-state types and verifiers) are original work under the root MIT
-  licence (the CORE `verifier` crate, `history/verifier/`, additionally declares Apache-2.0 in its
-  `Cargo.toml`).
+  `history/` (including its range-state types) are original work under the root MIT licence (the CORE
+  `verifier` crate, deleted from `history/` by CUTOVER C8 step 3, additionally declared Apache-2.0 in its `Cargo.toml`).
 
 Nothing here overrides the terms of the components' own licences; consult each upstream project for
 the authoritative text.

@@ -1,0 +1,28 @@
+199f4fde cl_synth (engine-export's modelled coin log): never
+  base block 130000: rc=0 143 s, ENGINE_EXPORT_DONE /root/c8s4/exp/base_130000: 1 chunks, aggregate stream 24624 bytes (executed on the engine; the aggre
+  new block 130000: rc=0 144 s, ENGINE_EXPORT_DONE /root/c8s4/exp/new_130000: 1 chunks, aggregate stream 24624 bytes (executed on the engine; the aggreg
+  method_id: base 0000000000000000.. new c7fe0eb85d2d4c10..
+  10 files: 7 byte-identical, 3 differ only by the image id at 4..36 (agg.in agg_collect.in method_id), 0 other differences []
+EXPORT_CMP OK 130000
+  base block 140000: rc=0 149 s, ENGINE_EXPORT_DONE /root/c8s4/exp/base_140000: 1 chunks, aggregate stream 78816 bytes (executed on the engine; the aggre
+  new block 140000: rc=0 147 s, ENGINE_EXPORT_DONE /root/c8s4/exp/new_140000: 1 chunks, aggregate stream 78816 bytes (executed on the engine; the aggreg
+  method_id: base 0000000000000000.. new c7fe0eb85d2d4c10..
+  10 files: 7 byte-identical, 3 differ only by the image id at 4..36 (agg.in agg_collect.in method_id), 0 other differences []
+EXPORT_CMP OK 140000
+  base block 741000: rc=0 152 s, ENGINE_EXPORT_DONE /root/c8s4/exp/base_741000: 1 chunks, aggregate stream 149520 bytes (executed on the engine; the aggr
+  new block 741000: rc=0 143 s, ENGINE_EXPORT_DONE /root/c8s4/exp/new_741000: 1 chunks, aggregate stream 149520 bytes (executed on the engine; the aggre
+  method_id: base 0000000000000000.. new c7fe0eb85d2d4c10..
+  10 files: 7 byte-identical, 3 differ only by the image id at 4..36 (agg.in agg_collect.in method_id), 0 other differences []
+EXPORT_CMP OK 741000
+  base block 962000: rc=0 313 s, ENGINE_EXPORT_DONE /root/c8s4/exp/base_962000: 4 chunks, aggregate stream 2576628 bytes (executed on the engine; the agg
+  new block 962000: rc=0 314 s, ENGINE_EXPORT_DONE /root/c8s4/exp/new_962000: 4 chunks, aggregate stream 2576628 bytes (executed on the engine; the aggr
+  method_id: base 0000000000000000.. new c7fe0eb85d2d4c10..
+  19 files: 16 byte-identical, 3 differ only by the image id at 4..36 (agg.in agg_collect.in method_id), 0 other differences []
+EXPORT_CMP OK 962000
+  base block 965500: rc=0 358 s, ENGINE_EXPORT_DONE /root/c8s4/exp/base_965500: 5 chunks, aggregate stream 2293100 bytes (executed on the engine; the agg
+  new block 965500: rc=0 364 s, ENGINE_EXPORT_DONE /root/c8s4/exp/new_965500: 5 chunks, aggregate stream 2293100 bytes (executed on the engine; the aggr
+  method_id: base 0000000000000000.. new c7fe0eb85d2d4c10..
+  22 files: 19 byte-identical, 3 differ only by the image id at 4..36 (agg.in agg_collect.in method_id), 0 other differences []
+EXPORT_CMP OK 965500
+EXPORT_CMP_DONE
+GO3_DONE

@@ -1,0 +1,49 @@
+pack: /root/c8s4/board/b200.hze (275183 bytes: proof 273107, journal 2068), verified as the readers verify it
+key pin b5b94f9c0eb4e4e9..
+  base genesis tip 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+  base method-id (board key) METHOD_ID c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+  base method-id (keys dir) METHOD_ID c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+  base seg-po2 (engine set up) engine
+  new genesis tip 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+  new method-id (board key) METHOD_ID c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+  new method-id (keys dir) METHOD_ID c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9
+  new seg-po2 (engine set up) engine
+  new method-id with no engine set up: method-id: this host runs the guest on the OpenVM engine: set HAZYNC_ENGINE=<hzengine binary> and HAZYNC_ENGINE_KEYS=<the image's key directory> (RISC Zero's ba; exit 0
+  SAME prep state_1.json
+  SAME prep state_2.json
+  SAME prep state_3.json
+  SAME prep state_4.json
+  SAME prep state_5.json
+  SAME prep state_6.json
+  SAME prep state_7.json
+  SAME prep state_8.json
+  SAME bundle leaf_1.bin
+  SAME bundle leaf_2.bin
+  SAME bundle leaf_3.bin
+  SAME bundle leaf_4.bin
+  SAME bundle leaf_5.bin
+  SAME bundle leaf_6.bin
+  SAME bundle leaf_7.bin
+  SAME bundle leaf_8.bin
+  range_1.bin: journals IDENTICAL (1212 bytes, sha256 48aa610afdc3298a..), proof files differ (274327 / 274327 bytes)
+  range_2.bin: journals IDENTICAL (1348 bytes, sha256 89a8ab2b3280cfd2..), proof files differ (274463 / 274463 bytes)
+  fold_1_2.bin: journals IDENTICAL (1348 bytes, sha256 676d6ea38b793e7b..), proof files differ (274463 / 274463 bytes)
+  base fold.log: JOURNAL_SHA256 676d6ea38b793e7b841f1f5113a2e7bca68fc61d4c7474a2dfc3730633efb5b8 JOINED left tip 1 + right tip 2 -> fold_1_2.bin (engine), 481.0 s STEP rc=0 secs=481 :: range_1.bin range_2.bin fold_1_2
+  base leaf_1.log:   engine: packed lz_leaf_1/block_1.ovm -> range_1.bin (274327 bytes, image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9) leaf engine proof for block 1 -> range_1.bin 
+  base leaf_2.log:   engine: packed lz_leaf_2/block_2.ovm -> range_2.bin (274463 bytes, image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9) leaf engine proof for block 2 -> range_2.bin 
+  new fold.log: JOURNAL_SHA256 676d6ea38b793e7b841f1f5113a2e7bca68fc61d4c7474a2dfc3730633efb5b8 JOINED left tip 1 + right tip 2 -> fold_1_2.bin (engine), 471.0 s STEP rc=0 secs=471 :: range_1.bin range_2.bin fold_1_2
+  new leaf_1.log:   engine: packed lz_leaf_1/block_1.ovm -> range_1.bin (274327 bytes, image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9) leaf engine proof for block 1 -> range_1.bin 
+  new leaf_2.log:   engine: packed lz_leaf_2/block_2.ovm -> range_2.bin (274463 bytes, image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9) leaf engine proof for block 2 -> range_2.bin 
+== verify-any (new host, board key)
+  leaf 1: RANGE-OK lo=1 hi=1 in_tip=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 out_tip=381465338333249e485db98721f3b84e4a1f588b64378eace82
+  leaf 2: RANGE-OK lo=2 hi=2 in_tip=381465338333249e485db98721f3b84e4a1f588b64378eace82947785c2b7406 out_tip=e5d31da9c4fd5705dc9c32114e3762c5ae9b2343223ef0538f4
+  fold 1+2: RANGE-OK lo=1 hi=2 in_tip=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 out_tip=e5d31da9c4fd5705dc9c32114e3762c5ae9b2343223ef0538f4
+  tampered journal byte: REJECT not a valid proof of this coordinator's engine image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (forged, tampered or corrupt): the proof's public values are not SHA-256 of; exit 0
+  tampered proof byte: REJECT not a valid proof of this coordinator's engine image c7fe0eb85d2d4c10532742191b059a2adcc3e24e22aa81c1e632e2ee718d2fc9 (forged, tampered or corrupt): the STARK does not verify against the image'
+  block 2 as range 1: REJECT the receipt is not anchored on the state before block 1 (anchor_id 381465338333249e485db98721f3b84e4a1f588b64378eace82947785c2b7406, that state's digest 852c5c7e009317c2dd232dcf9b1a9e2babd58df3
+  no board key: REJECT this host has no engine key to verify with (set HAZYNC_ENGINE_VK and HAZYNC_ENGINE_VK_PIN: a coordinator configuration error); a RISC Zero receipt is checked with v0.27.1's verifier
+== the same verify-any lines from the base host
+  leaf 1: RANGE-OK lo=1 hi=1 in_tip=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 out_tip=381465338333249e485db98721f3b84e4a1f588b64378eace82
+  leaf 2: RANGE-OK lo=2 hi=2 in_tip=381465338333249e485db98721f3b84e4a1f588b64378eace82947785c2b7406 out_tip=e5d31da9c4fd5705dc9c32114e3762c5ae9b2343223ef0538f4
+  fold 1+2: RANGE-OK lo=1 hi=2 in_tip=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 out_tip=e5d31da9c4fd5705dc9c32114e3762c5ae9b2343223ef0538f4
+BOARD_CMDS_DONE

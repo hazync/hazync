@@ -1,0 +1,14 @@
+STEP rc=0 secs=24 :: cp -a /root/engine-src /root/c8s4/base
+7620ec78 tip-source-tests: the engine chain 1..200 recipe lies at 180 (the first
+STEP rc=0 secs=12 :: cp -a /root/engine-kit/engine/host/target /root/c8s4/base/engine/host/
+089456a3 C8 step 4b-4e: prover/host is engine only (RISC Zero's executor, prover
+== hzengine (engine/host at 7620ec78)
+STEP rc=0 secs=79 :: bash -c cd /root/c8s4/base/engine/host && nice cargo build --release -q > /root/c8s4/hz_build.log 2>&1
+== base host (7620ec78, RISC0_SKIP_BUILD=1)
+STEP rc=0 secs=2594 :: bash -c cd /root/c8s4/base/prover && RISC0_SKIP_BUILD=1 HAZYNC_BASE=/root/product-base6 HAZYNC_LIBZYNC=1 nice cargo build --release -q -p host > /root/c8s4/base_build.log 2>&1
+== new host (089456a3)
+STEP rc=0 secs=115 :: bash -c cd /root/c8s4/new/prover && HAZYNC_LIBZYNC=1 nice cargo build --release -q -p host > /root/c8s4/new_build.log 2>&1
+-rwxr-xr-x 2 root root 280206048 Nov 28 15:37 /root/c8s4/base/engine/host/target/release/hzengine
+-rwxr-xr-x 2 root root 161978880 Nov 28 16:20 /root/c8s4/base/prover/target/release/host
+-rwxr-xr-x 2 root root  23255624 Nov 28 16:22 /root/c8s4/new/prover/target/release/host
+C8S4_SETUP_DONE
