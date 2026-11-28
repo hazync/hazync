@@ -21,7 +21,7 @@ kernel's `cudaFuncSetAttribute(..., MaxDynamicSharedMemorySize, 64 KB)` fails (c
 fused kernel on `cudaDevAttrMaxSharedMemoryPerBlockOptin` and fall back to the unfused path, which then hits the race.
 
 **Reproduced on a modern card** (so it is not Pascal-specific): an NVIDIA A40 with the unfused path forced on a large
-proof (2,124-byte journal program; ~176 segments at the default segment size) fails at segment 0 after 42 s with
+proof (our header-chain program over a 78 MB input) fails at segment 0 after 42 s with
 NonzeroRootSum; the fused path proves the same input.
 
 **Fix we use** (patch below): the launcher takes a dedicated kernel for exactly that branch which reads every input
