@@ -10,3 +10,8 @@ regtest harness's tip 110 (2d5cc9c8...). Its children were verified in the guest
 `hzengine pack` wrote proof.hze (HZE1) and vk.bin, and printed image_id and vk.sha256; core_image_id is keys-rtch's.
 re-proved 27.11.2026 with the new kind (engine/zapps/zeroconf/real_proofs.sh, real3/: core 354 s, chunk 126 s, zeroconf
 155 s).
+
+**28.11.2026:** this proof is of image 1ee5f2d7, before the guest pinned the genesis anchor (commit 977439f0, image
+132969d8...). Its core child is a base step at 109, which the new guest refuses ("not anchored at the network's
+genesis"; engine/zapps/zeroconf/fixture/README.md). It stays as the reader's fixture: the reader's checks are the
+same for both images. A proof of the new image needs the regtest core chain proved from genesis.

@@ -42,9 +42,9 @@ differential test of the Rust tx parsers against Core's.
 | # | state |
 |---|---|
 | R2-6 #1 | FIXED: the reader FAILs weight > 4,000,000 or sigop cost > 80,000; tested at and over each limit |
-| R2-6 #2 | FIXED in the reader, CLI and README; the guest's comment waits for the zeroconf image's next rebuild |
+| R2-6 #2 | FIXED in the reader, CLI and README; the guest's comment too (977439f0, 28.11.2026) |
 | R2-6 #3 | FIXED: --wtxid / Asked.wtxid |
-| R2-6 #4 | docs FIXED ("pass your current tip"); the guest's genesis-anchor pin waits for the zeroconf image's next rebuild |
+| R2-6 #4 | FIXED: docs ("pass your current tip"); the guest pins the network's genesis anchor (977439f0; zeroconf image 132969d8, replacing 1ee5f2d7): a non-genesis anchor refused in the guest, on the metering build and with real children (engine/zapps/zeroconf/fixture/README.md, 28.11.2026); the real-proof fixture stays 1ee5f2d7's until the regtest chain is proved from genesis |
 | R2-4 #1, #2 | FIXED (core image e3729469; 27/27 honest chunks unchanged) |
 | R2-5 #1 | FIXED: with_pinned_engine_key in every shipped path; with_engine_key_unchecked tests only; with_key needs a pin; verify_stark_bytes removed |
 | R2-1 #2 | FIXED: verify_full_trusted_key |

@@ -1,0 +1,7 @@
+1. block 110 proved (base step on 109) rc=0 1025 s
+   core proof real4/core/block_110.ovm
+ZEROCONF_STREAM record 0 -> real4/zc.bin (12700 bytes); core=2d7401595eee8ae196702fafee49057eaf1ce8627bf79dd2b04d320e253
+2. zeroconf (new image) rc=1 61 s
+ZC_REAL4_DONE
+thread 'main' (1) panicked at src/main.rs:122:102:
+core statement: not anchored at the network's genesis

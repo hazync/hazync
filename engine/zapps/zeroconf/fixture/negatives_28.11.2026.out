@@ -1,0 +1,12 @@
+refused  control (as the fixture; prep from genesis): 
+refused  paths swapped between the inputs: neg.log-an input's coin is not unspent at the tip
+refused  a path node changed: neg.log-an input's coin is not unspent at the tip
+refused  one path for two inputs: neg.log-one coin-log path per input
+refused  the tip one block lower (109): neg.log-the chunk is not for the block after this tip
+refused  a chunk for another height: neg.log-the chunk is not for the block after this tip
+refused  a chunk that is not all valid: neg.log-the chunk is not all valid
+refused  no such record (index 1): neg.log-no such record
+refused  the wrong network (signet):  wrong network
+refused  NEW: the tip anchored elsewhere (anchor_id one digit changed):  not anchored at the network's genesis
+refused  NEW: the tip carrying the mainnet genesis anchor:  not anchored at the network's genesis
+ZC_NEG4_DONE

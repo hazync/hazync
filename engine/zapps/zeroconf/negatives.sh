@@ -28,4 +28,13 @@ run "a chunk for another height"         $ST/state_110.json chunk_otherheight.j 
 run "a chunk that is not all valid"      $ST/state_110.json chunk_invalid.j 0 paths.json --regtest
 run "no such record (index 1)"           $ST/state_110.json $C 1 paths.json --regtest
 run "the wrong network (signet)"         $ST/state_110.json $C 0 paths.json --signet
+# the genesis anchor pinned in the guest (review R2-6 #4, 28.11.2026): the tip's anchor_id changed (one bit), or the mainnet one
+python3 - "$ST/state_110.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1])); a = list(s["anchor_id"])
+t = dict(s); b = a[:]; b[0] ^= 1; t["anchor_id"] = b; json.dump(t, open("state_110_anchor_flipped.json", "w"))
+u = dict(s); u["anchor_id"] = list(bytes.fromhex("852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167")); json.dump(u, open("state_110_anchor_mainnet.json", "w"))
+PY
+run "the tip anchored elsewhere (anchor_id one bit changed)" state_110_anchor_flipped.json $C 0 paths.json --regtest
+run "the tip carrying the mainnet genesis anchor"            state_110_anchor_mainnet.json $C 0 paths.json --regtest
 echo ZC_NEG_DONE

@@ -61,3 +61,30 @@ anchor), T's txid, fee, weight and sigops; 13 refusals (tests/engine.rs).
 (production, 1ee5f2d7...) and keys-z-zeroconfc (metering); everything above re-run on them with the same results:
 the 8 negatives refused and the control accepted, both cases, and the real proof (real_proofs.sh -> real3/: core 354 s,
 chunk 126 s, zeroconf 155 s, verified; statement kind 0x5a5a0001).
+
+## The genesis anchor pinned in the guest (28.11.2026, review R2-6 #2, #4)
+
+Commit 977439f0: the guest checks the core statement against the network's PINNED genesis anchor (mainnet 852c5c7e...,
+signet 3b67ead0..., regtest 99509fc5...: the regtest one from scripts/libzync/genesis_anchor_id.py, zapps/corecheck's
+REGTEST_IMAGE and the anchor_id native prep's regtest states carry), where it passed the journal's own anchor_id (a
+no-op). Its doc comment says consensus-valid for the block after the tip, no relay policy.
+
+- **Production image** (reproduce/engine-ids.sh IMAGES=zeroconf --rev 977439f0, the container, build box):
+  **132969d821982852161a4a4a92833980438992d12e0e21cf9695cf98c9629084** (exe 68ad2f6e..., vm 00e00077...; keys as
+  keys-z-zeroconf3's: agg.vk 15d415ec..., sdk.pk f0155abe...). Replaces 1ee5f2d7.
+- **Metering build** of the same source (exe 70560b01...; built natively with the box's older hzengine, then marked
+  BENCH_NOVERIFY as today's builder marks it), today's hzengine: `negatives.sh` with two new cases
+  (negatives_28.11.2026.out): the control (prep's state at 110, anchored at regtest genesis) EXECUTE_OK, journal 840
+  bytes (control_28.11.2026.out); the 8 earlier negatives refused with their reasons; NEW: the tip's anchor_id with one
+  bit changed, and the tip carrying mainnet's genesis anchor: both refused, "core statement: not anchored at the
+  network's genesis". (The control first read "refused" with no reason: the host predated review R1-1 #1, then the
+  keys dir lacked the BENCH_NOVERIFY mark; neither is a guest refusal.)
+- **With REAL children** (real_anchor.sh, real_anchor_28.11.2026.out): block 110 proved by keys-rtch as a base step on
+  prep's state at 109 (1,025 s, 4 cores), so ANCHORED AT 109, and the fixture's speculative chunk for 111; the new
+  production image, both children verified in the guest first: refused, "core statement: not anchored at the
+  network's genesis" (src/main.rs:122).
+
+So the real-proof fixture (zapps/zeroconf/tests/data/engine: image 1ee5f2d7, its core child a base step at 109) can
+no longer be made with the production image: a zeroconf proof now needs a core chain proved from genesis. The
+reader's tests keep the 1ee5f2d7 proof (it verifies as that image, which is what they test). A real proof of the new
+image waits for the regtest harness's chain proved from genesis on the engine (110 blocks; the queued box item).
