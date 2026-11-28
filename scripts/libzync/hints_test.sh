@@ -63,8 +63,10 @@ python3 -c "import json,sys; sys.exit(json.load(open('$O/back.json')) != json.lo
 c=$(grab "$O/f1.stmt" counted); u=$(grab "$O/f1.stmt" unspent); v=$(grab "$O/f1.stmt" value)
 rc=$(grab "$O/ref.log" counted); ru=$(grab "$O/ref.log" unspent); rv=$(grab "$O/ref.log" value)
 [ "$c $u $v" = "$rc $ru $rv" ] && pass "the statement's counted / unspent / value == hints_ref.py ($c / $u / $v sat)" || fail "counts $c $u $v != ref $rc $ru $rv"
-sv=$("$ZA" core-info "$CJ" | grep -ao 'utxo_value=[0-9]*' | cut -d= -f2)
-[ "$v" = "$sv" ] && pass "unspent value == the core state's utxo_value" || fail "value $v != the core state's $sv"
+# the core state's utxo_value is the value live at ITS height T: comparable only when H = T
+ci=$("$ZA" core-info "$CJ"); sv=$(echo "$ci" | grep -ao 'utxo_value=[0-9]*' | cut -d= -f2); ct=$(echo "$ci" | sed -n 's/^CORE height=\([0-9]*\) .*/\1/p')
+if [ "$ct" = "$H" ]; then [ "$v" = "$sv" ] && pass "unspent value == the core state's utxo_value" || fail "value $v != the core state's $sv"
+else echo "(H = $H below the core tip $ct: the core state's utxo_value is at $ct, not compared)"; fi
 
 for c in spent_as_unspent unspent_as_spent wrong_spender tracked state undo header dup_tx dup_last drop_tx swap_tx witness_tx lineage pre_undo core_id format assumevalid; do
   rc=$(HINTS_TAMPER=$c xrun neg_$c "$O/neg")

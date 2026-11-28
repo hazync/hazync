@@ -29,14 +29,14 @@ why () { sed 's/\x1b\[[0-9;]*m//g' "$1" 2>/dev/null | grep -a -A1 "panicked at" 
 # tip <prev journal> <H> <state> <name> [zyncapp flags...]: stream then execute; prints "<host rc> <engine rc>"
 tip () { local pj=$1 h=$2 s=$3 n=$4; shift 4
   "$Z" utreexo-tip-prove "$B" "$pj" "$h" "$s" "$W/$n" --stream "$W/$n.bin" --base-id "$UID_" "$@" > "$W/$n.log" 2>&1; local hr=$?
-  local er=-; [ $hr = 0 ] && er=$(xec "$KT" "$W/$n.bin" "$W/$n.j" "$W/$n.glog"); echo "$hr $er"; }
+  local er=-; [ $hr = 0 ] && er=$(xec "$KT" "$W/$n.bin" "$W/$n.journal" "$W/$n.glog"); echo "$hr $er"; }
 fails=0
 t () { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got '$3', want '$2')"; fails=$((fails + 1)); fi; }
 field () { grep -h -o "$1 .*" "$2" | head -1 | grep -o " $3=[^ ]*" | cut -d= -f2; }
 
 "$Z" utreexo-prove "$B" "$BASE_H" "$SA" "$W/base" --stream "$W/base.bin" > "$W/base.log" 2>&1; t "base stream to $BASE_H" 0 $?
-t "base walk to $BASE_H executed" 0 "$(xec "$KU" "$W/base.bin" "$W/base.j" "$W/base.glog")"
-J=$W/base.j
+t "base walk to $BASE_H executed" 0 "$(xec "$KU" "$W/base.bin" "$W/base.journal" "$W/base.glog")"
+J=$W/base.journal
 prev=$J; p=$BASE_H
 rm -f "$W/forest.bin" "$W/native.bin"
 for spec in $STEPS; do
@@ -47,10 +47,10 @@ for spec in $STEPS; do
   t "native source: step $p -> $h (stream, execute)" "0 0" "$(tip "$prev" "$h" "$s" "n_$h" --source native --cache "$W/native.bin")"
   fs=$(field UTREEXO_TIP_WITNESS "$W/f_$h.log" frames_sha256); ns=$(field UTREEXO_TIP_WITNESS "$W/n_$h.log" frames_sha256)
   t "  the same witness bytes from both sources ($p -> $h)" "$ns" "$fs"
-  t "  the same roots in the guests' statements" "$(got tip "$W/n_$h.j")" "$(got tip "$W/f_$h.j")"
+  t "  the same roots in the guests' statements" "$(got tip "$W/n_$h.journal")" "$(got tip "$W/f_$h.journal")"
   [ "$p" = "$BASE_H" ] || t "  the forest source restarted from the previous step's file (no replay)" 1 "$(grep -c 'UTREEXO_TIP_CACHE hit' "$W/f_$h.log")"
   grep -h -E 'UTREEXO_TIP_(WITNESS|CACHE|REPLAY)' "$W/f_$h.log" | cut -c1-200
-  prev=$W/f_$h.j; p=$h
+  prev=$W/f_$h.journal; p=$h
 done
 [ -n "$fs" ] || { echo "FAIL no witness digest"; fails=$((fails + 1)); }
 
@@ -66,7 +66,7 @@ for c in copy corrupt other below above; do
   [ $c = above ] && cp "$W/forest_$LAST.bin" "$W/r_$c.bin"
   [ $c = corrupt ] && printf '\x01' | dd of="$W/r_$c.bin" bs=1 seek=$(( $(stat -c %s "$W/r_$c.bin") / 2 )) conv=notrunc status=none
   [ $c = other ] && cp "$W/native.bin" "$W/r_$c.bin"
-  t "restart ($c): the step $PREV -> $LAST again (stream, execute)" "0 0" "$(tip "$W/f_$PREV.j" "$LAST" "$(st "$LASTS")" "r_$c" --source forest --cache "$W/r_$c.bin" --cache-out "$W/r_$c.out")"
+  t "restart ($c): the step $PREV -> $LAST again (stream, execute)" "0 0" "$(tip "$W/f_$PREV.journal" "$LAST" "$(st "$LASTS")" "r_$c" --source forest --cache "$W/r_$c.bin" --cache-out "$W/r_$c.out")"
   t "  the same witness bytes" "$want" "$(field UTREEXO_TIP_WITNESS "$W/r_$c.log" frames_sha256)"
   case $c in
     copy) t "  a cache hit" 1 "$(grep -c "UTREEXO_TIP_CACHE hit at $PREV" "$W/r_$c.log")";;
@@ -81,11 +81,11 @@ done
 # --cache-required (the follower's flag, review round 2 #2): the corrupt copy and the forest above P are EXIT 4, before
 # anything is replayed or written (the same files without the flag replay from genesis, above)
 for c in corrupt above; do
-  "$Z" utreexo-tip-prove "$B" "$W/f_$PREV.j" "$LAST" "$(st "$LASTS")" "$W/q_$c" --stream "$W/q_$c.bin" --base-id "$UID_" --source forest --cache "$W/r_$c.bin" \
+  "$Z" utreexo-tip-prove "$B" "$W/f_$PREV.journal" "$LAST" "$(st "$LASTS")" "$W/q_$c" --stream "$W/q_$c.bin" --base-id "$UID_" --source forest --cache "$W/r_$c.bin" \
     --cache-required --cache-out "$W/q_$c.out" > "$W/q_$c.log" 2>&1
   t "--cache-required with the $c forest: exit 4, refused, nothing replayed" "4 1 0" "$? $(grep -c UTREEXO_TIP_CACHE_REFUSED "$W/q_$c.log") $(grep -c UTREEXO_TIP_REPLAY "$W/q_$c.log")"
 done
-"$Z" utreexo-tip-prove "$B" "$W/f_$PREV.j" "$LAST" "$(st "$LASTS")" "$W/q_ok" --stream "$W/q_ok.bin" --base-id "$UID_" --source forest --cache "$W/r_copy.bin" \
+"$Z" utreexo-tip-prove "$B" "$W/f_$PREV.journal" "$LAST" "$(st "$LASTS")" "$W/q_ok" --stream "$W/q_ok.bin" --base-id "$UID_" --source forest --cache "$W/r_copy.bin" \
   --cache-required --cache-out "$W/q_ok.out" > "$W/q_ok.log" 2>&1
 t "  control: --cache-required with the good forest of $PREV runs" "0 1" "$? $(grep -c "UTREEXO_TIP_CACHE hit at $PREV" "$W/q_ok.log")"
 
