@@ -14,3 +14,4 @@ request 13, 27.11.2026: today's engine (HZE1 pack, board commands, stream.rs) fo
 14 28.11.2026 at 2d9be0e5: core image e3729469 (after review rounds 1 and 2) for the Xesktop prove (2.9)
 request 15, 28.11.2026: the CPU hzengine.exe (no CUDA) built and run beside the CUDA build, for the Windows app's prover-cpu (ROADMAP 2.9 c)
 request 16, 28.11.2026: stark-backend-pascal.patch (Pascal: no 64 KB shared-memory kernel; VPMM reservation fallback), found on Xesktop's GTX 1080 Ti
+request 17, 28.11.2026: stark-backend-pascal.patch with the unfused first-layer race fixed (308f79a1), for the 1080 Ti retest
