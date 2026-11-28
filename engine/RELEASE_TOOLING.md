@@ -39,7 +39,7 @@ its record). It does not exist yet, so all of them refuse: that is the intended 
 | hazync-engine-x86_64-linux-gnu, -cuda | none reproducible; package-release.sh stages a given binary | PENDING: a container build of hzengine CPU + CUDA on the hosts' glibc floor |
 | hazync-engine-x86_64-windows-cuda.zip | engine-windows.yml artifact | PENDING: a release step fetching it for the release commit; 2.9 (a real Windows prove) |
 | hazync-verify-x86_64-linux-gnu, .wasm, .js | release.sh step 3, package-release.sh | as before (engine verifier) |
-| hazync-zapp-<8>-x86_64-linux-gnu | build-linux-verifier.sh with the zAPP crate | built in package-release.sh (dry run below) |
+| hazync-zapp-<8>-x86_64-linux-gnu | build-linux-verifier.sh with the zAPP crate | built (dry run below) |
 | hazync-zapp-<7>.wasm / .js | each wasm/build.sh | zeroconf has no wasm module: PENDING, so not listed |
 | hazync-keys-<7>.tar.gz | package-release.sh from ENGINE_KEYS_ROOT | PENDING: reproduce/engine-ids.sh does not export the key files or vk.bin (`hzengine pack --key`); the set of published images is the freeze's |
 | worker, coordinator, run-workers | package-release.sh | PENDING 3.2 (engine-aware board) |
@@ -70,3 +70,18 @@ its record). It does not exist yet, so all of them refuse: that is the intended 
 | scripts/test-release-sign.sh | PASS; `--control` fails (8) |
 | scripts/test-release-attest.sh, test-release-ci-gate.sh, test-glibc-floor.sh | unchanged, pass |
 | shellcheck -S warning on every changed shell file | clean |
+
+## The packaging dry run (laptop, 28.11.2026, `OUT=<scratch> scripts/package-release.sh` at e6926fb9)
+
+Exit 0 in 35 min 11 s (docker builds of 8 zAPP CLIs and 8 wasm modules; the first CLI alone took 5 min 18 s, its cargo
+2 min 22 s). Staged 27 files; skipped, each with its reason on stderr: hazync-zapp-zeroconf.wasm (no module),
+hazync-keys-*.tar.gz (no reproduce/engine-release.tsv), hazync-engine-x86_64-linux-gnu[-cuda] (no release build).
+Not run here (release.sh's job): hazync-host-x86_64-linux-gnu, hazync-verify-x86_64-linux-gnu, the Windows zip.
+
+- Every wasm module is byte-identical to its round 2 pin (8be4f773, confirmed on hazync-coord at b203967a): core
+  4cbc884d, assume ee336764, deposit 69a3dbec, headers c1d551e4, hints ee444a7a, liveness 004a7aa7, statement
+  682505b5, utreexo d4cb8904.
+- Every zAPP CLI built in the hosts' ubuntu:22.04 image, passed the glibc 2.34 floor and runs (no arguments: exit 1):
+  assume 5060526d (789,424 B), deposit 2b5acd0a (829,264 B), headers 7fcd8bae (723,608 B), hints 6d597660 (688,320 B),
+  liveness ec29839d (851,184 B), statement 30d4babe (2,207,328 B), utreexo 51c21b13 (711,280 B), zeroconf 5108a634
+  (736,432 B). Their reproducibility across machines is not yet measured (a second machine's build, as for the wasm).
