@@ -12,13 +12,14 @@
 # The heights (env): BASE_H (1999), STEPS ("10000:A 20000:B 50000:B 91722:B 91812:B 91842:B 91880:B 100000:B", A/B the
 # core state), NEG_H (9000, under A, from the base), NEG2 ("10000:15000": from that step, under B), CTL_H (9000).
 # Mainnet 1..100,000 needs those block files and prep's states at 10,000 and 100,000; the engine chain 1..200 runs it with
-# BASE_H=50 STEPS="100:A 150:A 200:A" NEG_H=90 NEG2=100:180 CTL_H=90 and A = B = its state at 200.
+# BASE_H=50 STEPS="100:A 150:A 200:A" NEG_H=180 NEG2=100:180 CTL_H=90 and A = B = its state at 200 (the first spend is
+# at block 170: below it the deletion cases have nothing to tamper with).
 set -uo pipefail
 Z=$1; E=$2; KU=$3; KT=$4; B=$5; SA=$6; SB=$7; REF=$8; W=$9
 BASE_H=${BASE_H:-1999}; STEPS=${STEPS:-10000:A 20000:B 50000:B 91722:B 91812:B 91842:B 91880:B 100000:B}
 NEG_H=${NEG_H:-9000}; NEG2=${NEG2:-10000:15000}; CTL_H=${CTL_H:-9000}
 mkdir -p "$W"; S=$(cd "$(dirname "$0")/../../scripts/libzync" && pwd)
-fails=0; notcov=0
+fails=0; notcov=0; notapp=0
 t () { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1 (got '$3', want '$2')"; fails=$((fails + 1)); fi; }
 st () { [ "$1" = A ] && echo "$SA" || echo "$SB"; }
 RA=(); [ "$REF" = - ] || RA=(--ref "$REF")
@@ -53,7 +54,13 @@ t "walk($first) == walk($BASE_H) + step($first)" "$(got base "$W/basef.journal" 
 t "control: the same step untampered" 0 "$(xec "$KT" "$W/ctl.bin" "$W/ctl.journal" "$W/ctl.glog")"
 OPEN="the deletions do not open in the accumulator"
 refused () { # refused <case> <reason substring> <previous journal> <H> <core state>
+  rm -f "$W/neg.bin"
   UTREEXO_TIP_TAMPER=$1 "$Z" utreexo-tip-prove "$B" "$3" "$4" "$5" "$W/neg" --stream "$W/neg.bin" --base-id "$UID_" > "$W/neg_$1_$4.log" 2>&1
+  local hr=$?
+  # a step with nothing of that kind to tamper with is a host error, not a case: say so (neither a pass nor a fail)
+  if [ $hr != 0 ] && grep -q "^zyncapp: no " "$W/neg_$1_$4.log"; then
+    echo "not applicable: $1 (H = $4): $(grep -m1 '^zyncapp: no ' "$W/neg_$1_$4.log")"; notapp=$((notapp + 1)); return; fi
+  t "  the host wrote the tampered stream ($1, H = $4)" 0 $hr
   local e; e=$(xec "$KT" "$W/neg.bin" "$W/neg.journal" "$W/neg_$1_$4.glog"); local w; w=$(why "$W/neg_$1_$4.glog")
   t "refused in the guest: $1 (H = $4): $2" "1 yes" "$([ "$e" != 0 ] && echo 1 || echo 0) $(echo "$w" | grep -qF -- "$2" && echo yes)"
   echo "     $w"
@@ -77,5 +84,5 @@ for c in prev_roots prev_kind; do notcovered "$c (from the step at $n2f)"; done
 tT=$("$Z" core-info "$SA" | sed -n 's/^CORE height=\([0-9]*\) .*/\1/p')
 UTREEXO_TIP_TAMPER=link_drop "$Z" utreexo-tip-prove "$B" "$J" "$tT" "$SA" "$W/neg" --stream "$W/neg.bin" --base-id "$UID_" > "$W/neg_nolink.log" 2>&1
 t "link_drop with H = T is a host error (nothing to drop), not a refusal" "1 1" "$? $(grep -c 'nothing to drop' "$W/neg_nolink.log")"
-echo "($notcov cases not covered on a metering image)"
+echo "($notcov cases not covered on a metering image; $notapp not applicable to these heights)"
 [ "$fails" -eq 0 ] && echo UTREEXO_TIP_EXEC_TESTS_OK || { echo "UTREEXO_TIP_EXEC_TESTS_FAILED ($fails)"; exit 1; }
