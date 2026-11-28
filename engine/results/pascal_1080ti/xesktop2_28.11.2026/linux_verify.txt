@@ -1,0 +1,3 @@
+verify: OK (0.06 s), journal 2124 bytes sha256 20bb754bde3542a970abd49053ba5aeec82fb91123c58910325e4a8c780058d5
+Error: STARK verification failed with error: Stark verifier failed with error: Whir verification failed: merkle verification failed
+   0: Stark verifier failed with error: Whir verification failed: merkle verification failed

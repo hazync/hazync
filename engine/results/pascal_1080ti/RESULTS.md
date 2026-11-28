@@ -48,3 +48,20 @@ rerun (a) on a modern card (expect OK, journal 20bb754b), then the 1080 Ti on Xe
 
 The CPU build (hzengine.exe, no CUDA) proving block 741,000 (bundle-def keys, export 741000t), started 12:24:09;
 see xesktop_28.11.2026/ for its log when harvested.
+
+## The fix on the GTX 1080 Ti: the whole header chain PROVED on Windows (28.11.2026, second Xesktop session)
+
+Xesktop, a fresh 10x GTX 1080 Ti server (Windows 10 Pro, driver 582.28), ONE card (CUDA_VISIBLE_DEVICES=0,
+HZ_SEG_MEM_GB=7, no VPMM setting). hzengine.exe from engine-windows run 46152650102 (request 17: stark-backend-msvc.patch +
+stark-backend-pascal.patch with the race fix, 308f79a1; exe sha256 a1f0608f...). Input: the header chain 0..975,278
+(stream.bin sha256 4bb7efca..., the 26.11 reference's).
+
+- **Proved: 3,894.2 s** (707 segments at the 7 GiB cap; 15:47:30-16:52:30), rc 0; `hzengine verify` on Windows: OK (4.8 s).
+- **Verified on Linux** (hazync-coord, hzengine at /root/engine-kit, keys-hdr29): **OK, journal sha256
+  20bb754bde3542a970abd49053ba5aeec82fb91123c58910325e4a8c780058d5**, byte-identical to every Linux run (PRO 6000 266.2 /
+  268.0 s, A6000, the A40 unfused 756 s). A copy with one digit of the proof changed: refused (rc 1).
+- The first engine GPU proof on Windows, and the first on Pascal (sm_61). Peak GPU memory sampled: 11,011 MiB of 11,264
+  once (a short spike), otherwise ~6.8-7.6 GiB.
+- For scale (same input, measured): RTX PRO 6000 Workstation 268.0 s; RTX A6000 722.0 s; A40 (unfused forced) 756 s.
+
+Files: xesktop2_28.11.2026/ (the journal, the Linux verify lines).
