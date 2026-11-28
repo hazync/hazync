@@ -1332,6 +1332,20 @@ jobs:
         run: |
           cd coordinator
           python3 test_sponsor_bot_api.py --control
+      # The board on the engine (engine/BOARD_ENGINE.md): the sponsor bot's engine pods, booted on a simulated pod,
+      # and the worker's engine paths (one attempt, no ladder; a box that cannot prove stops the loop).
+      - name: Sponsor bot engine pods (test_sponsor_engine.py)
+        run: cd coordinator && python3 test_sponsor_engine.py
+      - name: Sponsor bot engine pods POSITIVE CONTROL (the RISC Zero boot on an engine pod — must FAIL)
+        run: |
+          cd coordinator
+          python3 test_sponsor_engine.py --control
+      - name: Worker on an engine host (test_worker_engine.py)
+        run: cd coordinator && python3 test_worker_engine.py
+      - name: Worker on an engine host POSITIVE CONTROL (must FAIL)
+        run: |
+          cd coordinator
+          if python3 test_worker_engine.py --control; then echo "the control passed: the test cannot fail"; exit 1; fi
       - name: Sponsorship holds (test_sponsor_holds.py)
         run: cd coordinator && python3 test_sponsor_holds.py
       - name: Sponsorship holds POSITIVE CONTROL (must FAIL)

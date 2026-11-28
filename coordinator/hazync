@@ -589,7 +589,11 @@ _HARD_ERR = ("parse bundle", "invalid type", "deserialize", "missing field", "ME
 # minutes this way and froze the board frontier. Exit EX_CONFIG so run-workers.sh stops the loop.
 _DEVICE_FATAL = ("cudaErrorNoDevice", "no CUDA-capable device", "CUDA driver version is insufficient",
                  "cudaErrorInsufficientDriver", "cudaErrorInitializationError", "CUDA_ERROR_NO_DEVICE",
-                 "forward compatibility was attempted on non supported HW")
+                 "forward compatibility was attempted on non supported HW",
+                 # The engine (HAZYNC_ENGINE, engine/BOARD_ENGINE.md): hzengine cannot load the CUDA runtime it links
+                 # (libcudart.so.12, a pod without it), or the host has no engine key directory. Permanent for the
+                 # box in the same way: every block would fail the same way, each one claimed and abandoned.
+                 "error while loading shared libraries", "HAZYNC_ENGINE_KEYS: the engine's key directory")
 
 _SEG_MIN = 18                                       # below this the segments stop repartitioning usefully
 _SEG_TOP_CACHE = {"v": False}                       # False = not yet asked (None is a valid answer)
@@ -996,7 +1000,8 @@ def _run_with_seg_retry(argv, env, work, label, _beat_range=None, _beat_pk=None,
             return
         last = err.strip()
         if any(h in last for h in _DEVICE_FATAL):
-            print(f"\nFATAL: {label}: this box has no usable CUDA device -- {_err_tail(last)}\n"
+            print(f"\nFATAL: {label}: this box cannot prove (no usable CUDA device, or the engine's CUDA runtime or "
+                  f"key directory missing) -- {_err_tail(last)}\n"
                   f"  Every prove here fails, and each retry would claim (and abandon) another block.\n"
                   f"  Stopping this worker. Fix the GPU/driver, or run a CPU build of the host.",
                   file=sys.stderr, flush=True)

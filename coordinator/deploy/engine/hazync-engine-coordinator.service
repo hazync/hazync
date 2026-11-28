@@ -1,0 +1,39 @@
+[Unit]
+Description=Hazync engine coordinator (OpenVM, engine/BOARD_ENGINE.md): the board on the engine, beside the libzync board (untouched); NOT INSTALLED until the engine board goes live
+After=network.target
+
+# The libzync coordinator's settings (deploy/libzync/hazync-lz-coordinator.service) on its own port, database and
+# directories, plus the engine's verify key: the configuration the Gate 3 dry run used (engine/results/board_dryrun,
+# 27.11.2026: "the coordinator needed no code change"). With HAZYNC_ENGINE_VK + _PIN the host's `method-id` (/api/meta)
+# is the engine image and `verify-any` checks HZE1 proof files under the pinned key; the host refuses to start a
+# check with a key file whose SHA-256 is not the pin. The pin is the published one (reproduce/engine-release.tsv, the
+# Stage 4 freeze), in board.env with the key path: EnvironmentFile, so the published values change in one place.
+# Leaves: the engine prep's (format 2), not the RISC Zero board's.
+[Service]
+User=hazync
+WorkingDirectory=/opt/hazync-engine/coordinator
+Environment=HAZYNC_LIBZYNC=1
+Environment=COORD_PORT=8920
+Environment=COORD_BIND=127.0.0.1
+Environment=COORD_DB=/var/lib/hazync-engine-board/coordinator.db
+Environment=COORD_STATE=/var/lib/hazync-engine-board/coord_state
+Environment=COORD_PROOFS=/var/lib/hazync-engine-board/proofs
+Environment=COORD_SPINE=/var/lib/hazync-engine-board/spine
+Environment=WITNESS_DIR=/var/lib/hazync-engine-board/witnesses
+Environment=HAZYNC_BRIDGE_OUT=/srv/bulk/hazync-engine-prep/leaves
+Environment=HAZYNC_HOST=/opt/hazync-engine/bin/host
+# `host libzync-genesis-tip`: the dry run's host (engine/results/board_dryrun) gave the same as the libzync board's
+Environment=GENESIS_TIP=852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167
+Environment=VERIFY_MODE=real
+Environment=SEED_RANGES=0
+Environment=HAZYNC_LZ_REORG_ACK_DIR=/var/lib/hazync-engine-board/reorg-acks
+# HAZYNC_ENGINE_VK=/opt/hazync-engine/keys-core/vk.bin and HAZYNC_ENGINE_VK_PIN=<published pin>; a missing file stops
+# the start (no unpinned board)
+EnvironmentFile=/etc/hazync-engine/board.env
+ExecStart=/usr/bin/python3 /opt/hazync-engine/coordinator/server.py
+Restart=on-failure
+RestartPreventExitStatus=3
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

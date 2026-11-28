@@ -4,10 +4,13 @@ tried ONCE, not walked down a ladder of segment sizes the engine does not have (
 
   1. `engine` from seg-po2: the ladder is a single attempt; a failing prove runs the host exactly once;
   2. a number from seg-po2 (a RISC Zero host): the ladder still walks down to 18 (unchanged);
-  3. the worker asks seg-po2 with the prove's environment (HAZYNC_ENGINE is what makes the host say `engine`).
+  3. the worker asks seg-po2 with the prove's environment (HAZYNC_ENGINE is what makes the host say `engine`);
+  4. an engine box that cannot prove at all (hzengine cannot load libcudart.so.12; no key directory) stops the worker
+     with EX_CONFIG on the first attempt, so run-workers.sh stops the loop instead of claiming block after block;
+     an ordinary failure does not.
 
   python3 test_worker_engine.py            # must PASS
-  python3 test_worker_engine.py --control  # the engine answer ignored; check 1 MUST FAIL
+  python3 test_worker_engine.py --control  # the engine answer and the engine box errors ignored; checks 1, 4 MUST FAIL
 """
 import importlib.machinery
 import importlib.util
@@ -35,8 +38,8 @@ def check(ok, what):
         FAILS.append(what)
 
 
-def fake_host(name):
-    """seg-po2: `engine` when HAZYNC_ENGINE is set, else 21; every prove fails (an ordinary error); counts runs."""
+def fake_host(name, err="block INVALID: some ordinary failure"):
+    """seg-po2: `engine` when HAZYNC_ENGINE is set, else 21; every prove fails with `err`; counts runs."""
     p = os.path.join(T, name)
     count = os.path.join(T, name + ".count")
     with open(p, "w") as f:
@@ -46,7 +49,7 @@ case "$1" in
   method-id) echo "METHOD_ID {'ab' * 32}"; exit 0 ;;
 esac
 echo x >> {count}
-echo "block INVALID: some ordinary failure" >&2
+echo "{err}" >&2
 exit 1
 """)
     os.chmod(p, os.stat(p).st_mode | stat.S_IEXEC)
@@ -88,6 +91,31 @@ env2 = {k: v for k, v in os.environ.items() if k != "HAZYNC_ENGINE"}
 want = (None, 20, 19, 18)
 got = ladder(host2, env2) if not CONTROL else (None, 20, 19, 18)
 check(got == want, f"a RISC Zero host's ladder walks 21 -> 18 as before (got {got})")
+
+# 4. an engine box that cannot prove: EX_CONFIG at once
+if CONTROL:
+    hz._DEVICE_FATAL = tuple(h for h in hz._DEVICE_FATAL
+                             if h not in ("error while loading shared libraries", "HAZYNC_ENGINE_KEYS: the engine's key directory"))
+for i, (name, msg, fatal) in enumerate((
+        ("no libcudart.so.12", "/workspace/hzengine: error while loading shared libraries: libcudart.so.12: cannot open shared object file: "
+         "No such file or directory", True),
+        ("no key directory", "thread 'main' panicked at src/engine_backend.rs:41:62:\nHAZYNC_ENGINE_KEYS: the engine's key directory: "
+         "NotPresent", True),
+        ("ordinary", "block INVALID: bad-txns-inputs-missingorspent", False))):
+    h, c = fake_host(f"engbox{i}", msg)
+    hz.HOSTBIN = h
+    hz._SEG_TOP_CACHE["v"] = False
+    env4 = dict(os.environ, HAZYNC_ENGINE="/bin/hzengine-stub")
+    code = None
+    try:
+        hz._run_with_seg_retry(["prove-range-bridge", "1"], env4, T, "block 1")
+    except SystemExit as e:
+        code = e.code
+    if fatal:
+        check(code == hz.EX_CONFIG and runs(c) == 1,
+              f"{name}: the worker stops with EX_CONFIG after one run (exit {code}, {runs(c)} runs)")
+    else:
+        check(code != hz.EX_CONFIG, f"an ordinary block failure does not stop the box (exit {str(code)[:40]})")
 
 print()
 if FAILS:

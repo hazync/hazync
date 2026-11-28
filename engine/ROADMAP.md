@@ -49,7 +49,7 @@ negative controls.
 | # | task | status |
 |---|---|---|
 | 3.1 | Tip pipeline on the engine: detection -> hints -> prove -> verified, live, timed end to end (FEASIBILITY Q17) | ☐ |
-| 3.2 | Board / coordinator (coordinator/server.py, sponsor_bot.py, run-workers.sh, spine loop): engine workers, the engine's proof format, the pod image (CUDA 12.9, glibc 2.35 host build) | ☐ |
+| 3.2 | Board / coordinator (coordinator/server.py, sponsor_bot.py, run-workers.sh, spine loop): engine workers, the engine's proof format, the pod image (CUDA 12.9, glibc 2.35 host build) ◐ 28.11: gap list engine/BOARD_ENGINE.md; run-workers engine preflight, worker stops on an engine box that cannot prove, sponsor bot engine pods (simulated-pod test), engine coordinator unit (not installed); open: the real-pod boot, the release hzengine's ldd, the board at scale (3.3), tip/fold renters (3.1) | ◐ |
 | 3.3 | Prep: leaf bundles, the trie store and history in node format 2 (regenerated from genesis) | ☐ |
 | 3.4 | Path services (zync-path, zync-serve) and the headers follower on engine proofs | ☐ |
 | 3.5 | Web: hazync.org verifier page with the engine WASM (verify_full), the headers page | ☐ |

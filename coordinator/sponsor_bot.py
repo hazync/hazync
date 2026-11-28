@@ -91,6 +91,10 @@ BRIDGE_DIR = os.environ.get("HAZYNC_BRIDGE_OUT", "")
 # A libzync coordinator (HAZYNC_LIBZYNC=1, as server.py) serves prep's leaf_<n>.bin from that directory, not the
 # original bridge's bundle_<n>.json: the bot must look for the same file, or it never rents a pod for anything.
 LIBZYNC = os.environ.get("HAZYNC_LIBZYNC") == "1"
+# The engine board (OpenVM, engine/BOARD_ENGINE.md; HAZYNC_SPONSOR_ENGINE=1, a libzync board too): pods prove with the
+# release's hzengine (CUDA) driven by its CPU product host, under the core image's key files (hazync-keys-core.tar.gz),
+# instead of the RISC Zero CUDA host. The board's /api/meta method_id is then the engine image id.
+ENGINE = os.environ.get("HAZYNC_SPONSOR_ENGINE") == "1"
 WITNESS = os.environ.get("WITNESS_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "witnesses"))
 
 # test_sponsor_bot.py --control sets these to show its cleanup and landed-proof tests can fail. Never set them otherwise.
@@ -1222,6 +1226,36 @@ echo "MID=$(./hazync-host-cuda method-id 2>&1 | grep -oE '[0-9a-f]{64}' | head -
 """
 
 
+# The engine pod (ENGINE). The release ships hzengine linked against the CUDA 12.9 runtime (libcudart.so.12: OpenVM's
+# cuda-builder links `cudart` dynamically) and not the runtime itself, and the pod image carries CUDA 12.4's: the boot
+# installs NVIDIA's cuda-cudart-12-9 package (the image has NVIDIA's apt repository) unless 12.9's runtime is already
+# there, and points LD_LIBRARY_PATH at it. Any 12.x driver runs it (CUDA minor-version compatibility) for the GPU
+# generations the release build compiled for; the smoke below proves that on this very card before anything is claimed.
+# engine.env is what every later command on the pod sources (the smoke, the worker runs).
+BOOT_SH_ENGINE = r"""#!/bin/bash
+# Written by sponsor_bot.py (ENGINE): the release's CPU host + hzengine (CUDA) + the core image's key files.
+W=/workspace; mkdir -p $W /root/.hazync; cd $W || exit 1
+nvidia-smi --query-gpu=name --format=csv,noheader | grep -q GeForce && for d in /usr/local/cuda*/compat; do [ -d "$d" ] && mv "$d" "${d}.disabled"; done
+ldconfig 2>/dev/null
+python3 -c "import cryptography" 2>/dev/null || pip install -q cryptography >/dev/null 2>&1
+for f in @FILES@; do
+  for t in 1 2 3; do [ -s $f ] && break; curl -fsSL -o $f.tmp https://github.com/hazync/hazync/releases/download/@REL@/$f && mv $f.tmp $f; done
+done
+chmod +x hazync-worker hazync-run-workers.sh hazync-host-x86_64-linux-gnu hazync-engine-x86_64-linux-gnu-cuda
+sha256sum -c --quiet want.txt && echo SHA_OK || echo SHA_BAD
+rm -rf keys-core && mkdir keys-core && tar -xzf hazync-keys-core.tar.gz -C keys-core && echo KEYS_OK || echo KEYS_BAD
+CL=/usr/local/cuda-12.9/targets/x86_64-linux/lib
+[ -e $CL/libcudart.so.12 ] || { apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1; }; }
+# no NVIDIA repository on the image (engine/scripts/pod/setup.sh installs its keyring first for the same reason)
+[ -e $CL/libcudart.so.12 ] || { curl -fsSL -o cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i cuda-keyring.deb >/dev/null 2>&1 && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1; }
+[ -e $CL/libcudart.so.12 ] && echo CUDART_OK || echo CUDART_BAD
+printf 'export HAZYNC_ENGINE=%s HAZYNC_ENGINE_KEYS=%s\nexport LD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n' "$W/hazync-engine-x86_64-linux-gnu-cuda" "$W/keys-core" "$CL" > engine.env
+. ./engine.env
+ln -sf hazync-host-x86_64-linux-gnu hazync-host
+@SMOKE@
+echo "MID=$(./hazync-host method-id 2>&1 | grep -oE '[0-9a-f]{64}' | head -1)"
+"""
+
 # The GPU smoke, per board. The original host proves block 170 from fixtures compiled into it (`prove-block`);
 # a libzync host has no fixtures and no `prove-block`, so the bot ships block 1's leaf bundle (leaf_1.bin, kept
 # by the board's pruner for exactly this) and the pod proves it as a worker would, then verifies the receipt
@@ -1235,9 +1269,27 @@ SMOKE_LIBZYNC = ('mkdir -p smoke && cp leaf_1.bin smoke/ && (cd smoke && export 
                  '|| echo "GPU_BAD $(tail -1 gpu_smoke.log | cut -c1-120)"')
 
 
-def boot_script(tag, libzync=None):
+def release_files(engine=None):
+    """The release assets a pod downloads (each must be in the signed manifest)."""
+    if ENGINE if engine is None else engine:
+        return ("hazync-worker", "hazync-run-workers.sh", "hazync-host-x86_64-linux-gnu",
+                "hazync-engine-x86_64-linux-gnu-cuda", "hazync-keys-core.tar.gz")
+    return ("hazync-worker", "hazync-run-workers.sh", "hazync-host-x86_64-linux-gnu-cuda")
+
+
+def pod_host(engine=None):
+    """The host binary on the pod, as the worker runs it."""
+    return "/workspace/hazync-host" if (ENGINE if engine is None else engine) else "/workspace/hazync-host-cuda"
+
+
+def boot_script(tag, libzync=None, engine=None):
     """The pod's boot script for release `tag`, with the GPU smoke for this board."""
     lz = LIBZYNC if libzync is None else libzync
+    if ENGINE if engine is None else engine:
+        # the engine board is a libzync board: the smoke proves block 1's leaf bundle through the CPU host + hzengine
+        smoke = SMOKE_LIBZYNC.replace("hazync-host-cuda", "hazync-host")
+        return (BOOT_SH_ENGINE.replace("@REL@", tag).replace("@FILES@", " ".join(release_files(True)))
+                .replace("@SMOKE@", smoke))
     return BOOT_SH.replace("@REL@", tag).replace("@SMOKE@", SMOKE_LIBZYNC if lz else SMOKE_CORE)
 
 
@@ -1308,7 +1360,7 @@ class SshRunner:
     """Boots a pod against the signed release and runs assigned heights on it with `hazync-worker run <n>`,
     each under its sponsorship's identity."""
 
-    FILES = ("hazync-worker", "hazync-run-workers.sh", "hazync-host-x86_64-linux-gnu-cuda")
+    FILES = release_files(False)      # the RISC Zero board's; prepare() takes release_files() (ENGINE-aware)
 
     # Nothing here reads $HOME or ~/.ssh: on the coordinator box the bot runs as `hazync`, which has no home
     # directory. Keys, known_hosts, the gpg keyring and scratch files all live under SPONSOR_BOT_HOME, and
@@ -1381,10 +1433,14 @@ class SshRunner:
                 raise
         if not self.verify_manifest():
             raise SystemExit("sponsor_bot: the release manifest's signature is not good; nothing was started")
+        if ENGINE and not LIBZYNC:
+            raise SystemExit("sponsor_bot: HAZYNC_SPONSOR_ENGINE=1 needs HAZYNC_LIBZYNC=1 (the engine board serves leaf "
+                             "bundles); nothing was started")
+        files = release_files()
         with open(os.path.join(self.dir, "SHA256SUMS.txt")) as f:
-            want = [line for line in f if line.split() and line.split()[-1] in self.FILES]
-        if len(want) != len(self.FILES):
-            raise SystemExit(f"sponsor_bot: the {tag} manifest does not list all of {', '.join(self.FILES)}")
+            want = [line for line in f if line.split() and line.split()[-1] in files]
+        if len(want) != len(files):
+            raise SystemExit(f"sponsor_bot: the {tag} manifest does not list all of {', '.join(files)}")
         with open(os.path.join(self.dir, "want.txt"), "w") as f:
             f.write("".join(want))
         if LIBZYNC:
@@ -1439,8 +1495,9 @@ class SshRunner:
                     detail = "ssh or scp failed"
                 else:
                     out = self._ssh(pod, "bash /workspace/boot.sh", 1200 if LIBZYNC else 900).stdout
-                    if "SHA_OK" in out and "GPU_OK" in out and f"MID={self.method_id}" in out:
-                        return True, "SHA_OK GPU_OK MID ok"
+                    need = ("SHA_OK", "GPU_OK") + (("KEYS_OK", "CUDART_OK") if ENGINE else ())
+                    if all(n in out for n in need) and f"MID={self.method_id}" in out:
+                        return True, " ".join(need) + " MID ok"
                     detail = " ".join(out.split())[-200:] or "boot printed nothing"
             except subprocess.TimeoutExpired:
                 detail = "boot timed out"
@@ -1464,10 +1521,10 @@ class SshRunner:
                     or self._ssh(pod, f"chmod 600 {dest}/key.hex").returncode != 0):
                 raise StartFailed(f"could not copy identity {w['tag']} to {pod.name}")
             copied.add(w["tag"])
-        lines = ["#!/bin/bash", "cd /workspace"]
+        lines = ["#!/bin/bash", "cd /workspace"] + ([". /workspace/engine.env"] if ENGINE else [])
         for w in work:
             lines.append(f"HAZYNC_HOME=/root/.hazync-ids/{w['tag']} BUNDLE_DIR=/workspace/bundles "
-                         f"WITNESS_DIR=/workspace/witnesses HAZYNC_HOST=/workspace/hazync-host-cuda "
+                         f"WITNESS_DIR=/workspace/witnesses HAZYNC_HOST={pod_host()} "
                          f"./hazync-worker run {int(w['height'])}; echo \"DONE {int(w['height'])} rc=$?\"")
         lines.append("echo ALLDONE")
         script = os.path.join(self.dir, f"run-{pod.id}.sh")

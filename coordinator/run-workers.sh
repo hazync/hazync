@@ -18,6 +18,7 @@
 #
 # Env:
 #   HAZYNC_HOST   path to the prover binary            (required)
+#   HAZYNC_ENGINE, HAZYNC_ENGINE_KEYS  the OpenVM prover (hzengine) and its image's key directory: the engine board
 #   COORD_URL     coordinator base URL                 (default https://api.hazync.org)
 #   HAZYNC_BASE   Core/secp source root                (default $HOME/hazync-build)
 #   LOG_DIR       per-worker logs                      (default $HOME/hazync-workers)
@@ -167,6 +168,20 @@ fi
 # `HAZYNC_HOST=./hazync-host-...` gives) was not found there, and the self-test blamed the GPU (2026-11-12).
 case "$HAZYNC_HOST" in /*) ;; *) HAZYNC_HOST="$PWD/$HAZYNC_HOST" ;; esac
 export HAZYNC_HOST
+# The engine (OpenVM, engine/BOARD_ENGINE.md): HAZYNC_ENGINE = the hzengine binary, HAZYNC_ENGINE_KEYS = the image's key
+# directory (hazync-keys-core.tar.gz unpacked). The host proves through them; checked here, before anything is claimed,
+# because a missing key file otherwise fails each block in turn, and made absolute for the same reason as HAZYNC_HOST.
+if [ -n "${HAZYNC_ENGINE:-}" ]; then
+    [ -f "$HAZYNC_ENGINE" ] && [ -x "$HAZYNC_ENGINE" ] || { echo "HAZYNC_ENGINE is not an executable file: $HAZYNC_ENGINE" >&2; exit 1; }
+    case "$HAZYNC_ENGINE" in /*) ;; *) HAZYNC_ENGINE="$PWD/$HAZYNC_ENGINE" ;; esac
+    : "${HAZYNC_ENGINE_KEYS:?HAZYNC_ENGINE is set: set HAZYNC_ENGINE_KEYS to the key directory of the image too}"
+    case "$HAZYNC_ENGINE_KEYS" in /*) ;; *) HAZYNC_ENGINE_KEYS="$PWD/$HAZYNC_ENGINE_KEYS" ;; esac
+    for f in sdk.pk agg.vk openvm.toml guest.vmexe baseline.json; do
+        [ -s "$HAZYNC_ENGINE_KEYS/$f" ] || { echo "HAZYNC_ENGINE_KEYS ($HAZYNC_ENGINE_KEYS) has no $f: unpack the release's hazync-keys-core.tar.gz there" >&2; exit 1; }
+    done
+    export HAZYNC_ENGINE HAZYNC_ENGINE_KEYS
+    echo "engine          : $HAZYNC_ENGINE (keys $HAZYNC_ENGINE_KEYS)"
+fi
 [ -x "$CLI" ] || { echo "contributor CLI not found next to this script: $CLI" >&2; exit 1; }
 export HAZYNC_BASE="${HAZYNC_BASE:-$HOME/hazync-build}"
 mkdir -p "$LOG_DIR"
