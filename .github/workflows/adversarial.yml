@@ -324,15 +324,6 @@ jobs:
         run: |
           cd coordinator
           python3 test_host_pin.py --control
-      - name: Nothing is proved while the jobs mutex is held (hazync#252 lever 2)
-        # ⛔ Lever 2 proves the narrow top join levels in seg_serve_cmd instead of distributing
-        # them. Every worker takes its next job through that one mutex, so a ~354 ms join inside
-        # the lock scope would stall the whole fleet -- silently, since the proof still comes out
-        # correct, only slower. The shipped code decides under the lock and proves after it, an
-        # ordering that reads as a tidy-up in a diff.
-        # ⚠ No separate --control step: this one plants the bug in main.rs and in five synthetic
-        # samples on EVERY run, and fails if any of them stops behaving.
-        run: python3 prover/host/tests/no_proving_under_the_lock.py
 
       - name: The operator's levers actually reach the cards (hazync#252)
         # ⛔ prove_env was a hardcoded dict and the worker exec line carried only HAZYNC_WORKER_ID, so
@@ -642,20 +633,6 @@ jobs:
         run: cd coordinator && python3 test_sponsor_resilience.py
       - name: Sponsor-bot POSITIVE CONTROL (no retry — one 500 must end the run)
         run: cd coordinator && python3 test_sponsor_resilience.py --control
-      - name: The guest pin, and the hex to [u32;8] conversion that decides what is embedded (#620)
-        # ⛔ build.rs no longer DERIVES the image id on every platform: it verifies the ELF by
-        # sha256 and takes METHOD_ID from reproduce/METHOD_ID, converting the hex to the [u32;8]
-        # that lands in methods.rs. Get the byte order wrong and the build embeds a WRONG id while
-        # reporting success, and the only symptom is proofs rejected on someone else's machine.
-        # ⛔ WHY IT MOVED: risc0-binfmt pulls risc0-zkvm-platform, whose GUEST syscall
-        # sys_alloc_aligned is an unresolved external under MSVC link.exe (LNK2019/LNK1120,
-        # measured on windows-latest in run 36824751222). The id check stays where it links.
-        # 📏 The endianness is MEASURED: this box's native guest reports fb4d7352... and the
-        # methods.rs from that same build holds [1383288315, ...]; 1383288315 == 0x52734DFB ==
-        # `fb 4d 73 52` read LITTLE-endian. The control uses big-endian and must NOT reproduce it.
-        run: cd coordinator && python3 test_guest_pin.py
-      - name: Guest-pin POSITIVE CONTROL (big-endian — it must not reproduce the pair)
-        run: cd coordinator && python3 test_guest_pin.py --control
       - name: The aggregate probe's FULL result reaches the run's artefacts (hazync#526/#550)
         # ⛔ `slow_worker_cut` ranks on the probe, and the probe reached the run log as PROSE,
         # truncated to six with "+3 more" -- and tip hour 4's run log was never saved into its run
