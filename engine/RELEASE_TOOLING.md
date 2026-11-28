@@ -36,7 +36,7 @@ its record). It does not exist yet, so all of them refuse: that is the intended 
 | assets | build route | state |
 |---|---|---|
 | hazync-host-x86_64-linux-gnu | prover/build-release.sh cpu (release.sh step 2) | PENDING cutover C8 (RISC Zero backend removed first); the CUDA product host is dropped (proving is hzengine's): to confirm |
-| hazync-engine-x86_64-linux-gnu, -cuda | none reproducible; package-release.sh stages a given binary | PENDING: a container build of hzengine CPU + CUDA on the hosts' glibc floor |
+| hazync-engine-x86_64-linux-gnu, -cuda | none reproducible; package-release.sh stages a given binary | PENDING: a container build of hzengine CPU + CUDA on the hosts' glibc floor, WITH engine/ci/stark-backend-pascal.patch (and any other engine/ci patch that is not MSVC-only) applied as engine/ci/openvm-patches.sh does on Windows: without it a Pascal card fails on Linux too (the 8 TB VPMM reservation, the 64 KB shared-memory kernel, and the unfused path's race; engine/results/pascal_1080ti) |
 | hazync-engine-x86_64-windows-cuda.zip | engine-windows.yml artifact | PENDING: a release step fetching it for the release commit; 2.9 (a real Windows prove) |
 | hazync-verify-x86_64-linux-gnu, .wasm, .js | release.sh step 3, package-release.sh | as before (engine verifier) |
 | hazync-zapp-<8>-x86_64-linux-gnu | build-linux-verifier.sh with the zAPP crate | built (dry run below) |
