@@ -34,7 +34,7 @@ is re-made on that image.
 
 | | |
 |---|---|
-| size | 334,454 bytes raw, 133,615 gzipped |
-| sha256 (this commit, `./build.sh`) | `144a764dbbe369580d4dac03c4ae2b0358ad714c1bbab2de0d9bbe22e02f8b23` (engine/openvm, 28.11.2026: the first build; OpenVM v2.1.0 patched (engine/scripts/wasm_ovm.sh) as every module; built in the published image, the laptop. The second-machine check (hazync-coord, a fresh clone) is PENDING) |
+| size | 335,291 bytes raw, 134,031 gzipped |
+| sha256 (this commit, `./build.sh`) | `174bf4fcf0f9e4d351e0976cda87b9fa416d0532ffeb16c3c698ba4eff1ada22` (engine/openvm 34adaa2d, review round 3's reader fixes (every reader says when an image id is the caller's; a coinbase deposit needs 100 confirmations; the zeroconf module frees its frame) and corecheck's bounded caches (R3-5 L4); built in the published image, HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1, the laptop, a clean worktree of 34adaa2d, 28.11.2026; the second-machine check is PENDING). Before it `144a764dbbe369580d4dac03c4ae2b0358ad714c1bbab2de0d9bbe22e02f8b23` (engine/openvm, 28.11.2026: the first build; OpenVM v2.1.0 patched (engine/scripts/wasm_ovm.sh) as every module; built in the published image, the laptop. The second-machine check (hazync-coord, a fresh clone) is PENDING) |
 | reproduces | only with the same Rust and at the default stage path, as the core's (swiftsync-verify-wasm/README.md) |
 | tests | `test-zeroconf.mjs` 23/23 (the real proof verified in the module in about 60 ms on the laptop under Node), run by `../test.sh` |
