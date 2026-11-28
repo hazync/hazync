@@ -186,14 +186,22 @@ pub fn gpu_share() -> usize {
 
 /// The segment cap, GiB. HZ_SEG_MEM_GB when set. Else, on a card of 40 GiB or more: memory / share - 4, at most 24
 /// (A6000: 24 alone, 20 for two, 12 for three — each the measured setting; 32 makes the prover refuse its own trace,
-/// "nonzero root sum"). Smaller cards and CPU: OpenVM's default.
+/// "nonzero root sum"). On a smaller GPU: memory / share - 7, at least 4 (GTX 1080 Ti, 11 GiB, Windows, 28.11.2026:
+/// OpenVM's default cap ran block 976,379's chunk provers out of memory; 4 GiB proved it with ~6.5-7.2 GiB in use, so a
+/// segment needs roughly its cap plus 3 GiB, and WDDM keeps part of the card; 16-32 GiB cards: not yet measured).
+/// CPU (no GPU): OpenVM's default.
 pub fn seg_cap_gib(share: usize) -> Option<usize> {
     if let Some(gb) = std::env::var("HZ_SEG_MEM_GB").ok().and_then(|v| v.parse::<usize>().ok()) {
         return Some(gb);
     }
-    let m = gpu_mem_gib().filter(|&m| m >= BIG_CARD_GIB)?;
+    let m = gpu_mem_gib()?;
     // nvidia-smi gives an A6000 as 49,140 MiB (47.99 GiB): round, so 3 provers get the measured 12, not 11
-    Some(((m / share as f64).round() as usize).saturating_sub(4).clamp(4, 24))
+    let per = (m / share as f64).round() as usize;
+    if m >= BIG_CARD_GIB {
+        Some(per.saturating_sub(4).clamp(4, 24))
+    } else {
+        Some(per.saturating_sub(7).max(4))
+    }
 }
 
 /// The engine's loaded state: SDK from cached keys, plus the guest once built.
