@@ -4,12 +4,14 @@
 //! Input:  core_id, the core tip journal (a ChainState), the chunk journal (a speculative chunk proved by the same core
 //!         image for height tip+1 and the tip's MTP, txproofs §7 Phase A), network code (0 mainnet, 1 signet, 2 regtest), the record index of T in the
 //!         chunk, and one coin-log path per input of T.
-//! Checks: env::verify both journals under core_id (assumptions); check_core_statement; the chunk is speculative (zero
+//! Checks: env::verify both journals under core_id (assumptions); check_core_statement with the network's PINNED genesis
+//!         anchor (so the statement itself says the core chain starts at genesis); the chunk is speculative (zero
 //!         hash and time), for height tip+1 and MTP(tip), all_valid; T's record is whole (its first and only run,
 //!         covering every input); every input's coin leaf is unspent at the tip.
 //! Commits: core_id, the tip it rests on, T's txid and wtxid, its fee, weight, sigops.
-//! ⚠ Not "T WILL confirm": a conflicting transaction can still be mined first. It says T is valid now, against the
-//!   proven tip, as Core's mempool acceptance would (scripts and the coins), with its inputs unspent at that tip.
+//! ⚠ Not "T WILL confirm": a conflicting transaction can still be mined first. It says T is CONSENSUS-valid for the
+//!   block after the proven tip (Core's transaction rules and scripts), with its inputs unspent at that tip. No relay
+//!   policy runs (standardness, minimum fee, dust): a T this accepts can still fail to propagate.
 //! ⚠ Inputs from unconfirmed parents are not in the log: such a T is refused.
 #![no_main]
 extern crate alloc;
@@ -57,6 +59,28 @@ pub struct ZeroConf {
 pub const KIND_ZYNC_ZEROCONF: u32 = 0x5A5A_0001;
 const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
 
+/// The networks' PINNED genesis anchors (swiftsync-verify IMAGES `genesis_anchor_hex`, HANDOVER.md; regtest: zapps/corecheck
+/// REGTEST_IMAGE, scripts/libzync/genesis_anchor_id.py regtest): checked here, as the hints and utreexo guests do, so a
+/// core chain proved from any other state is refused in the guest, not only by the reader (review R2-6 #4, R2-5 #2).
+const MAINNET_ANCHOR: [u8; 32] = hex32("852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167");
+const SIGNET_ANCHOR: [u8; 32] = hex32("3b67ead0618b7786b001525b68c7b088405d6a577292838361cc07e5bb938827");
+const REGTEST_ANCHOR: [u8; 32] = hex32("99509fc506d022f06dfd72bb146fc894718ce8047e69e10b201e1a78d4bccf63");
+
+const fn nib(c: u8) -> u8 {
+    if c >= b'a' { c - b'a' + 10 } else { c - b'0' }
+}
+
+const fn hex32(s: &str) -> [u8; 32] {
+    let b = s.as_bytes();
+    let mut o = [0u8; 32];
+    let mut i = 0;
+    while i < 32 {
+        o[i] = nib(b[2 * i]) << 4 | nib(b[2 * i + 1]);
+        i += 1;
+    }
+    o
+}
+
 struct Rd<'a> { w: &'a [u32], i: usize }
 impl Rd<'_> {
     fn u(&mut self) -> u32 { let x = *self.w.get(self.i).expect("chunk journal truncated"); self.i += 1; x }
@@ -80,10 +104,10 @@ fn main() {
     // the network: 0 mainnet, 1 signet, 2 regtest (one word; a mainnet or signet stream is the same bytes as when this
     // was `signet: bool`)
     let net: u32 = env::read();
-    let network = match net {
-        0 => facts::Network::Mainnet,
-        1 => facts::Network::Signet,
-        2 => facts::Network::Regtest,
+    let (network, genesis_anchor) = match net {
+        0 => (facts::Network::Mainnet, &MAINNET_ANCHOR),
+        1 => (facts::Network::Signet, &SIGNET_ANCHOR),
+        2 => (facts::Network::Regtest, &REGTEST_ANCHOR),
         _ => panic!("unknown network {net}"),
     };
     let rec_index: u32 = env::read();
@@ -92,7 +116,7 @@ fn main() {
     env::verify(core_id, &chunk_journal).expect("the chunk receipt does not verify under core_id");
     let j: ChainState = risc0_zkvm::serde::from_slice(&words(&tip_journal)).expect("tip journal is not a ChainState");
     let st = facts::CoreStatement { kind: j.kind, version: j.version, profile: j.profile, self_id: &j.self_id, anchor_id: &j.anchor_id, live_set: j.live_set as u64 };
-    facts::check_core_statement(&st, &core_id, 2, network, false, &j.anchor_id).unwrap_or_else(|e| panic!("core statement: {e}"));
+    facts::check_core_statement(&st, &core_id, 2, network, false, genesis_anchor).unwrap_or_else(|e| panic!("core statement: {e}"));
     let mut t = j.recent_times.clone();
     t.sort_unstable();
     let mtp = t[t.len() / 2];
