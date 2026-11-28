@@ -374,6 +374,25 @@ raises `RuntimeError: main thread is not in main loop`, intermittently, dependin
 Scheduling with `after()` from a thread is the same class of bug. Worker threads now snapshot every
 variable before they start and post results back through a queue drained on the main thread.
 
+## On the engine (OpenVM): host.exe drives, hzengine.exe proves (28.11.2026)
+
+From the engine release the prover is `hzengine.exe`; `host.exe` (the product host, CPU) only drives it: it prepares
+each block's input and runs the board's commands, and with `HAZYNC_ENGINE` / `HAZYNC_ENGINE_KEYS` set it hands every
+proof to the engine. The app keeps one prover path, host.exe, and finds the engine's parts BESIDE it
+(`supervisor.engine_sidecar`): `hzengine.exe` (+ `cudart64_12.dll`) and `keys\` (the release's
+`hazync-keys-core.tar.gz` unpacked), the layout the installer writes in `prover\` and `prover-cpu\`. Your own
+`HAZYNC_ENGINE` + `HAZYNC_ENGINE_KEYS` win over that layout. Then:
+
+- the worker's environment carries both variables (`worker_env`);
+- the image check asks the host in that environment, so it compares the ENGINE image (read from `keys\image.json`)
+  with the board's (`check_host_binary`), after checking hzengine.exe can load here (the CUDA build needs the NVIDIA
+  driver's nvcuda.dll, as the CUDA host did) and the key folder is whole (`check_engine`);
+- the first-run checklist's prover step is done only when all three parts are usable.
+
+A host.exe with nothing beside it is a RISC Zero host and is handled exactly as before. Tests: `python3
+test_engine.py` (and `--control`, the app without the engine path, which must fail). What a real Windows card still
+has to show: engine/WINDOWS_TEST.md.
+
 ## Getting the prover
 
 `hazync-worker` is a public release asset and downloads with no login (measured: HTTP 200

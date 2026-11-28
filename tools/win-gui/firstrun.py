@@ -446,6 +446,13 @@ def setup_steps(cfg, python_exe=None):
     hgood = bool(hinfo and hinfo.get("startable"))
     if hinfo:
         detail = supervisor.host_kind_sentence(hinfo)
+        # ⭐ On the engine the host only drives: hzengine.exe beside it proves, with the image's keys\ folder
+        # (supervisor.engine_sidecar). Both must be usable too, or "ready" would be said of a prover that cannot prove.
+        side = supervisor.engine_sidecar(h)
+        if side:
+            eok, ewhy, _ = supervisor.check_engine(side)
+            hgood = hgood and eok
+            detail = f"{detail}; proves with {ewhy}" if eok else f"{detail}; but {ewhy}"
     else:
         found = find_hosts()
         detail = ("not set. " + (f"Found one at {found[0]['path']}" if found

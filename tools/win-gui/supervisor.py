@@ -82,6 +82,83 @@ EX_TEMPFAIL = 75    # nothing to claim right now — a busy board, not a fault
 
 HEX64 = re.compile(r"\b[0-9a-f]{64}\b")
 
+# ── the engine (OpenVM) prover beside the product host ───────────────────────────────────────────────────────────
+#
+# ⭐ ON THE ENGINE THE PROVING IS hzengine.exe's, AND host.exe ONLY DRIVES IT (engine/RELEASE_TOOLING.md). The worker
+# runs `host prove-range-bridge` / `fold-range` / `seg-po2` exactly as before; with HAZYNC_ENGINE (hzengine) and
+# HAZYNC_ENGINE_KEYS (the image's key folder) in its environment the host hands every proof to the engine and
+# `host method-id` prints the ENGINE image id, read from <keys>/image.json (prover/host/src/engine_backend.rs).
+# So the app's model stays "one prover path, host.exe": the engine's two parts are found BESIDE it, in the layout the
+# installer writes (prover\host.exe, prover\hzengine.exe + cudart64_12.dll, prover\keys\ = the release's
+# hazync-keys-core.tar.gz unpacked). The person's own HAZYNC_ENGINE / HAZYNC_ENGINE_KEYS win over that layout.
+# ⚠ A host.exe with no hzengine.exe beside it and no such environment is a RISC Zero host, handled as it always was.
+ENGINE_EXE_NAMES = ("hzengine.exe", "hzengine")
+ENGINE_KEYS_DIR = "keys"
+# What the key tarball holds (scripts/package-release.sh KEYFILES). The host reads image.json; hzengine the rest.
+ENGINE_KEY_FILES = ("sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.json", "image.json", "vk.bin")
+# The core image this app is built for, on the engine. ⚠ NOT YET PUBLISHED: today's post-review core image
+# (engine/reviews/round2, 27.11.2026); the Stage 4 freeze writes the published one into reproduce/engine-release.tsv
+# and this constant must follow it (the board's own answer, board_image, always wins over it).
+CANONICAL_ENGINE_IMAGE_ID = "e3729469cd8222cce0c60b881b8ce3feb12c895209630bf7ca0cc988a25d4024"
+
+
+def engine_sidecar(host_path, base_env=None):
+    """{"engine", "keys", "source"} when `host_path` drives the engine prover, else None.
+
+    `source` is "environment" (the person's HAZYNC_ENGINE + HAZYNC_ENGINE_KEYS, both set) or "beside" (hzengine.exe in
+    the host's own folder, keys\ beside it). The keys folder is NOT required to exist here: check_engine says what is
+    missing, which is more use to a person than silently falling back to a RISC Zero reading of the same host."""
+    env = base_env if base_env is not None else os.environ
+    e, k = env.get("HAZYNC_ENGINE", ""), env.get("HAZYNC_ENGINE_KEYS", "")
+    if e and k:
+        return {"engine": e, "keys": k, "source": "environment"}
+    if not host_path:
+        return None
+    try:
+        d = Path(host_path).resolve().parent
+    except OSError:
+        return None
+    for n in ENGINE_EXE_NAMES:
+        if (d / n).is_file():
+            return {"engine": str(d / n), "keys": str(d / ENGINE_KEYS_DIR), "source": "beside"}
+    return None
+
+
+def engine_env(host_path, base_env=None):
+    """`base_env` (default os.environ) plus HAZYNC_ENGINE / HAZYNC_ENGINE_KEYS when the host drives the engine."""
+    env = dict(base_env if base_env is not None else os.environ)
+    side = engine_sidecar(host_path, env)
+    if side:
+        env["HAZYNC_ENGINE"], env["HAZYNC_ENGINE_KEYS"] = side["engine"], side["keys"]
+    return env
+
+
+def missing_engine_keys(keys_dir):
+    """The key files the engine needs that are not in `keys_dir` (all of them when the folder is absent)."""
+    d = Path(keys_dir)
+    return [f for f in ENGINE_KEY_FILES if not (d / f).is_file()]
+
+
+def check_engine(side):
+    """(ok, sentence, fatal) for the engine's two parts: hzengine.exe can start here, and the key folder is whole.
+
+    ⛔ The CUDA hzengine.exe imports nvcuda.dll, exactly like the CUDA host did (exit 127 on a GPU-less CI runner,
+    engine-windows run 45655298948), so "it would not start" is said as a driver fact, never as a bad download."""
+    exe = Path(side["engine"])
+    if not exe.is_file():
+        return False, f"the engine prover {exe} is not there", True
+    gone = missing_engine_keys(side["keys"])
+    if gone:
+        return False, (f"the engine's key folder {side['keys']} is missing {', '.join(gone)}: unpack the release's "
+                       "hazync-keys-core.tar.gz there (or reinstall Hazync)"), True
+    info = classify_host(exe)
+    if info["kind"] == "cuda" and not info["driver_present"]:
+        return False, (f"{exe} is the CUDA build of the engine prover and no NVIDIA driver was found, so Windows "
+                       "cannot load it here. That is not a bad download: install the NVIDIA driver, or use the "
+                       "engine prover's CPU build on this machine."), True
+    kind = {"cuda": "the CUDA build of hzengine", "cpu": "the CPU build of hzengine"}.get(info["kind"], "hzengine")
+    return True, f"{kind} ({exe}) with the key folder {side['keys']}", False
+
 
 class CheckResult:
     """One named check with a verdict, its evidence, and whether it blocks starting."""
@@ -457,6 +534,9 @@ def check_host_binary(host_path, board_id=None, board_why=""):
     if not host.is_file():
         return CheckResult("host binary", False, f"no such file: {host}", fatal=True)
     info = classify_host(host)
+    side = engine_sidecar(host)
+    if side:
+        return _check_engine_host(host, info, side, board_id, board_why)
     rc, out = _run([str(host), "method-id"], timeout=120)
     if rc != 0:
         # ⛔⛔ A BINARY THAT WILL NOT START IS NOT THE SAME AS A BAD BINARY, and conflating them sent
@@ -521,11 +601,40 @@ def check_host_binary(host_path, board_id=None, board_why=""):
                        f"canonical METHOD_ID {got[:16]}…{unasked} — {host_kind_sentence(info)}")
 
 
+def _check_engine_host(host, info, side, board_id, board_why):
+    """check_host_binary for a host that drives the engine: hzengine and its keys first, then the image id the host
+    reads from the keys (image.json), compared with the board's (or, unknown, with CANONICAL_ENGINE_IMAGE_ID).
+    ⚠ No embedded-guest fallback: an engine image is not inside host.exe, it is the key folder."""
+    ok, why, fatal = check_engine(side)
+    if not ok:
+        return CheckResult("host binary", False, why, fatal=fatal)
+    rc, out = _run([str(host), "method-id"], env=engine_env(host), timeout=120)
+    m = HEX64.search(out or "") if rc == 0 else None
+    if not m:
+        return CheckResult("host binary", False,
+                           f"`method-id` with the engine prover exited {rc} and printed no image id: "
+                           f"{(out or '').strip()[:160]}", fatal=True)
+    got = m.group(0)
+    want = board_id or CANONICAL_ENGINE_IMAGE_ID
+    if got != want:
+        whose = "the board checks proofs against" if board_id else "this app was built for"
+        unasked = f" (the board's image is unknown: {board_why})" if (board_why and not board_id) else ""
+        return CheckResult("host binary", False,
+                           f"the engine keys in {side['keys']} are for image {got[:16]}…, but {whose} "
+                           f"{want[:16]}…, so every proof would be rejected (exit {EX_CONFIG}){unasked}. "
+                           "Install the latest Hazync (https://github.com/hazync/hazync/releases/latest): it "
+                           "carries the matching keys.", fatal=True)
+    return CheckResult("host binary", True,
+                       f"engine image {got[:16]}… " + ("matches the board" if board_id else "is the one this app was built for")
+                       + f" — {why}")
+
+
 def prover_image(host_path, timeout=120):
-    """The image id `host method-id` prints, or None (not there, will not run, or printed none)."""
+    """The image id `host method-id` prints, or None (not there, will not run, or printed none). With the engine beside
+    the host (engine_sidecar) the host is asked in the engine's environment, so this is the ENGINE image id."""
     if not host_path or not Path(host_path).is_file():
         return None
-    rc, out = _run([str(host_path), "method-id"], timeout=timeout)
+    rc, out = _run([str(host_path), "method-id"], env=engine_env(host_path), timeout=timeout)
     m = HEX64.search(out or "") if rc == 0 else None
     return m.group(0) if m else None
 
@@ -641,7 +750,8 @@ def stale_prover_advice(host, got, board_id, kind="cuda", installed=None, image_
         "Update Hazync to keep proving": that is not a fault on this PC.
     Returns {"head", "text", "action" ("switch" | "update" | None), "kind", "path"}. `installed` defaults to
     installed_provers(); `image_of` to prover_image (runs the installed prover, so call it off the Tk thread)."""
-    want = board_id or CANONICAL_METHOD_ID
+    canonical = CANONICAL_ENGINE_IMAGE_ID if engine_sidecar(host) else CANONICAL_METHOD_ID
+    want = board_id or canonical
     if not got or got == want:
         return None
     installed = installed_provers() if installed is None else installed
@@ -656,7 +766,7 @@ def stale_prover_advice(host, got, board_id, kind="cuda", installed=None, image_
             return {"head": "Stopped \u2014 the prover in use is an old copy",
                     "text": said + f" The prover installed with Hazync, {p}, makes the board's image: use that one.",
                     "action": "switch", "kind": k, "path": p}
-    moved = bool(board_id) and board_id != CANONICAL_METHOD_ID
+    moved = bool(board_id) and board_id != canonical
     if moved:
         return {"head": "Update Hazync to keep proving",
                 "text": said + " The board has moved to a new image since this copy of Hazync was made; "
@@ -970,6 +1080,10 @@ def worker_env(host_path, worker_path, identity_dir, bundle_dir, coord_url=None,
         env["HAZYNC_SPPARK_MIN_MAJOR"] = str(spark_min_major)
     if host_path:
         env["HAZYNC_HOST"] = str(host_path)
+        # ⭐ the engine's two parts beside the host (engine_sidecar): the worker's host then proves with hzengine
+        side = engine_sidecar(host_path, env)
+        if side:
+            env["HAZYNC_ENGINE"], env["HAZYNC_ENGINE_KEYS"] = side["engine"], side["keys"]
     if identity_dir:
         env["HAZYNC_HOME"] = str(identity_dir)
     if bundle_dir:

@@ -11,6 +11,9 @@
 ;   {app}\prover\host.exe, cudart*.dll the release's Windows CUDA prover (found first by firstrun.candidate_dirs())
 ;   {app}\prover-cpu\host.exe          the release's Windows CPU prover (from v0.26.1, when /DProverCpuDir is given):
 ;                                      for a machine with no NVIDIA card the prover supports; slower, and the app says so
+; The ENGINE release (OpenVM, ROADMAP 2.9) adds, in the same folders: hzengine.exe (the prover; host.exe only drives it)
+; and keys\ (the image's key files, the release's hazync-keys-core.tar.gz unpacked). The app finds them beside host.exe
+; (supervisor.engine_sidecar). Both are optional here, so the RISC Zero release's installer builds as before.
 ;
 ; ⛔ THE SIGNING KEY IS NEVER TOUCHED. It lives in %USERPROFILE%\.hazync (the only thing that ties proven blocks to
 ; a name); this installs and uninstalls only {app}. Settings live there too, so they survive an upgrade.
@@ -70,9 +73,13 @@ Source: "{#Worker}"; DestDir: "{app}"; DestName: "hazync-worker"; Flags: ignorev
 Source: "{#ProverDir}\host.exe"; DestDir: "{app}\prover"; Flags: ignoreversion
 ; cudart64_*.dll, and the Visual C++ runtime DLLs the workflow put beside host.exe (app-local, review of a04038ce M1)
 Source: "{#ProverDir}\*.dll"; DestDir: "{app}\prover"; Flags: ignoreversion
+Source: "{#ProverDir}\hzengine.exe"; DestDir: "{app}\prover"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProverDir}\keys\*"; DestDir: "{app}\prover\keys"; Flags: ignoreversion skipifsourcedoesntexist
 #ifdef ProverCpuDir
 Source: "{#ProverCpuDir}\host.exe"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion
 Source: "{#ProverCpuDir}\*.dll"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProverCpuDir}\hzengine.exe"; DestDir: "{app}\prover-cpu"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#ProverCpuDir}\keys\*"; DestDir: "{app}\prover-cpu\keys"; Flags: ignoreversion skipifsourcedoesntexist
 #endif
 
 [INI]
@@ -94,6 +101,10 @@ Filename: "{app}\Hazync.exe"; Description: "Open Hazync"; Flags: nowait postinst
 Type: filesandordirs; Name: "{app}\prover-cpu"
 ; and the CUDA prover's DLLs: a cudart64_*.dll or VC runtime from an older release must not linger beside a newer host.exe
 Type: files; Name: "{app}\prover\*.dll"
+; and the engine's parts: an old hzengine.exe or another image's keys must not survive beside a newer host.exe (the
+; app would read the old image from keys\image.json)
+Type: files; Name: "{app}\prover\hzengine.exe"
+Type: filesandordirs; Name: "{app}\prover\keys"
 
 [UninstallDelete]
 ; only what the app itself writes inside {app}; %USERPROFILE%\.hazync (the key) is never touched

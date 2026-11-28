@@ -122,6 +122,24 @@ jobs:
           [ -n "$tag" ] || tag=$(gh release view -R hazync/hazync --json tagName --jq .tagName)
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::not a release tag: '$tag'"; exit 1; }
           mkdir -p rel && cd rel
+          # ⭐ THE ENGINE (OpenVM) RELEASE (engine/RELEASE_TOOLING.md, ROADMAP 2.9): hzengine.exe proves, the product host
+          # only drives it (prep input, the board's commands), the image is a key folder. Chosen by what the RELEASE
+          # carries, so a PR still builds around the latest release whichever prover that is.
+          ENGINE_ZIP=hazync-engine-x86_64-windows-cuda.zip
+          if gh release download "$tag" -R hazync/hazync -p "$ENGINE_ZIP" 2>/dev/null; then
+            # The driver: the product host for Windows, CPU-only (it proves nothing itself on the engine; its CUDA build
+            # is dropped, user 28.11.2026). The image's keys: hazync-keys-core.tar.gz, unpacked into prover\keys.
+            DRIVER=hazync-host-x86_64-windows-cpu.zip; KEYS=hazync-keys-core.tar.gz
+            gh release download "$tag" -R hazync/hazync -p "$DRIVER" -p "$KEYS" -p 'hazync-worker' \
+              || { echo "::error::$tag carries $ENGINE_ZIP but not $DRIVER, $KEYS and hazync-worker (all three needed)"; exit 1; }
+            files="$ENGINE_ZIP $DRIVER $KEYS hazync-worker"
+            # The engine's CPU build (a machine with no NVIDIA card): PENDING, engine-windows.yml's cpu artifact has no
+            # release step yet. Packed into prover-cpu\ when the release has it.
+            ECPU=hazync-engine-x86_64-windows-cpu.zip
+            if gh release download "$tag" -R hazync/hazync -p "$ECPU" 2>/dev/null; then files="$files $ECPU"
+            else echo "::warning::$tag has no $ECPU: this installer carries the CUDA engine prover only"; fi
+            echo "ENGINE=1" >> "$GITHUB_ENV"
+          else
           gh release download "$tag" -R hazync/hazync -p 'hazync-host-x86_64-windows-cuda.zip' -p 'hazync-worker'
           # The CPU prover (from v0.26.1): REQUIRED when the source being built lists it as a release asset and this is
           # the release itself; otherwise packed when the release has it (a PR builds around the latest release, which
@@ -133,6 +151,7 @@ jobs:
             echo "::error::$tag lists $CPU in scripts/release-assets.txt but the release does not carry it"; exit 1
           else
             echo "::warning::$tag has no $CPU: this installer carries the CUDA prover only"
+          fi
           fi
           if gh release download "$tag" -R hazync/hazync -p 'SHA256SUMS.txt' 2>/dev/null; then
             for f in $files; do
@@ -148,11 +167,27 @@ jobs:
           else
             echo "::error::$tag has no SHA256SUMS.txt"; exit 1
           fi
-          python -c "import zipfile; zipfile.ZipFile('hazync-host-x86_64-windows-cuda.zip').extractall('prover')"
+          unzip_to() { python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])" "$1" "$2"; }
+          if [ -n "${ENGINE_ZIP:-}" ] && [ -f "$ENGINE_ZIP" ]; then
+            # prover\ = host.exe (the driver) + hzengine.exe + cudart64_12.dll + keys\ (the layout the app finds:
+            # supervisor.engine_sidecar)
+            unzip_to "$DRIVER" prover; unzip_to "$ENGINE_ZIP" prover
+            mkdir -p prover/keys && tar -xzf "$KEYS" -C prover/keys
+            [ -f prover/host.exe ] && [ -f prover/hzengine.exe ] && [ -f prover/keys/image.json ] \
+              || { echo "::error::the engine layout is incomplete (host.exe, hzengine.exe, keys/image.json)"; ls -laR prover; exit 1; }
+            ls -la prover prover/keys
+            if [ -f "${ECPU:-}" ]; then
+              unzip_to "$DRIVER" prover-cpu; unzip_to "$ECPU" prover-cpu
+              mkdir -p prover-cpu/keys && tar -xzf "$KEYS" -C prover-cpu/keys
+              ls -la prover-cpu; echo "CPU_PROVER=1" >> "$GITHUB_ENV"
+            fi
+          else
+          unzip_to hazync-host-x86_64-windows-cuda.zip prover
           ls -la prover
           if [ -f "$CPU" ]; then
-            python -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('prover-cpu')" "$CPU"
+            unzip_to "$CPU" prover-cpu
             ls -la prover-cpu; echo "CPU_PROVER=1" >> "$GITHUB_ENV"
+          fi
           fi
           v="$IN_VERSION"; [ -n "$v" ] || v="${tag#v}-dev.$RUN_NUMBER"
           [ "$IN_RELEASE" != true ] || v="${tag#v}"
@@ -170,13 +205,15 @@ jobs:
           [ -d "$CRT" ] || { echo "::error::no Visual C++ redist folder under $VS"; exit 1; }
           echo "VC runtime from: $CRT"; ls "$CRT"
           for d in rel/prover rel/prover-cpu; do
-            [ -f "$d/host.exe" ] || continue
-            for dll in $(python scripts/pe_imports.py "$d/host.exe" --vc-runtime | tr -d '\r'); do
+            for exe in host.exe hzengine.exe; do   # hzengine.exe: the engine release's prover, beside the driver host
+            [ -f "$d/$exe" ] || continue
+            for dll in $(python scripts/pe_imports.py "$d/$exe" --vc-runtime | tr -d '\r'); do
               src=$(ls "$CRT" | grep -ix "$dll" || true)
-              [ -n "$src" ] || { echo "::error::$d/host.exe imports $dll and $CRT has no such file"; exit 1; }
-              cp "$CRT/$src" "$d/" && echo "$d: + $src"
+              [ -n "$src" ] || { echo "::error::$d/$exe imports $dll and $CRT has no such file"; exit 1; }
+              cp -n "$CRT/$src" "$d/" && echo "$d: + $src"
             done
-            python scripts/pe_imports.py "$d/host.exe" --beside
+            python scripts/pe_imports.py "$d/$exe" --beside
+            done
           done
 
       - name: Build the app (PyInstaller, one folder)
@@ -217,17 +254,36 @@ jobs:
           # (the runner has the VC++ runtime system-wide, so RUNNING cannot show this; the import table can)
           python scripts/pe_imports.py "$APP/prover/host.exe" --beside
           [ "${CPU_PROVER:-}" != 1 ] || python scripts/pe_imports.py "$APP/prover-cpu/host.exe" --beside
+          git fetch -q --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          sha() { python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"; }
+          if [ "${ENGINE:-}" = 1 ]; then
+            # ⭐ THE ENGINE LAYOUT: each installed part is the release's, byte for byte (the sign job cannot look inside
+            # a compressed installer), and the installed host, asked in the engine's environment, names the core image
+            # the tag publishes (reproduce/engine-release.tsv). method-id reads keys\image.json and runs no prover, so a
+            # GPU-less runner can ask it.
+            ID=$(git show "$TAG:reproduce/engine-release.tsv" | awk '$1=="core" && $2=="mainnet" {print $3}')
+            [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no core mainnet record in $TAG's reproduce/engine-release.tsv"; exit 1; }
+            for d in prover $([ "${CPU_PROVER:-}" != 1 ] || echo prover-cpu); do
+              for f in host.exe hzengine.exe $(cd "rel/$d" && find keys -type f | sort); do
+                [ -f "$APP/$d/$f" ] || { echo "::error::$d/$f not installed"; exit 1; }
+                [ "$(sha "$APP/$d/$f")" = "$(sha "rel/$d/$f")" ] || { echo "::error::the installed $d/$f is not the release's"; exit 1; }
+              done
+              python scripts/pe_imports.py "$APP/$d/hzengine.exe" --beside
+              got=$(HAZYNC_ENGINE="$(cygpath -w "$APP/$d/hzengine.exe")" HAZYNC_ENGINE_KEYS="$(cygpath -w "$APP/$d/keys")" \
+                    "$APP/$d/host.exe" method-id | grep -oE '[0-9a-f]{64}' | head -1)
+              [ "$got" = "$ID" ] || { echo "::error::the installed $d (engine) says ${got:-nothing}, want $ID"; exit 1; }
+              echo "installed $d: the release's host.exe, hzengine.exe and keys; engine image $got"
+            done
+          else
           # the installed prover is the release's: it carries the published mainnet image (a GPU-less runner cannot RUN it)
           # The image of the RELEASE whose prover is packaged ($TAG), read at that tag: on a PR the checkout may already
           # pin the next image (v0.26.0's re-baseline) while the packaged prover is still the last release's.
-          git fetch -q --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
           ID=$(git show "$TAG:reproduce/LIBZYNC_IDS" | awk '$1=="libzync-product" && $2=="mainnet" {print $4}')
           [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no mainnet id in $TAG's reproduce/LIBZYNC_IDS"; exit 1; }
           python -c "import sys;n=open(sys.argv[1],'rb').read().count(bytes.fromhex(sys.argv[2]));print('image',sys.argv[2][:8],n,'x');sys.exit(0 if n>=1 else 1)" "$APP/prover/host.exe" "$ID"
           # ...and is the release zip's host.exe, byte for byte: the sign job cannot look inside a compressed installer,
           # so this is what ties the signed installer to the signed zip.
           # (not sha256sum: a path with backslashes makes it prefix its line with '\', which shifted a cut-based read)
-          sha() { python -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())" "$1"; }
           a=$(sha "$APP/prover/host.exe"); b=$(sha rel/prover/host.exe)
           [ "$a" = "$b" ] || { echo "::error::the installed host.exe ($a) is not the release zip's ($b)"; exit 1; }
           echo "installed host.exe = the release zip's ($a)"
@@ -239,6 +295,7 @@ jobs:
             got=$("$APP/prover-cpu/host.exe" method-id | grep -oE '[0-9a-f]{64}' | head -1)
             [ "$got" = "$ID" ] || { echo "::error::the installed CPU host.exe says ${got:-nothing}, want $ID"; exit 1; }
             echo "installed CPU host.exe = the release zip's ($a), method-id $got"
+          fi
           fi
           # the installed app runs the installed worker: make a key in a scratch HAZYNC_HOME and read it back
           export HAZYNC_HOME="$RUNNER_TEMP/hz-home" PYTHONPATH="$(cygpath -w "$APP/_internal/winshim")"

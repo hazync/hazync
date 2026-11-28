@@ -327,6 +327,42 @@ jobs:
           dll=$(ls "$CUDA_POSIX"/bin/cudart64_*.dll | head -1); cp "$dll" out/
           ls -la out
 
+      # ⭐ THE CPU BUILD (ROADMAP 2.9, the Windows app's prover-cpu\ for a machine with no NVIDIA card the engine
+      # supports): the same crate with no `cuda` feature, in its own target dir so neither build reuses the other's
+      # artefacts. It imports no nvcuda.dll, so unlike the CUDA build it RUNS on this GPU-less runner, and does.
+      - name: Build hzengine for the CPU (no CUDA), and run it
+        shell: bash
+        run: |
+          set +e
+          cd engine/host || exit 1
+          CARGO_TARGET_DIR=target-cpu cargo +1.91.1 build --release > ../../build-cpu.log 2>&1
+          rc=$?
+          echo "cargo rc=$rc"
+          grep -n "error" ../../build-cpu.log | grep -v "thiserror" | head -60
+          [ "$rc" = 0 ] || exit "$rc"
+          cd ../.. || exit 1
+          set -e
+          exe=engine/host/target-cpu/release/hzengine.exe
+          ls -la "$exe"
+          dumpbin_path=$(cygpath -u "$(dirname "$(which cl.exe)")")/dumpbin.exe
+          "$dumpbin_path" //DEPENDENTS "$exe" | grep -i "\.dll" || true
+          if "$dumpbin_path" //DEPENDENTS "$exe" | grep -qi "nvcuda.dll"; then echo "::error::the CPU build imports nvcuda.dll"; exit 1; fi
+          "$exe" --help > help-cpu.txt 2>&1; rc=$?
+          head -20 help-cpu.txt
+          [ "$rc" = 0 ] && grep -q "prove-block" help-cpu.txt || { echo "::error::the CPU hzengine.exe did not run (rc $rc)"; exit 1; }
+          mkdir -p out-cpu
+          cp "$exe" out-cpu/
+          ls -la out-cpu
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: hzengine-windows-x86_64-cpu
+          path: |
+            out-cpu/
+            build-cpu.log
+          if-no-files-found: warn
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
