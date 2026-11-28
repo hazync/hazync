@@ -1,0 +1,9 @@
+[0 s] kit 17a685e2 release docs: current wasm pins after round 3; the 
+[442 s] RISC Zero host built (its guest too)
+[689 s] engine host built (no guest)
+[1131 s] block 130000: bundle DIFFERS; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in DIFFERS; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[1556 s] block 140000: bundle DIFFERS; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in DIFFERS; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[2006 s] block 741000: bundle DIFFERS; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in DIFFERS; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[2896 s] block 962000: bundle DIFFERS; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in DIFFERS; chunk_00.r0journal same; chunk_01.in DIFFERS; chunk_01.r0journal same; chunk_02.in DIFFERS; chunk_02.r0journal same; chunk_03.in DIFFERS; chunk_03.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[3966 s] block 965500: bundle DIFFERS; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in DIFFERS; chunk_00.r0journal same; chunk_01.in DIFFERS; chunk_01.r0journal same; chunk_02.in DIFFERS; chunk_02.r0journal same; chunk_03.in DIFFERS; chunk_03.r0journal same; chunk_04.in DIFFERS; chunk_04.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[3966 s] C_DONE

@@ -1,0 +1,6 @@
+[2756 s] block 130000: bundle same; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in same; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[2808 s] block 140000: bundle same; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in same; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[2870 s] block 741000: bundle same; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in same; chunk_00.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[3079 s] block 962000: bundle same; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in same; chunk_00.r0journal same; chunk_01.in same; chunk_01.r0journal same; chunk_02.in same; chunk_02.r0journal same; chunk_03.in same; chunk_03.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[3357 s] block 965500: bundle same; agg_collect.in DIFFERS; agg.in DIFFERS; chunk_00.in same; chunk_00.r0journal same; chunk_01.in same; chunk_01.r0journal same; chunk_02.in same; chunk_02.r0journal same; chunk_03.in same; chunk_03.r0journal same; chunk_04.in same; chunk_04.r0journal same; chunks same; predicted_cost same; trie.in same; trie.r0journal same
+[3357 s] C2_DONE
