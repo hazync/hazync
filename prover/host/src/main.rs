@@ -3,8 +3,6 @@ use bitcoin::hashes::Hash as _;
 use bitcoin::{Amount, ScriptBuf, Transaction, TxOut};
 use hazync_utreexo::{coin_leaf, hash_leaf, Forest, Hash};
 use hazync_coinbase_smt::{Proof as SmtProof, Smt};
-use methods::{METHOD_ELF, METHOD_ID};
-use risc0_zkvm::{ExecutorEnv, ProverOpts};
 use serde::{Deserialize, Serialize};
 
 // The host is libzync-only: the CORE design (a per-signature guest, image 37987b85) is in history/, and this host
@@ -16,7 +14,6 @@ mod bridge;
 mod chunks;
 mod lz;
 mod trie;
-mod seg;
 mod verify;
 mod prep;
 mod tracked;
@@ -27,14 +24,10 @@ mod rewind;
 mod sink;
 mod engine_backend;
 
-use bench::{chunk_profile, exec_time_cmd, segment_mem_cmd, segment_size_cmd, test_locks_cmd, test_merkle_cmd};
+use bench::{test_locks_cmd, test_merkle_cmd};
 use bridge::{cmd_bridge, cmd_dump_snapshot, snapshot_emit_cmd};
-use chunks::{chunk_block_hash, chunk_bounds, nchunks_env, write_chunk_inputs};
-use lz::{agg_chunks, agg_exec_fake, execute_chunks_parallel, libzync_hints_cmd, libzync_snark_wrap_cmd,
-    libzync_verify_cmd, libzync_verify_fail_hook, lz_execute, lz_prove_range_cmd};
-use seg::{seg_connect_cmd, seg_coordinate_cmd, seg_coordinate_tree_cmd, seg_distribute_cmd, seg_join_cmd,
-    seg_prove_one_cmd, seg_serve_cmd, seg_work_cmd};
-use verify::receipt_digest_cmd;
+use chunks::chunk_bounds;
+use lz::{libzync_hints_cmd, libzync_verify_cmd, libzync_verify_fail_hook, lz_prove_range_cmd};
 
 // A byte blob (de)serialised via risc0 serde's PACKED byte path (serialize_bytes → 4 bytes/word) instead
 // of the default one-word-per-byte. Must match the guest's PackedBytes. Wire encoding only. Used for the
@@ -211,7 +204,7 @@ struct ChainState {
     cum_work: [u8; 32], height: u32,
     prev_nbits: u32, prev_time: u32, epoch_start: u32, recent_times: Vec<u32>,
     anchor_id: [u8; 32], // S5: dsha256 of the base anchor; verifier pins == dsha256(genesis_anchor)
-    self_id: [u32; 8],  // S1: image id recursed against; verifier asserts == METHOD_ID
+    self_id: [u32; 8],  // S1: image id recursed against; verifier asserts == its engine image
     // libzync (E2): the multiset hash of the LIVE coins (profile bit 6; live_set 0 = the identity) and the counting
     // trie's root (bit 5). Zero without those bits. Mirrors the guest's ChainState field for field. The aliases read a
     // state JSON written before the rename (ss_set / ss_acc / ss_hints, the retired SwiftSync design B's names).
@@ -241,8 +234,6 @@ struct ChainState {
 // The guest's own pin file: this host and that guest cannot disagree about the lineage.
 #[allow(dead_code)] // shared with the guest and the verifier: each uses its own subset
 mod handover_pin { include!("../../methods/guest/src/handover_pin.rs"); }
-// Cross-version handover: every vendored RISC Zero recursion circuit (the guest compiles only the ones it pins).
-#[path = "../../methods/guest/src/xver/mod.rs"] pub mod xver;
 // Every variant's lineage file; `pinned_lineage` picks this host's (the guest compiles only its own).
 #[path = "../../methods/guest/src/lineage/mainnet.rs"] mod lineage_mainnet;
 #[path = "../../methods/guest/src/lineage/signet.rs"] mod lineage_signet;
@@ -281,11 +272,20 @@ fn lineage_of(list: &[handover_pin::Handover]) -> [u8; 32] {
     list.iter().fold([0u8; 32], |l, h| { let (p, n) = handover_pin::lineage_step(&l, h); sha256_host(&p[..n]) })
 }
 
+/// This host's own image for prep states and the era rules: the engine image when the host is set up for one
+/// (HAZYNC_ENGINE_VK, or HAZYNC_ENGINE_KEYS' image.json), else NONE (zero), never a constant image id. A prep run needs
+/// no engine (prep never runs the guest), and its states are untrusted starting points every reader re-stamps with its
+/// own image on read (`stamp`: leaf_read, the board's state_before, a continuing prep). Until CUTOVER C8 this was RISC
+/// Zero's METHOD_ID.
+pub(crate) fn own_image() -> [u32; 8] {
+    engine_backend::engine_image_cached().unwrap_or([0; 8])
+}
+
 /// Stamping by era (docs/HANDOVER.md §5). Under the lineage `[(I0, h1), (I1, h2), ...]`, block h is proved by the
 /// first `I_k` with `h < h_{k+1}`'s entry, else by this image: entry k's image proved every block below its
 /// `first_height` that an earlier entry did not.
 pub(crate) fn image_at(h: u32) -> [u32; 8] {
-    pinned_lineage().iter().find(|e| h < e.first_height).map(|e| e.image).unwrap_or(METHOD_ID)
+    pinned_lineage().iter().find(|e| h < e.first_height).map(|e| e.image).unwrap_or_else(own_image)
 }
 
 /// The lineage digest a state after block h carries: every handover at or below h.
@@ -296,8 +296,8 @@ pub(crate) fn lineage_at(h: u32) -> [u8; 32] {
 
 /// A prep state S(h) as the image proving block h commits it: that image's id and the lineage at h. Genesis (h = 0)
 /// is never stamped: its self_id and lineage are zero in every image, so GENESIS_TIP never moves. With an empty
-/// lineage this is exactly what prep did before (self_id = METHOD_ID). Prep states are untrusted starting points, and
-/// a leaf's guest checks every witness against them, so normalising one on read cannot weaken anything.
+/// lineage the self_id is this host's own image (`own_image`). Prep states are untrusted starting points, and a leaf's
+/// guest checks every witness against them, so normalising one on read cannot weaken anything.
 pub(crate) fn stamp(s: &mut ChainState) {
     if s.height == 0 { return; }
     // The rehearsal's control (experimental/libzync-bench/handover/board_rehearsal.sh --control): without stamping, the
@@ -308,7 +308,7 @@ pub(crate) fn stamp(s: &mut ChainState) {
     }
     // An engine host (HAZYNC_ENGINE_VK or HAZYNC_ENGINE_KEYS): the engine image proves every block, from genesis, with
     // no lineage (engine/STAGE3.md 3.2). Without this a leaf was anchored on a state the engine chain never commits
-    // (self_id = this build's RISC Zero METHOD_ID), so --check-end refused it and no two leaves joined.
+    // (in the RISC Zero era: self_id = that build's METHOD_ID), so --check-end refused it and no two leaves joined.
     if let Some(w) = engine_backend::engine_image_cached() {
         s.self_id = w;
         s.lineage = [0; 32];
@@ -323,87 +323,18 @@ pub(crate) fn stamp(s: &mut ChainState) {
 /// `libzync-lineage`: the handovers this image pins, for the coordinator, the worker and the runbook.
 fn lineage_cmd() {
     let l = pinned_lineage();
-    println!("METHOD_ID {}", method_id_hex());
+    // the engine image this host is set up for (none: no METHOD_ID line; the board's host has HAZYNC_ENGINE_VK)
+    if let Some(w) = engine_backend::engine_image_cached() { println!("METHOD_ID {}", lz::hex_id(&w)); }
     if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
     if l.is_empty() { println!("HANDOVER none"); }
     for (k, e) in l.iter().enumerate() {
-        let v = if e.verifier == [0u8; 32] { "same".to_string() } else {
-            format!("{} ({})", hex(&e.verifier), xver::version(&e.verifier).map_or("NOT CARRIED BY THIS HOST", |v| v.name))
-        };
+        let v = if e.verifier == [0u8; 32] { "same".to_string() } else { hex(&e.verifier) };
         println!("HANDOVER k={k} image={} first_height={} verifier={v}", hex_u32x8(&e.image), e.first_height);
     }
     println!("LINEAGE {}", hex(&lineage_of(l)));
 }
 
-fn hex_u32x8(w: &[u32; 8]) -> String {
-    hex(&risc0_zkvm::sha::Digest::from(*w).as_bytes().try_into().unwrap_or([0u8; 32]))
-}
-
-/// A predecessor's receipt verified the way the lineage entry says: env-free `Receipt::verify` for the same RISC
-/// Zero, the vendored old circuit (xver) for an older one. Returns the journal.
-pub(crate) fn verify_pred_receipt(r: &risc0_zkvm::Receipt, e: &handover_pin::Handover) -> Result<(), String> {
-    if e.verifier == [0u8; 32] {
-        return r.verify(e.image).map_err(|x| format!("does not verify against predecessor {}: {x}", hex_u32x8(&e.image)));
-    }
-    let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else {
-        return Err("a cross-version predecessor receipt must be succinct".into());
-    };
-    if s.verifier_parameters.as_bytes() != &e.verifier[..] {
-        return Err(format!("receipt's verifier parameters {} are not the pinned version's {}", s.verifier_parameters, hex(&e.verifier)));
-    }
-    xver::verify(&e.verifier, e.image, &r.journal.bytes, &xver::encode(s), &xver::soft_suite()).map_err(|x| x.to_string())
-}
-
-/// `xver-selftest <receipt> [<image hex>]`: the cross-version verifier on a real receipt, natively, with its negative
-/// controls (a seal word, the image, the journal: each changed must be refused). Also recomputes each vendored
-/// version's verifier-parameter digest from its circuit.
-fn xver_selftest_cmd(path: &str, image: Option<&str>) {
-    use risc0_zkvm::sha::Digestible;
-    for v in xver::KNOWN {
-        let p = risc0_zkvm::SuccinctReceiptVerifierParameters {
-            control_root: v.control_root,
-            inner_control_root: None,
-            proof_system_info: risc0_zkp::adapter::PROOF_SYSTEM_INFO,
-            circuit_info: v.circuit_info,
-        }.digest();
-        let ok = p.as_bytes() == &v.params[..];
-        println!("XVER {} params {} computed {} {}", v.name, hex(&v.params), p, if ok { "OK" } else { "MISMATCH" });
-        assert!(ok, "{}: the declared verifier-parameter digest is not the vendored circuit's", v.name);
-    }
-    let r = verify::read_receipt(path).unwrap_or_else(|e| panic!("{e}"));
-    let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("{path}: not a succinct receipt") };
-    let params: [u8; 32] = s.verifier_parameters.as_bytes().try_into().unwrap();
-    let v = xver::version(&params).unwrap_or_else(|| panic!("{path}: verifier parameters {} are not a vendored version", s.verifier_parameters));
-    let claim = s.claim.as_value().expect("claim pruned");
-    let img: [u32; 8] = match image {
-        Some(h) => { let b = hx(h); let b: [u8; 32] = b.try_into().expect("image: 32 bytes hex"); risc0_zkvm::sha::Digest::from(b).into() }
-        None => claim.pre.digest().into(),
-    };
-    assert!(xver::expected_claim(img, &r.journal.bytes) == s.claim.digest(),
-            "the receipt's own claim is not ReceiptClaim::ok(image, journal) (wrong image given?)");
-    let words = xver::encode(s);
-    let suite = xver::soft_suite();
-    let t = std::time::Instant::now();
-    xver::verify(&params, img, &r.journal.bytes, &words, &suite).unwrap_or_else(|e| panic!("VALID receipt refused: {e}"));
-    println!("XVER {}: {path} ({} bytes, image {}) VERIFIES natively in {:.2} s", v.name, std::fs::metadata(path).unwrap().len(),
-             hex_u32x8(&img), t.elapsed().as_secs_f64());
-    let mut seal = words.clone();
-    let i = seal.len() - 100; seal[i] ^= 1;
-    let mut img2 = img; img2[0] ^= 1;
-    let mut j2 = r.journal.bytes.clone(); j2[0] ^= 1;
-    let cases: [(&str, Result<(), &str>); 3] = [
-        ("tampered seal", xver::verify(&params, img, &r.journal.bytes, &seal, &suite)),
-        ("wrong image", xver::verify(&params, img2, &r.journal.bytes, &words, &suite)),
-        ("wrong journal", xver::verify(&params, img, &j2, &words, &suite)),
-    ];
-    for (name, res) in cases {
-        match res {
-            Err(e) => println!("XVER negative control {name}: REFUSED ({e})"),
-            Ok(()) => panic!("XVER negative control {name}: ACCEPTED"),
-        }
-    }
-    println!("XVER-SELFTEST-OK");
-}
+fn hex_u32x8(w: &[u32; 8]) -> String { lz::hex_id(w) }
 
 /// A mid-chain anchor from a block file has no record of the blocks before it, but the guest needs a forest of the
 /// right SIZE to append to. This fills one with placeholder roots. A proof built on it is anchored, so verifiers can
@@ -420,34 +351,6 @@ fn hx(s: &str) -> Vec<u8> {
     (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
 }
 fn hex(b: &[u8]) -> String { b.iter().map(|x| format!("{x:02x}")).collect() }
-
-// Proving segment size (2^n cycles). risc0 4.0.5 has a preflight bug: for ~10% of blocks a segment packs
-// right to its 2^po2 boundary and the assertion `cycles <= 1 << segment.po2` overflows -> the prove panics
-// (on CPU AND cuda — shared witgen). It's a liveness bug, never a wrong proof. Smaller segments repartition
-// the work and clear the boundary, so the caller retries a failed prove with a decremented HAZYNC_SEG_PO2.
-// EVERY prove path calls this so the retry is honoured everywhere. Host-side executor config only — the
-// guest is untouched by this knob, so it does not affect METHOD_ID.
-// Default depends on the backend, because the trade-off does. Bigger segments = fewer of them = less
-// recursion/fold overhead: on GPU that measured ~6% faster than 20 on block 130000 (23.0s vs 24.4s).
-// ⛔ THIS COMMENT USED TO SAY "flat to 22, so 21 is the sweet spot (same speed as 22)". THAT IS WRONG,
-// and reading it cost an evening of wrong advice. It was measured on block 130,000 — a 2011 block with
-// almost no transactions and ~30 segments, where there is barely any fold tree to save. On a TIP block
-// po2 22 measured ~11.5% faster (block 962,000 on an L40S, docs/history/TOPOLOGY_AND_SETTINGS.md §3.1), and the
-// saving grows with segment count because that is what the fold tree is built from. 21 is the DEFAULT
-// because it peaks ~22 GB and fits a 24 GB card; 22 peaks ~40.6 GB and needs ≥48 GB. Judge po2 on a
-// block the size of the one you are proving, never on a young one.
-// A po2-21 segment also needs ~2x the working memory of 20, and on CPU that is a pure cost — the
-// speed win was never measured there, while an
-// 11 GB box proving block 170 (a 2.3M-cycle block!) hit 8.7 GB RSS and went to swap. Swapping is not a
-// prove *failure*, so the retry ladder below never fires; it just crawls. So: 21 with the cuda feature,
-// the risc0 default of 20 otherwise. HAZYNC_SEG_PO2 overrides either way.
-fn seg_po2() -> u32 {
-    std::env::var("HAZYNC_SEG_PO2").ok().and_then(|s| s.parse().ok())
-        .unwrap_or(if cfg!(feature = "cuda") { 21 } else { 20 })
-}
-
-// This host's guest image id (METHOD_ID) as the canonical RISC0 hex digest.
-fn method_id_hex() -> String { risc0_zkvm::Digest::from(METHOD_ID).to_string() }
 
 fn rev(mut v: Vec<u8>) -> Vec<u8> { v.reverse(); v }
 fn arr(v: Vec<u8>) -> [u8; 32] { v.try_into().unwrap() }
@@ -494,12 +397,6 @@ fn link_digest(s: &ChainState) -> [u8; 32] {
 
 fn state_journal_bytes(s: &ChainState) -> Vec<u8> {
     hazync_journal::serde::to_vec(s).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect()
-}
-
-fn work_u128(w: &[u8; 32]) -> u128 {
-    let mut low = [0u8; 16];
-    low.copy_from_slice(&w[0..16]); // arith_uint256 internal = little-endian
-    u128::from_le_bytes(low)
 }
 
 // Build the anchor + full block witness from the HAZYNC_BLOCK JSON (coinbase + N multi-input txs, real prevouts).
@@ -617,7 +514,9 @@ fn build_full_from(j: serde_json::Value) -> (ChainState, BlockWitness) {
         // window) when the fetcher/bridge supplies them; else the benign placeholder for pre-S2 vectors
         // (130000/140000) that carry no `recent_times` — computed above (with the COV-1 hook applied).
         recent_times: recent_times.clone(),
-        anchor_id: [0u8; 32], self_id: METHOD_ID, live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
+        // self_id zero: a state derived from a block file, proved by no image (as genesis's); a leaf or a proof on it
+        // takes it as its anchor (anchor_id = its link digest), whatever it names
+        anchor_id: [0u8; 32], self_id: [0; 8], live_set: 0, live_hash: [0; 16], trie_root: [0; 32], smt_root: hazync_coinbase_smt::empty_root(),
         max_time: recent_times.iter().copied().max().unwrap_or(0), profile: 0,
         block_roots: Vec::new(), block_leaves: 0, lineage: [0; 32],
     };
@@ -965,48 +864,6 @@ fn build_block_carried(forest: &mut Forest, j: &serde_json::Value, block_mtp: &[
     BlockWitness { header, height, coinbase_tx: hx(cb_hex), txids: PackedHashes(txids), root_prev, txs, tx_prevouts, inputs, root_next, bip30, in_smt_root, smt }
 }
 
-// `prove-chunk <i>`: prove chunk i's scripts, write the receipt to chunk_<i>.hzk (or $HAZYNC_OUT).
-fn prove_chunk(idx: usize) {
-    use std::time::Instant;
-    let (_anchor, w) = build_full();
-    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-    let (lo, hi) = *bounds.get(idx).unwrap_or_else(|| panic!(
-        "prove-chunk {idx}: block has only {} chunks at HAZYNC_CHUNKS={}", bounds.len(), nchunks_env()));
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.write(&4u32).unwrap();
-    b.write(&w.height).unwrap();
-    b.write(&chunk_block_hash(&w.header)).unwrap(); // block hash for flag exceptions
-    write_chunk_inputs(&mut b, &w, lo, hi);
-    let t = Instant::now();
-    // EXECUTE FIRST, then prove (#145). This printed nothing until it finished, so while a chunk was
-    // running its log was EMPTY and "wedged" was indistinguishable from "working". That is what hid
-    // hazync#147 for 76 minutes and then 3h38m: the only thing that gave it away was nvidia-smi
-    // showing 0% with the process alive, which is a thing you have to already suspect to go and look
-    // at. A start line and periodic progress make a hang visible in the place anyone would look first.
-    let opts = ProverOpts::succinct();
-    let server = risc0_zkvm::get_prover_server(&opts).expect("prover server");
-    let ctx = risc0_zkvm::VerifierContext::default();
-    let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
-        .unwrap().run().unwrap();
-    crate::lz::require_committed(session.exit_code, "chunk execution");
-    let nseg = session.segments.len();
-    println!("chunk {idx}: {} inputs, {nseg} segments at po2 {} — proving", hi - lo, seg_po2());
-    // SCALING: prove the chunk to a SUCCINCT receipt (not the default composite). This runs the
-    // STARK-to-STARK "lift" NOW, in parallel across the chunk fleet — so agg-chunks resolves each
-    // assumption cheaply instead of lifting all N composite receipts sequentially.
-    //
-    // #237: driven segment-by-segment so every segment goes through the #119 retry. A fault used to
-    // cost the whole chunk; it now costs one segment.
-    let receipt = prove_session_resilient(&server, &ctx, &session);
-    receipt.verify(METHOD_ID).unwrap();
-    let out = std::env::var("HAZYNC_OUT").unwrap_or_else(|_| format!("chunk_{idx}.hzk"));
-    // Write then rename: seg-serve's HAZYNC_AGG_EARLY polls for this file and must never read half of it.
-    std::fs::write(format!("{out}.tmp"), bincode::serialize(&receipt).unwrap()).unwrap();
-    std::fs::rename(format!("{out}.tmp"), &out).unwrap();
-    println!("chunk {idx} ({} inputs) proved in {:.0}s -> {out}", hi - lo, t.elapsed().as_secs_f64());
-}
-
 // ============ ARCHIVE-NODE BRIDGE — persistent forest driver over a local bitcoind ============
 // `host bridge`: drive ONE resident Forest forward over the chain from a local bitcoind, emitting per
 // block a bundle {in-boundary, witness} with the REAL root_prev + inclusion proofs — so a prover can
@@ -1233,63 +1090,8 @@ struct Bundle {
 }
 
 fn main() {
-    let _report_119_on_exit = Report119OnExit;
-    // Prove IN-PROCESS unless the operator asked for something else.
-    //
-    // risc0's default backend shells out to `r0vm`, a separate ~109 MB binary that is not part of this
-    // release. A contributor who downloads only the prebuilt host — which is exactly what CONTRIBUTING
-    // tells them to do — therefore gets `No such file or directory (os error 2)` on their first prove,
-    // naming nothing. It affected the CPU binary specifically: the CUDA build links its prover in, so
-    // the GPU path worked and the "no GPU still works" path did not.
-    //
-    // The binary is now built with risc0-zkvm's `prove` feature (see Cargo.toml), so the local prover
-    // is linked in and default_prover() already selects it when RISC0_PROVER is unset. This makes the
-    // intent explicit and survives a future features change; set only when unset, so RISC0_PROVER=ipc
-    // / bonsai still work for anyone who wants them.
-    if std::env::var_os("RISC0_PROVER").is_none() {
-        std::env::set_var("RISC0_PROVER", "local");
-    }
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::filter::EnvFilter::from_default_env())
-        .init();
-
-    // A prover memory failure surfaces as a raw unwrap deep inside the GPU HAL:
-    //
-    //   panicked at risc0-zkp/src/hal/cuda.rs:246: called `Result::unwrap()` on an `Err` value:
-    //   allocation failed on evaluated: 134217728 bytes  Caused by: "out of memory"
-    //
-    // naming neither the knob that fixes it nor the fact that a smaller segment would just work. On a
-    // CUDA 13 driver the default po2 21 fails on an OTHERWISE IDLE L40S with 45 GB free (#97), so this
-    // is the first thing a contributor on UpCloud's current GPU image meets. `coordinator/hazync` walks
-    // a retry ladder and absorbs it; a direct `host prove-block` gets the bare panic, which is what
-    // docs/history/RELEASE_PLAN.md §1.4 says must not happen — an OOM has to name HAZYNC_SEG_PO2 and a value to try.
-    //
-    // The hook ADDS the remedy and leaves the original panic intact. The underlying message is still
-    // the most accurate description of what happened, and replacing it would trade one unhelpful
-    // failure for another.
-    let prior = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        prior(info);
-        let msg = info.payload().downcast_ref::<String>().map(|s| s.as_str())
-            .or_else(|| info.payload().downcast_ref::<&str>().copied())
-            .unwrap_or("");
-        if msg.contains("out of memory") || msg.contains("allocation failed") {
-            let po2 = seg_po2();
-            eprintln!("\nhazync: that is a prover memory failure, not a bad block.");
-            eprintln!("  The usual cause is TWO proves sharing one card, not a segment that is too big.");
-            eprintln!("  Measured on an L40S (46 GB): one prove at HAZYNC_SEG_PO2=21 peaks near 22 GB, so");
-            eprintln!("  a single prove fits easily and two do not (#97). `hazync run` serialises GPU work");
-            eprintln!("  through a lock; a direct `host prove-*` does not, so it can land on top of one.");
-            eprintln!("  Look for another prove first:");
-            eprintln!("      nvidia-smi --query-compute-apps=pid,used_memory --format=csv");
-            eprintln!("  If the card really is yours alone, drop a rung — each step down roughly halves");
-            eprintln!("  the working memory one segment needs, at a few seconds' cost per prove:");
-            eprintln!("      HAZYNC_SEG_PO2={} <the same command again>", po2.saturating_sub(1));
-        }
-    }));
-
     let args: Vec<String> = std::env::args().collect();
-    // The engine's chunking (only when proving on it, or exporting for it; the RISC Zero path keeps HAZYNC_CHUNKS):
+    // The engine's chunking (when proving on it, or exporting for it; prep and the other commands keep HAZYNC_CHUNKS):
     // chunks sized by predicted cost, about 0.9B each (~5B engine cycles), at most 16. Block 976,379 on one A6000:
     // 5 such chunks 183 s vs 16 equal ones 245 s; 741,000 as 1 chunk 39 s vs 110 s (engine/results/gpu_a6000_tuning).
     // Set before anything reads them, so the hints run and the prover agree; either can still be set by hand.
@@ -1307,18 +1109,17 @@ fn main() {
         lz::engine_export(&dir);
         return;
     }
-    if args.iter().any(|a| a == "agg-exec-fake") {
-        agg_exec_fake();
-        return;
-    }
     if let Some(p) = args.iter().position(|a| a == "exec-chunk") {
-        // libzync negative tests: execute ONE chunk with the current hint env and report its verdict.
+        // libzync negative tests: execute ONE chunk on the engine with the current hint env and report its verdict.
         let idx: usize = args.get(p + 1).and_then(|s| s.parse().ok()).expect("exec-chunk <index>");
         let (_, w) = build_full();
         let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-        let (r, log) = execute_chunks_parallel(&w, &bounds[idx..idx + 1], 1).pop().expect("one chunk");
-        for l in String::from_utf8_lossy(&log).lines().filter(|l| l.contains("batch:")) { println!("  {l}"); }
-        let j = &r.journal.bytes;
+        let (lo, hi) = bounds[idx];
+        let x = engine_backend::execute_once(&format!("exec_chunk_{idx}"), &lz::chunk_stream(&w, lo, hi))
+            .unwrap_or_else(|e| panic!("{}", lz::guest_failure("chunk execution", &e)));
+        for l in x.log.lines().filter(|l| l.contains("batch:")) { println!("  {l}"); }
+        let jv = x.journal.unwrap_or_else(|| panic!("exec-chunk {idx}: exit {:?}, no journal", x.exit));
+        let j = &jv;
         let word = |k: usize| u32::from_le_bytes(j[4 * k..4 * k + 4].try_into().unwrap());
         use sha2::Digest;
         println!("exec-chunk {idx} [{}..{}): kind={:#x} all_valid={} journal sha256 {}", bounds[idx].0, bounds[idx].1,
@@ -1343,13 +1144,6 @@ fn main() {
         anchor.recent_times.reverse();
         std::fs::write(&args[p + 1], serde_json::to_string(&anchor).unwrap()).unwrap();
         println!("anchor for block {} (state at {}) -> {}", w.height, anchor.height, args[p + 1]);
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "journal-sha") {
-        let f = args.get(p + 1).expect("journal-sha <rcpt>");
-        let r = verify::read_receipt(f).unwrap_or_else(|e| panic!("{e}"));
-        r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{f} does not verify against this image: {e}"));
-        println!("JOURNAL_SHA256 {}", lz::journal_sha(&r));
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-store-digest") {
@@ -1392,7 +1186,7 @@ fn main() {
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "libzync-join") {
-        let f = |k: usize| args.get(p + k).cloned().expect("libzync-join <left.rcpt> <right.rcpt> <out.rcpt>");
+        let f = |k: usize| args.get(p + k).cloned().expect("libzync-join <left> <right> <out>");
         lz::lz_join_cmd(&f(1), &f(2), &f(3));
         return;
     }
@@ -1413,13 +1207,16 @@ fn main() {
             let tx: Transaction = deserialize(&hx(t["raw"].as_str().unwrap())).unwrap();
             txids.extend_from_slice(&tx.compute_txid().to_byte_array());
         }
+        // on the engine (a signet image's keys): mode 16, the check alone
         let run = |ids: &[u8]| -> u32 {
-            let mut b = ExecutorEnv::builder();
-            b.write(&16u32).unwrap();
-            b.write(&w.header).unwrap();
-            b.write(&w.coinbase_tx).unwrap();
-            b.write(&ids.to_vec()).unwrap();
-            lz_execute(b.build().unwrap()).expect("mode 16").journal.decode::<u32>().unwrap()
+            use sink::Sink;
+            let mut b = sink::Stream::default();
+            b.write(&16u32);
+            b.write(&w.header);
+            b.write(&w.coinbase_tx);
+            b.write(&ids.to_vec());
+            let x = engine_backend::execute_once("signet_check", &b.0).unwrap_or_else(|e| panic!("mode 16: {e}"));
+            engine_backend::decode_words::<u32>(&x.journal.expect("mode 16 journal"))
         };
         let good = run(&txids);
         println!("signet-check-test block {}: real block -> {good}", w.height);
@@ -1435,14 +1232,9 @@ fn main() {
         println!("{}", if good == 1 && bad == 0 { "SIGNET_CHECK_OK" } else { "SIGNET_CHECK_FAIL" });
         return;
     }
-    if let Some(p) = args.iter().position(|a| a == "libzync-snark-wrap") {
-        libzync_snark_wrap_cmd(args.get(p + 1).expect("libzync-snark-wrap <receipt> <out>"),
-                               args.get(p + 2).expect("libzync-snark-wrap <receipt> <out>"));
-        return;
-    }
     if let Some(p) = args.iter().position(|a| a == "libzync-verify") {
         libzync_verify_fail_hook();
-        // Positional: <receipt> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
+        // Positional: <proof> [anchor.json]. Flags anywhere after: --expect <h>:<hash>, --mempool,
         // --mempool-url <base> (chain identity, as swiftsync-verify).
         let mut pos: Vec<&str> = Vec::new();
         let (mut expect, mut mempool, mut cli): (Option<String>, Option<String>, Option<String>) = (None, None, None);
@@ -1457,7 +1249,7 @@ fn main() {
                 x => pos.push(x),
             }
         }
-        let usage = "libzync-verify <receipt> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
+        let usage = "libzync-verify <proof> [anchor.json] [--expect <h>:<hash>] [--mempool | --mempool-url <base>] [--bitcoin-cli \"<command>\"]";
         assert!(pos.len() <= 2, "{usage}");
         // The retired hints-file argument ("-" or a .hints file) must not be read as an anchor.
         assert!(pos.get(1).is_none_or(|a| *a != "-" && !a.ends_with(".hints")), "libzync-verify takes no hints file (E2): {usage}");
@@ -1468,76 +1260,9 @@ fn main() {
         libzync_hints_cmd(args.get(p + 1).expect("libzync-hints <out dir>"));
         return;
     }
-    if let Some(p) = args.iter().position(|a| a == "prove-chunk") {
-        let idx: usize = args.get(p + 1).and_then(|s| s.parse().ok()).expect("prove-chunk <index>");
-        prove_chunk(idx);
-        return;
-    }
     if let Some(p) = args.iter().position(|a| a == "dump-snapshot") {
         let out = args.get(p + 1).expect("dump-snapshot <out-file>");
         cmd_dump_snapshot(out);
-        return;
-    }
-    if args.iter().any(|a| a == "segment-size") {
-        segment_size_cmd();
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "receipt-digest") {
-        let f = args.get(p + 1).expect("receipt-digest <file>");
-        receipt_digest_cmd(f);
-        return;
-    }
-    if args.iter().any(|a| a == "seg-coordinate-tree") {
-        seg_coordinate_tree_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "seg-serve") {
-        seg_serve_cmd();
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "seg-connect") {
-        let addr = args.get(p + 1).expect("seg-connect <host:port>");
-        seg_connect_cmd(addr);
-        return;
-    }
-    if args.iter().any(|a| a == "seg-prove-one") {
-        seg_prove_one_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "seg-join") {
-        seg_join_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "seg-work") {
-        seg_work_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "seg-coordinate") {
-        seg_coordinate_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "seg-distribute") {
-        seg_distribute_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "segment-mem") {
-        segment_mem_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "exec-time") {
-        exec_time_cmd();
-        return;
-    }
-    if args.iter().any(|a| a == "chunk-profile") {
-        chunk_profile();
-        return;
-    }
-    if args.iter().any(|a| a == "agg-chunks") {
-        agg_chunks();
-        return;
-    }
-    if args.iter().any(|a| a == "core-vectors-export") {
-        bench::core_vectors_export_cmd(&args);
         return;
     }
     if args.iter().any(|a| a == "core-vectors") {
@@ -1562,50 +1287,31 @@ fn main() {
         lineage_cmd();
         return;
     }
-    if let Some(p) = args.iter().position(|a| a == "xver-selftest") {
-        xver_selftest_cmd(args.get(p + 1).expect("xver-selftest <receipt> [<image hex>]"), args.get(p + 2).map(|s| s.as_str()));
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "xver-encode") {
-        // the words a cross-version handover feeds the guest (for the in-guest test, experimental/libzync-bench/xver)
-        let (i, o) = (args.get(p + 1).expect("xver-encode <receipt> <out>"), args.get(p + 2).expect("xver-encode <receipt> <out>"));
-        let r = verify::read_receipt(i).unwrap_or_else(|e| panic!("{e}"));
-        let risc0_zkvm::InnerReceipt::Succinct(s) = &r.inner else { panic!("not succinct") };
-        let w: Vec<u8> = xver::encode(s).iter().flat_map(|x| x.to_le_bytes()).collect();
-        std::fs::write(o, w).unwrap();
-        return;
-    }
-    if let Some(p) = args.iter().position(|a| a == "libzync-handover") {
-        // libzync-handover <pred receipt> <leaf_H.bin> <out>: block H as the handover step (docs/HANDOVER.md §5)
-        let u = "libzync-handover <predecessor spine receipt> <leaf_H.bin> <out range file>";
-        lz_coord::handover_cmd(args.get(p + 1).expect(u), args.get(p + 2).expect(u), args.get(p + 3).expect(u));
-        return;
-    }
     if args.iter().any(|a| a == "libzync-genesis-tip") {
         lz_coord::genesis_tip_cmd();
         return;
     }
     if args.iter().any(|a| a == "method-id") {
-        // Print THIS host's guest image id so a contributor can check it matches a proof's guest. An engine host
-        // (HAZYNC_ENGINE_VK, or HAZYNC_ENGINE_KEYS) prints its engine image id: the id the board compares.
-        if let Some(r) = engine_backend::engine_image_words() {
-            let w = r.unwrap_or_else(|e| { eprintln!("method-id: {e}"); std::process::exit(1) });
-            println!("METHOD_ID {}", w.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect::<String>());
-            println!("  engine (OpenVM) image id: sha256(exe || vm)");
-            return;
-        }
-        println!("METHOD_ID {}", method_id_hex());
-        println!("  u32x8   {:?}", METHOD_ID);
+        // Print THIS host's guest image id so a contributor can check it matches a proof's guest: its engine image id
+        // (HAZYNC_ENGINE_VK's, or HAZYNC_ENGINE_KEYS' image.json), the id the board compares. A host set up for no
+        // engine image has none to print (RISC Zero's METHOD_ID went with CUTOVER C8).
+        let w = match engine_backend::engine_image_words() {
+            Some(r) => r.unwrap_or_else(|e| { eprintln!("method-id: {e}"); std::process::exit(1) }),
+            None => {
+                eprintln!("method-id: {} (or HAZYNC_ENGINE_VK + HAZYNC_ENGINE_VK_PIN): the image id comes from the engine's image", engine_backend::NEEDS_ENGINE);
+                std::process::exit(1)
+            }
+        };
+        println!("METHOD_ID {}", lz::hex_id(&w));
+        println!("  engine (OpenVM) image id: sha256(exe || vm)");
         if methods::TEST_LINEAGE { println!("{TEST_VARIANT_MARKER}"); }
         return;
     }
     if args.iter().any(|a| a == "seg-po2") {
-        // The segment po2 this binary would use, so the CLI's retry ladder can start from the binary's
-        // own per-backend default (21 cuda / 20 CPU) instead of guessing and wasting a duplicate attempt.
-        // On the engine (HAZYNC_ENGINE) there is no such knob (it sizes its own segments): `engine`, and the worker
-        // makes one attempt instead of walking a ladder of identical runs.
-        if engine_backend::active() { println!("engine"); return; }
-        println!("{}", seg_po2());
+        // The worker's retry ladder asks for the segment po2 (RISC Zero's HAZYNC_SEG_PO2 until CUTOVER C8). The engine
+        // has no such knob (it sizes its own segments): `engine`, and the worker makes one attempt instead of walking a
+        // ladder of identical runs.
+        println!("engine");
         return;
     }
     if let Some(p) = args.iter().position(|a| a == "snapshot-emit") {
@@ -1634,7 +1340,8 @@ fn main() {
         return;
     }
     // No command matched. The CORE design's demonstrations, block modes and range, spine and SNARK commands are
-    // in history/ (a libzync image refuses those guest modes); prover/README.md lists this host's commands.
+    // in history/ (a libzync image refuses those guest modes); RISC Zero's proving, segment and receipt commands went
+    // with CUTOVER C8 (v0.27.1 is their last release); prover/README.md lists this host's commands.
     eprintln!("usage: host <command> [args]  (see prover/README.md)");
     std::process::exit(2);
 }
@@ -1779,140 +1486,4 @@ mod smt_bridge {
             }
         }
     }
-}
-
-// Survive hazync#119: the prover intermittently returned a segment proof that failed its own
-// internal verify. ROOT CAUSE FOUND AND FIXED (#245, v0.21.1): rv32im accum phase 3 added prev[k]
-// to LogUp cells the instruction never wrote (still INVALID); when prev[k] == 0 that gave
-// 0x87FFFFFE >= P, which broke one NTT butterfly pair. Fixed in vendor/risc0-circuit-rv32im-sys;
-// upstream risc0 #3804.
-//
-// The retry STAYS, as defence in depth. The failure is DETECTABLE -- prove_segment verifies before
-// returning -- and re-proving a segment is cheap next to losing a chunk. With the root cause fixed,
-// a retry here is NEW information, not the old fault: which is exactly why it must stay loud.
-//
-// LOUD ON PURPOSE. A silent retry would turn a known prover fault into an invisible one and hide any
-// change in its rate, which is the number #119 actually needs. Every retry prints, and the total is
-// reported at the end of a run, so the rate stays measurable. If a segment fails REPEATEDLY that is
-// not #119 and the error is propagated unchanged.
-fn prove_segment_resilient(
-    server: &std::rc::Rc<dyn risc0_zkvm::ProverServer>,
-    ctx: &risc0_zkvm::VerifierContext,
-    seg: &risc0_zkvm::Segment,
-    what: &str,
-) -> risc0_zkvm::SegmentReceipt {
-    const ATTEMPTS: usize = 3;
-    let mut last: Option<String> = None;
-    for attempt in 1..=ATTEMPTS {
-        match server.prove_segment(ctx, seg) {
-            Ok(r) => {
-                if attempt > 1 {
-                    println!("  [#119] {what}: succeeded on attempt {attempt}");
-                    RETRIES_119.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                return r;
-            }
-            Err(e) => {
-                let msg = format!("{e:#}");
-                // Only retry the fault we know is transient. An OOM, a malformed segment or a
-                // missing zkr will fail identically every time, and retrying those wastes a card
-                // for three times as long before saying the same thing.
-                let transient = msg.contains("verification indicates proof is invalid")
-                    || msg.contains("verify segment");
-                println!("  [#119] {what}: attempt {attempt}/{ATTEMPTS} failed: {}",
-                    msg.lines().next().unwrap_or("?"));
-                if !transient {
-                    panic!("{what}: not a #119 fault, not retrying: {msg}");
-                }
-                last = Some(msg);
-            }
-        }
-    }
-    panic!("{what}: failed {ATTEMPTS} times, last error: {}", last.unwrap_or_default());
-}
-
-fn prove_session_resilient(
-    server: &std::rc::Rc<dyn risc0_zkvm::ProverServer>,
-    ctx: &risc0_zkvm::VerifierContext,
-    session: &risc0_zkvm::Session,
-) -> risc0_zkvm::Receipt {
-    use std::time::Instant;
-    let nseg = session.segments.len();
-    // ~20 progress lines whatever the size, matching the cadence `FoldProgress` used when this went
-    // through `prove_session`. The line format is deliberately unchanged: recorded benchmark logs
-    // are parsed for it.
-    // #256: the board worker sets HAZYNC_PROGRESS_EVERY=1 and watches these lines -- a completed
-    // segment is the only honest "still making progress" signal (silence is not: healthy provers on
-    // block 39,318 were once killed for being quiet). Unset keeps the ~20-line cadence above.
-    let every = std::env::var("HAZYNC_PROGRESS_EVERY").ok().and_then(|v| v.parse::<usize>().ok())
-        .filter(|&v| v > 0).unwrap_or((nseg / 20).max(1));
-    let t = Instant::now();
-    let mut receipts: Vec<risc0_zkvm::SegmentReceipt> = Vec::with_capacity(nseg);
-    for (i, sref) in session.segments.iter().enumerate() {
-        let seg = sref.resolve().expect("resolve segment");
-        receipts.push(prove_segment_resilient(server, ctx, &seg, &format!("segment {i}")));
-        let n = i + 1;
-        if n % every == 0 || n == nseg {
-            let el = t.elapsed().as_secs_f64();
-            // Rate from work actually done, not from a guess — early estimates are poor and say so
-            // by being obviously early rather than by being hidden.
-            let eta = el / n as f64 * (nseg - n) as f64;
-            println!("    segment {n}/{nseg}  {el:.0}s elapsed, ~{eta:.0}s left");
-        }
-    }
-    // ASSEMBLY: lift every segment receipt and join them into one. #256 taught the board worker's
-    // watchdog about the segment loop above and left THIS phase silent, which is where block 39,318
-    // actually died -- 880/880 segments proved in 3,102s, then no output at all, killed at 600s,
-    // retried, killed again, re-claimed, forever. Assembly is ~one lift and ~one join per segment, so
-    // its cost scales with segment count: above roughly 600 segments every block died this way and the
-    // frontier could not pass one. Silence was the bug, not the duration.
-    //
-    // A heartbeat thread rather than a callback because `assemble_from_segment_receipts` is a single
-    // blocking call with no progress hook. It prints on the same stdout the worker already parses;
-    // Rust's stdout is a LineWriter, so each line flushes through the pipe as it is written.
-    let asm_t = Instant::now();
-    let asm_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let asm_flag = asm_done.clone();
-    let every = std::env::var("HAZYNC_ASSEMBLY_TICK").ok()
-        .and_then(|v| v.parse::<u64>().ok()).filter(|&v| v > 0).unwrap_or(30);
-    let hb = std::thread::spawn(move || {
-        let t = Instant::now();
-        let mut next = every;
-        while !asm_flag.load(std::sync::atomic::Ordering::Relaxed) {
-            std::thread::sleep(std::time::Duration::from_millis(250));
-            let el = t.elapsed().as_secs();
-            if el >= next {
-                println!("    assembling {nseg} segment receipts (lift + join)  {el}s elapsed");
-                next = el + every;
-            }
-        }
-    });
-    let assembled = server.assemble_from_segment_receipts(ctx, session, receipts);
-    asm_done.store(true, std::sync::atomic::Ordering::Relaxed);
-    let _ = hb.join();
-    println!("    assembled {nseg} segment receipts in {:.0}s", asm_t.elapsed().as_secs_f64());
-    assembled.expect("assemble from segment receipts").receipt
-}
-
-static RETRIES_119: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
-fn report_119_retries() {
-    let n = RETRIES_119.load(std::sync::atomic::Ordering::Relaxed);
-    if n > 0 {
-        println!("  [#119] {n} segment(s) needed a retry this run — the rate is worth recording on the issue");
-    }
-}
-
-/// Reports the #119 retry total however `main` exits.
-///
-/// ⛔ `prove_segment_resilient`'s own comment says the total "is reported at the end of a run, so the
-/// rate stays measurable" — and it never was: `report_119_retries` had no caller, so every retry was
-/// counted and then discarded. #119 is still open and still unexplained, and the retry RATE is the
-/// number it actually needs.
-///
-/// A call at the end of `main` would not have worked: `main` dispatches a dozen commands with early
-/// `return`s, so it would fire for almost none of them. A drop guard fires on every normal exit path.
-struct Report119OnExit;
-impl Drop for Report119OnExit {
-    fn drop(&mut self) { report_119_retries(); }
 }

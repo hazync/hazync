@@ -124,8 +124,9 @@ try:
     worker_src = open(os.path.join(ROOT, "coordinator", "hazync")).read()
     host_defaults = set(re.findall(r'unwrap_or_else\(\|_\| format!\("(range|chunk)_\{\w+\}\.(\w+)"\)\)', host_src))
     exts = {ext for _, ext in host_defaults}
-    check(host_defaults and exts == {"hzk"},
-          f"every host default output is .hzk (found {sorted(exts) or 'none'})")
+    # since CUTOVER C8 the host has no such default (prove-chunk's chunk_<i>.hzk went with RISC Zero; the board's leaf
+    # is range_<h>.bin, an HZE1 file: lz_coord.rs): any that comes back must be .hzk
+    check(exts <= {"hzk"}, f"every host default output is .hzk (found {sorted(exts) or 'none'})")
     check("_prover_out(work" in worker_src,
           "the worker RESOLVES the prover's output name rather than assuming it")
     check(not re.search(r'parts\.append\(f"range_\{h\}\.(bin|hzk)"\)', worker_src),

@@ -363,7 +363,7 @@ pub(crate) fn reforest_cmd(out: &str, s_height: u32, cli: &str, all: bool, jobs:
         let mut recs = libzync::history::decode_all(&b).unwrap_or_else(|e| panic!("{hp}: {e}"));
         for r in recs.iter_mut().filter(|r| r.height >= 1 && r.height <= s_height) {
             assert_eq!(crate::hex(&crate::rev(r.hash.to_vec())), cache[r.height as usize - 1].0, "{hp}: record {} is not the node's block", r.height);
-            r.undo = crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), r.height).then_some(cache[r.height as usize - 1].1);
+            r.undo = crate::handover_pin::leaf_has_undo(&crate::own_image(), crate::pinned_lineage(), r.height).then_some(cache[r.height as usize - 1].1);
         }
         crate::lz::write_atomic(&hp, &recs.iter().flat_map(|r| r.encode()).collect::<Vec<u8>>());
         println!("  reforest: {hp}: undo hashes in records 1..={}", s_height.min(recs.len().saturating_sub(1) as u32));

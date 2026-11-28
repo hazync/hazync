@@ -2,83 +2,32 @@ name: windows-prove
 # A release build says so in its run name: scripts/windows-host.sh takes the release's host.exe only from such a run.
 run-name: ${{ inputs.release_build == 'true' && 'windows-prove RELEASE BUILD (no caches, --locked)' || 'windows-prove' }}
 
-# Can a NATIVE Windows host actually PROVE? (hazync#616, #631)
+# The Windows DRIVER host (CUTOVER C8 step 5, 28.11.2026): prover/host built natively for Windows (CPU, MSVC), the
+# program that prepares blocks, writes the guest's input streams, keeps the coin log, the trie and the BIP30 tree, and
+# drives the engine (hzengine.exe, built by engine-windows.yml) for every guest run. Since C8 it embeds no guest and
+# carries no prover: the RISC Zero guest job (reproduce/libzync.Dockerfile), the embedded ELF, the CUDA host
+# (build-cuda) and the RISC Zero prove of block 1 went with RISC Zero's backend. v0.27.1 is the last release whose
+# Windows host proved on RISC Zero (its record: run 36933650193, block 170 in 2875.1 s; the CUDA build, #631).
 #
-# ⭐ WHY THIS IS CLOSER THAN IT LOOKS. The thing that makes Windows hard is CUDA: the kernels are
-# compiled through nvcc with GCC-style host flags (#631/#632). But CPU proving needs NONE of that --
-# `build_cuda_kernels()` runs only `if env::var("CARGO_FEATURE_CUDA").is_ok()`, and the CPU kernels
-# go through `cc::Build` with `.flag_if_supported("/std:c++17")`, so MSVC is anticipated upstream.
-# And `risc0-zkvm` carries the `prove` feature UNCONDITIONALLY, so a build without `--features cuda`
-# is a working CPU prover with the local prover linked in.
+# What this run shows on Windows, with no engine and no GPU (both are hzengine's):
+#   * host.exe imports only DLLs every Windows has (no Visual C++ runtime, no CUDA, no nvcuda.dll);
+#   * it refuses to name an image id it was not given (method-id, no engine set up: exit 1), and names the board key's
+#     (the engine chain's proof of mainnet 1..200 in swiftsync-verify/tests/data/engine200: its vk.bin and pin);
+#   * libzync-prep of mainnet 1..200 from genesis (prover/testdata/libzync/mainnet) on Windows reaches EXACTLY the
+#     state the engine proved on Linux: verify-any of that proof with --check-end against these prep states, under the
+#     pinned key (verify-core: the STARK, the public values, the image, then the range and end checks), says RANGE-OK
+#     ... end=board; and a proof byte or a journal byte changed is refused.
+# What it cannot show: an engine prove on Windows (hzengine.exe on a real card: ROADMAP 2.9, engine/WINDOWS_TEST.md).
 #
-# ⛔ THAT LAST PART IS LOAD-BEARING AND WAS ONCE BROKEN. risc0's default backend shells out to
-# `r0vm`, a separate ~109 MB binary that is not in the release, so a contributor who downloaded only
-# the host got "No such file or directory" on their first prove -- and only on the CPU path, because
-# the CUDA build links its prover in. main.rs forces RISC0_PROVER=local when unset for exactly this.
-#
-# ⇒ So this asks the one question nothing has asked: does `host prove-block` produce a real STARK
-# receipt on Windows? `prove-block` builds block 170's witness IN-PROCESS from fixtures -- no
-# network, no bundle, no input files -- which is what makes it a usable CI test.
-#
-# ⛔⛔ AND IT UPLOADS host.exe. A Windows desktop with an NVIDIA GPU needs no Rust and no CUDA
-# toolkit to try this: download the artifact and run it. That is the whole point of building it here.
-#
-# ⚠ WHAT THIS CANNOT ANSWER: the GPU. A windows-latest runner has no GPU, so this is the CPU path
-# only. The CUDA variant needs the toolkit in CI to build and real hardware to run; #631 tracks it.
-#
-# ✅✅📏 IT PASSED, AND THAT CLEARS #616's BAR. Measured on windows-latest, run 36933650193
-# (507c3e8, branch test/windows-prove-combined), 2026-10-01:
-#
-#     === PROVING block 170 chain_step (real STARK receipt) ===
-#     PROVED in 2875.1s — receipt VERIFIED against METHOD_ID.
-#       chain tip: height 170  cum_work 4295032833   UTXO root leaves: 9
-#       receipt ~1408226 bytes (STARK)
-#
-# ⇒ A proof produced on a non-Linux machine whose receipt verifies against the canonical guest id
-# 37987b85…. Not "the barrier is documented as removed" -- a receipt.
-#
-# ⛔ READ prove.log, NOT THE STEP'S COLOUR. The number above comes from the uploaded artifact. The
-# step had NO continue-on-error on that run, so the green was genuine -- but it has carried one
-# before, and a green then meant nothing. The claim is "prove.log says VERIFIED"; the step going
-# green is corroboration, never the evidence. ⇒ If continue-on-error is ever added back here while
-# something is being debugged, DELETE IT the moment the prove passes again.
-#
-# ⚠📏 AND THIS DOES NOT MAKE CPU PROVING USEFUL FOR REAL BLOCKS. 2875 s for block 170 -- a single
-# spend, 9 UTXO leaves -- on 4 runner cores. A tip block is thousands of segments. The value here is
-# that the PLATFORM works (and small/early board blocks); anything at the tip still needs a GPU.
-#
-# ⛔⛔ DISPATCH THIS ON A BRANCH, NOT ON main, WHILE IT IS STILL AN OPEN QUESTION.
-#
-# A workflow_dispatch run attaches its check to the commit it ran against. Dispatched on main, a
-# failure posts a red `prove` check on main's HEAD -- indistinguishable at a glance from main being
-# broken. That happened once (run 36892040422) and the red outlived the experiment: every attempt
-# after it was on a branch, so nothing was repeating, but the repo looked like it was failing.
-#
-# ⚠ The next person to read a red that does not mean what it looks like either panics or learns to
-# ignore reds. Both are worse than no signal at all. ⇒ The guest and build jobs below are honest
-# tests and SHOULD go red when they break; the point is only where the run is anchored.
-#
-# ⇒ Once prove-block passes, this is worth promoting to a real check on main. Until then it is an
-# experiment and belongs on the branch carrying the experiment.
+# ⛔ DISPATCH A BRANCH, NOT main, while this is being changed: a workflow_dispatch run attaches its check to the commit
+# it ran against, and a red on main's HEAD reads as main being broken (run 36892040422 once did that).
 
 on:
   workflow_dispatch:
     inputs:
-      seg_po2:
-        description: 'HAZYNC_SEG_PO2 (lower = less memory per segment; blank = the default)'
-        default: ''
       ref_note:
         description: 'DISPATCH A BRANCH, NOT main — see the warning in this file'
         default: 'dispatch this on a branch; a failure on main posts a red check against main'
-      toolset:
-        description: "MSVC toolset: 'newest-supported' (default) or an exact prefix like 14.29 (#631)"
-        default: 'newest-supported'
-      cuda:
-        description: "CUDA redist set: 12.9.1 (default) or 12.6.3 — both pinned by sha256 (#631)"
-        default: '12.9.1'
-      skip_cpu_prove:
-        description: "'true' skips the 48-minute CPU prove and runs only the CUDA build (#631)"
-        default: 'false'
       release_build:
         description: "'true' = the host.exe a release ships: no cargo caches restored, --locked (review 11-12, release #5)"
         default: 'false'
@@ -88,202 +37,26 @@ permissions:
   actions: read
 
 jobs:
-  # ── the canonical guest, built where it is canonical ───────────────────────────────────────────
-  # ⚠ Same shape as cross-platform-guest.yml (now history/.github/workflows/), which is measured to work: the container build
-  # succeeds on a runner once ~15 GB is freed, and its own id check passes.
-  guest:
-    runs-on: ubuntu-latest
-    outputs:
-      pin: ${{ steps.pin.outputs.id }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { fetch-depth: 0 }
-
-      - name: The pin this run must reproduce
-        id: pin
-        run: |
-          # 2026-11-08: libzync replaced the CORE guest; the Windows host embeds the PUBLISHED libzync mainnet image
-          PIN=$(grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}')
-          case "$PIN" in
-              ????????????????????????????????????????????????????????????????) : ;;
-              *) echo "reproduce/LIBZYNC_IDS has no 64-hex mainnet id"; exit 1 ;;
-          esac
-          echo "id=$PIN" >> "$GITHUB_OUTPUT"
-
-      # ⭐ CACHE THE GUEST ELF. It is BYTE-reproducible — five container builds produced
-      # 69,980,208 bytes, sha256 35e3f55e…, identical every time (#620) — so a cache hit cannot
-      # smuggle in a different guest. 📏 The container build costs ~20 min, which was being paid
-      # again on every iteration of a Windows-side bug that has nothing to do with the guest.
-      #
-      # ⛔ THE CACHE IS NOT TRUSTED, IT IS CHECKED. The key is the guest tree plus the pin, and both
-      # Windows jobs independently assert `host method-id` == reproduce/METHOD_ID afterwards. A
-      # wrong or corrupted ELF fails there, which is the same gate a fresh build passes through.
-      - name: Restore the guest ELF if this exact guest was built before
-        id: elfcache
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: hazync-guest.elf
-          key: libzync-guest-elf-${{ hashFiles('prover/methods/guest/**', 'libzync/src/**', 'coinbase-smt/src/**', 'patches/**', 'coreshim/**', 'reproduce/LIBZYNC_IDS', 'reproduce/libzync.Dockerfile', 'scripts/libzync-base.sh') }}
-
-      - name: Free disk, because the container build needs ~15 GB
-        if: steps.elfcache.outputs.cache-hit != 'true'
-        run: |
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup || true
-          sudo docker image prune -af || true
-          df -h / | tail -1
-
-      - name: Build the guest in the libzync reproducible container
-        if: steps.elfcache.outputs.cache-hit != 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -o pipefail   # the tail must not hide a failed build (a 504 from GitHub's downloads surfaced a step late)
-          docker build --secret id=gh_token,env=GITHUB_TOKEN -t hazync-libzync-repro -f reproduce/libzync.Dockerfile . 2>&1 | tail -25
-
-      - name: The container's own id check must have passed
-        if: steps.elfcache.outputs.cache-hit != 'true'
-        env:
-          PIN: ${{ steps.pin.outputs.id }}
-        run: |
-          set -o pipefail
-          GOT=$(docker run --rm hazync-libzync-repro | grep '^libzync-product mainnet ' | awk '{print $4}')
-          [ "$GOT" = "$PIN" ] || { echo "the CONTAINER build is not the published image"; exit 1; }
-          echo "container id $GOT = the pin"
-
-      - name: Stage the guest ELF, and check it against the recorded sha whether built or cached
-        # ⛔ THE CACHE-HIT FLAG COMES THROUGH env:, NOT SPLICED INTO THE SCRIPT. GitHub substitutes
-        # ${{ }} before bash parses the block, so a value carrying shell metacharacters executes as
-        # code. `release-sign.yml` once did exactly that with a release tag while holding
-        # GPG_PRIVATE_KEY and contents: write, and workflow_dispatch let any write-access account
-        # choose the tag (external review, 2026-08-01). check-workflow-injection.sh gates it
-        # categorically — and caught this step, which is the gate working, not a false positive.
-        # ⚠ This particular value is actions/cache's own output and not attacker-controlled; the
-        # rule is absolute anyway, because the next one might be.
-        env:
-          CACHE_HIT: ${{ steps.elfcache.outputs.cache-hit }}
-        run: |
-          set -o pipefail
-          if [ "$CACHE_HIT" = "true" ]; then
-              echo "cache hit — no container build ran"
-          else
-              docker create --name lzelf hazync-libzync-repro >/dev/null
-              docker cp lzelf:/root/libzync-elf/mainnet.bin hazync-guest.elf
-              docker rm lzelf >/dev/null
-              [ -s hazync-guest.elf ] || { echo "no guest ELF in the container"; exit 1; }
-          fi
-          # ⛔ ONE CHECK ON BOTH PATHS. A cached artefact that is never verified is a cached
-          # artefact nobody can trust; reproduce/GUEST_ELF_SHA256 is the pin build.rs already
-          # enforces, so assert it here too rather than only downstream.
-          GOT=$(sha256sum < hazync-guest.elf | cut -d' ' -f1)
-          # ⛔⛔ PARSE IT THE WAY build.rs DOES: the FIRST non-empty, non-comment line.
-          # `grep -oE '[0-9a-f]{64}' | head -1` returns 37987b85… — the METHOD_ID, which appears in
-          # that file's PROSE explaining why the two pins differ. The check would then demand the
-          # image id as the file's sha256 and fail on every correct build. Caught before dispatch.
-          WANT=$(grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $6}')
-          echo "guest ELF: $(stat -c%s hazync-guest.elf) bytes  sha256 $GOT"
-          [ -n "$WANT" ] || { echo "⛔ no mainnet GUEST_ELF_SHA256 in reproduce/LIBZYNC_IDS"; exit 1; }
-          [ "$GOT" = "$WANT" ] || { echo "⛔ guest ELF sha MISMATCH; want $WANT"; exit 1; }
-          echo "✅ matches reproduce/LIBZYNC_IDS"
-          # the pins build.rs requires beside a prebuilt libzync ELF (HAZYNC_GUEST_PIN_DIR)
-          mkdir -p lz-pins
-          grep '^libzync-product mainnet ' reproduce/LIBZYNC_IDS | awk '{print $4}' > lz-pins/METHOD_ID
-          echo "$WANT" > lz-pins/GUEST_ELF_SHA256
-          echo "libzync=1 assumevalid=0 network=mainnet coinlog=1 trie=1 utxohash=1" > lz-pins/PROFILE
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: hazync-guest-elf
-          path: |
-            hazync-guest.elf
-            lz-pins/
-          compression-level: 0        # ⚠ measured: it compresses 2.6%, so this buys nothing
-          retention-days: 5
-
-  # ── ⛔ THE QUESTION: does a native Windows host build and PROVE? ────────────────────────────────
+  # The job keeps its name `prove` (scripts/windows-host.sh takes the CPU host from the run's `prove` job) and its
+  # artifact name hazync-host-windows-x86_64-cpu.
   prove:
-    needs: [guest]
-    # ⛔ PINNED since its host.exe SHIPS (v0.26.1, hazync-host-x86_64-windows-cpu.zip): windows-latest moves under a
-    # release. windows-2022, the image build-cuda is pinned to (review of a04038ce, L11). It ran on windows-latest until
-    # then (run 36933650193, `PROVED in 2875.1s`); the prove below is what proves it here too.
+    # ⛔ PINNED since its host.exe ships: windows-latest moves under a release (review of a04038ce, L11).
     runs-on: windows-2022
-    # ⚠ The CPU prove takes ~48 min and is ALREADY ANSWERED (run 36933650193). When iterating on
-    # the CUDA build there is no reason to pay for it again, so it can be skipped deliberately.
-    # ⛔ Default is to RUN it: a regression test you have to remember to switch on is not one.
-    if: inputs.skip_cpu_prove != 'true'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { fetch-depth: 0 }
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: hazync-guest-elf
-          # ⛔ Into the CRATE directory. A cargo build script's cwd is its own package root, not the
-          # step's working-directory -- measured the hard way in run 36819000458.
-          path: prover/methods
 
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
 
-      - name: The guest arrived intact
-        shell: bash
-        run: |
-          n=$(wc -c < prover/methods/hazync-guest.elf)
-          echo "guest ELF: $n bytes"
-          [ "$n" -gt 60000000 ] || { echo "truncated artifact ($n bytes)"; exit 1; }
-
-      - name: Build the host for Windows — CPU, no CUDA
+      - name: Build the driver host for Windows (CPU, MSVC, static CRT; no guest)
         shell: bash
         working-directory: prover
         env:
-          # ⚠ A bare filename: build.rs resolves it against its own crate dir, where the artifact is.
-          HAZYNC_GUEST_ELF: hazync-guest.elf
-          # libzync (2026-11-08): the published mainnet image; its pins sit beside the ELF (both resolve against the crate dir)
+          # the libzync product profile (methods/build.rs: the profile constants the guest is built with)
           HAZYNC_LIBZYNC: '1'
-          HAZYNC_GUEST_PIN_DIR: lz-pins
-          # ⛔⛔ MSVC NEEDS C++20 FOR THESE KERNELS. Measured, run 36892040422: over 100 instances of
-          #
-          #   risc0-circuit-keccak-sys-4.0.3/kernels/cxx/layout.cpp.inc(91):
-          #     error C7555: use of designated initializers requires at least '/std:c++20'
-          #
-          # GCC and clang accept designated initializers in C++17 as an extension; MSVC does not.
-          # `risc0-build-kernel`'s compile_cpp passes `.flag_if_supported("/std:c++17")`, and that
-          # crate is NOT vendored here -- so rather than take a third local patch, this sets CXXFLAGS,
-          # which the `cc` crate appends AFTER its own flags, and MSVC honours the last /std it sees.
-          #
-          # ⚠ Only the keccak sys crate failed; our vendored risc0-circuit-rv32im-sys compiled clean.
-          # ⚠ And this is a WINDOWS-ONLY job, so nothing about the Linux prover is touched by it.
-          # ⛔⛔ AND /DNOMINMAX, for the classic Windows collision. Measured, run 36901525820:
-          #
-          #   risc0-sys-1.5.0/cxx/vendor/poolstl.hpp(551):
-          #     error C2589: '(': illegal token on right side of '::'
-          #     error C3878: syntax error: unexpected token '(' following 'expression'
-          #
-          # all at ONE line. windows.h defines `min` and `max` as MACROS, so `std::min(a,b)` expands
-          # to `std::(a)<(b)?(a):(b)` -- hence "illegal token on right side of '::'" and the
-          # cascading ')' and ':' errors from the ternary fragments. NOMINMAX suppresses the macros
-          # and the std:: functions resolve normally.
-          #
-          # ⚠ It is risc0-sys, NOT the crate the earlier log seemed to implicate: step_verify_*.cpp
-          # were simply the last SUCCESSFUL compiles scrolling past before the failure.
-          CXXFLAGS: /std:c++20 /DNOMINMAX
-          # ⛔⛔ 32 MB MAIN-THREAD STACK. Windows reserves 1 MB per thread by default; Linux gives
-          # 8 MB. The risc0 prover recurses deep in its NTT/FRI code, and run 36927996077 showed
-          # FIVE threads overflowing -- including `thread 'main'`:
-          #
-          #   === PROVING block 170 chain_step (real STARK receipt) ===
-          #   thread '<unknown>' (920) has overflowed its stack      (x4 more)
-          #   thread 'main' (5376) has overflowed its stack
-          #   panicked at host/src/main.rs:611: prove: Generic exception
-          #
-          # ⚠ The "Generic exception" is the C++ FFI reporting the wreckage; the overflow is the
-          # cause. ⛔ RUST_MIN_STACK CANNOT FIX THE MAIN THREAD -- its stack is RESERVED IN THE PE
-          # HEADER at link time, so it takes a linker flag and nothing else will do.
-          # ⚠ A link flag is host-side and cannot move METHOD_ID; the id check downstream says so.
-          # ⛔⛔ +crt-static (review of a04038ce, M1): without it host.exe imports VCRUNTIME140.dll, VCRUNTIME140_1.dll and
-          # MSVCP140.dll (measured: the CPU artifact of run 42540389071), which a runner has and an ordinary office PC
-          # may not — exactly the machine the CPU prover exists for. Static CRT: Rust links libcmt, and the cc crate
-          # compiles the C++ kernels with /MT because it follows the crt-static target feature. Host-side only: the
-          # guest (and so the image id) is built in the container job and embedded as a file; the id check and the
-          # prove below run on this very binary. The import check after the build refuses anything non-system.
+          # ⛔ +crt-static (review of a04038ce, M1): without it host.exe imports VCRUNTIME140.dll, VCRUNTIME140_1.dll and
+          # MSVCP140.dll, which an ordinary office PC may not have. 32 MB main-thread stack: Windows reserves 1 MB per
+          # thread (Linux gives 8 MB) and the main thread's is fixed in the PE header at link time.
           RUSTFLAGS: -C link-arg=/STACK:33554432 -C target-feature=+crt-static
         run: |
           set -o pipefail
@@ -292,119 +65,62 @@ jobs:
           got=$(rustc -V | awk '{print $2}')
           echo "rustc $got (prover/rust-toolchain.toml: $want)"
           [ "$got" = "$want" ] || { echo "::error::rustc $got is not prover/rust-toolchain.toml's $want"; exit 1; }
-          # ⛔ NO `--features cuda`. That is what keeps build_cuda_kernels() -- and every GCC-style
-          # nvcc flag with it -- out of this build entirely.
-          #
-          # ⛔⛔ KEEP THE WHOLE LOG. `| tail -25` ate the one thing needed twice: run 36896243277
-          # ended with "error occurred in cc-rs: command did not execute successfully (exit code 2)"
-          # and the cl.exe diagnostic that said WHY had already scrolled past the window. A job whose
-          # failure cannot be read is a job that gets re-run blind.
+          # ⛔ KEEP THE WHOLE LOG (a tail once ate the one diagnostic needed, run 36896243277)
           set +e
           cargo build -p host --release --locked > build.log 2>&1
           rc=$?
           set -e
           echo "cargo exit: $rc  ($(wc -l < build.log) lines captured)"
-          # ⚠ On failure show the LAST 120 lines, which is enough for a cc-rs block plus the cl.exe
-          # errors above it; the full log goes up as an artifact either way.
           if [ "$rc" -ne 0 ]; then
-              echo "=== last 120 lines ==="
-              tail -120 build.log
-              echo "=== every compiler diagnostic in the whole log ==="
-              # ⚠ WHOLE LINES, not -o. `grep -oE "error C…"` starts matching AT `error` and
-              # throws the file:line away -- which is how a run with the logging already fixed still
-              # showed me errors with no location. The path is the useful half.
-              grep -aE "error C[0-9]+|fatal error [A-Z0-9]+" build.log | sed 's#.*[\\/]##' | sort -u | head -20
+              echo "=== last 120 lines ==="; tail -120 build.log
               exit "$rc"
           fi
           tail -5 build.log
+          ls -l target/release/host.exe
 
-      - name: ⛔ the CPU host.exe imports only DLLs every Windows has (no VC++ runtime, no CUDA)
+      - name: ⛔ host.exe imports only DLLs every Windows has (no VC++ runtime, no CUDA)
         shell: bash
         run: python3 scripts/pe_imports.py prover/target/release/host.exe --cpu
 
-      - name: ⛔ the binary must carry the CANONICAL id, or a proof from it is worthless
+      - name: ⭐ The driver on Windows - prep 1..200 reaches the engine-proved state; verify-any; refusals
         shell: bash
-        working-directory: prover
         env:
-          PIN: ${{ needs.guest.outputs.pin }}
-        run: |
-          set -o pipefail
-          GOT=$(./target/release/host.exe method-id | grep -oE '[0-9a-f]{64}' | head -1)
-          echo "windows host id : ${GOT:-<none>}"
-          echo "canonical       : $PIN"
-          [ "$GOT" = "$PIN" ] || { echo "the Windows build is NOT canonical"; exit 1; }
-
-      - name: ⭐ PROVE A BLOCK ON WINDOWS — a real STARK receipt
-        shell: bash
-        working-directory: prover
-        env:
-          # ⚠ Lowering the segment po2 cuts peak memory per segment. windows-latest has 16 GB, and a
-          # prover OOM surfaces as a raw allocation panic, so the knob is exposed on the dispatch.
-          HAZYNC_SEG_PO2: ${{ github.event.inputs.seg_po2 }}
           RUST_BACKTRACE: '1'
-          # ⚠ And 32 MB for SPAWNED threads (the rayon pool). This covers the four `<unknown>`
-          # overflows; the linker flag above covers `main`. Both are needed -- neither alone is
-          # enough, which is exactly what the five-thread list in run 36927996077 shows.
-          RUST_MIN_STACK: '33554432'
         run: |
           set -o pipefail
-          [ -n "$HAZYNC_SEG_PO2" ] && echo "HAZYNC_SEG_PO2=$HAZYNC_SEG_PO2" || unset HAZYNC_SEG_PO2
-          # ⚠ prove-block builds block 170's witness IN-PROCESS from fixtures: no network, no bundle,
-          # no input file. That is what makes it runnable here at all.
-          #
-          # ⛔⛔ CAPTURE, DO NOT TAIL. The build step above learnt this and THIS step did not: run
-          # 36922591612 piped the prove through `tail -40`, which kept the BOTTOM of a backtrace and
-          # threw away the panic message at the top. The same trap, in the adjacent block, one run
-          # after a commit message was written about it.
-          set +e
-          # libzync: mainnet block 1 proved from genesis (a real receipt: chunk-free block, trie update, aggregate),
-          # then verified by the same exe; genesis..1 is below Core's minimum chainwork, so the verdict is DEMO (exit 2)
-          ./target/release/host.exe libzync-prove-range 1 1 testdata/libzync/mainnet genesis win-out > prove.log 2>&1
-          rc=$?
-          if [ "$rc" = 0 ]; then
-              ./target/release/host.exe libzync-verify win-out/block_1.rcpt >> prove.log 2>&1; v=$?
-              [ "$v" = 2 ] && /usr/bin/grep -qa "LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1" prove.log || rc=9
-          fi
-          echo "prove exit: $rc  ($(wc -l < prove.log) lines captured)"
-          # ⚠ The FIRST lines matter as much as the last: a panic message precedes its backtrace,
-          # and a prover OOM names neither the knob nor a value, so both ends go in the job log.
-          echo "=== first 40 lines ==="
-          head -40 prove.log
-          echo "=== last 40 lines ==="
-          tail -40 prove.log
-          if [ "$rc" -ne 0 ]; then
-              echo "=== every panic / error line in the whole log ==="
-              grep -aiE "panicked at|^error|unwrap|out of memory|allocation|HAZYNC_SEG_PO2" prove.log \
-                  | sort -u | head -20
-          fi
-          exit "$rc"
+          H=prover/target/release/host.exe; D=swiftsync-verify/tests/data/engine200
+          PIN=$(cut -c1-64 "$D/vk.sha256")
+          fail() { echo "::error::$*"; exit 1; }
+          # the genesis tip every board range from block 1 starts at (the pinned mainnet genesis anchor)
+          G=$("$H" libzync-genesis-tip | tr -d '\r')
+          echo "libzync-genesis-tip $G"
+          [ "$G" = 852c5c7e009317c2dd232dcf9b1a9e2babd58df324add461a6ff61824f390167 ] || fail "genesis tip $G"
+          # no engine set up: no image id to name (exit 1, the reason said)
+          set +e; "$H" method-id > mid0.log 2>&1; rc=$?; set -e
+          cat mid0.log
+          [ "$rc" = 1 ] && grep -aq 'runs the guest on the OpenVM engine' mid0.log || fail "method-id with no engine: exit $rc"
+          # the board key's image
+          M=$(HAZYNC_ENGINE_VK="$D/vk.bin" HAZYNC_ENGINE_VK_PIN=$PIN "$H" method-id | tr -d '\r' | grep -oE '[0-9a-f]{64}' | head -1)
+          echo "method-id (board key) $M"
+          [ -n "$M" ] || fail "method-id with the board key printed no id"
+          # prep 1..200 from genesis on Windows, stamped with the key's image
+          HAZYNC_ENGINE_VK="$D/vk.bin" HAZYNC_ENGINE_VK_PIN=$PIN "$H" libzync-prep 1 200 prover/testdata/libzync/mainnet genesis prep200 > prep.log 2>&1 \
+            || { tail -20 prep.log; fail "libzync-prep 1..200"; }
+          tail -1 prep.log
+          V() { HAZYNC_ENGINE_VK="$D/vk.bin" HAZYNC_ENGINE_VK_PIN=$PIN HAZYNC_LZ_STATE_DIR=prep200 HAZYNC_BRIDGE_OUT=no-bundles "$H" verify-any "$@"; }
+          L=$(V "$D/proof.hze" 1 --check-end | tr -d '\r') || fail "verify-any of the engine proof of 1..200 refused it"
+          echo "$L"
+          echo "$L" | grep -q "^RANGE-OK lo=1 hi=200 in_tip=$G .* image=$M .* anchored=1 end=board$" || fail "not RANGE-OK ... end=board: $L"
+          python3 -c "b=bytearray(open('$D/proof.hze','rb').read());b[-5]^=1;open('bad_journal.hze','wb').write(b)"
+          python3 -c "b=bytearray(open('$D/proof.hze','rb').read());b[4000]^=1;open('bad_proof.hze','wb').write(b)"
+          for f in bad_journal.hze bad_proof.hze; do
+            set +e; V "$f" 1 > "$f.log" 2>&1; rc=$?; set -e
+            echo "$f: exit $rc: $(cat "$f.log")"
+            [ "$rc" = 1 ] && grep -aq 'forged, tampered or corrupt' "$f.log" || fail "$f was not refused as a forgery"
+          done
+          echo "WINDOWS_DRIVER_OK: prep 1..200 on Windows == the engine-proved state at 200 (end=board); forgeries refused"
 
-      - name: What Windows answered
-        if: always()
-        shell: bash
-        env:
-          STATUS: ${{ job.status }}
-        run: |
-          echo "native Windows CPU prove: $STATUS"
-          # ⛔ QUOTE prove.log, DO NOT INFER FROM $STATUS. The receipt line is the evidence; a job
-          # status is a summary of steps and has been made to lie here before by continue-on-error.
-          # ⇒ Print the prover's own words, and say plainly when there are none.
-          if [ -f prove.log ] && /usr/bin/grep -qa "LIBZYNC_VERIFY_DEMO: a valid chain from genesis at height 1" prove.log; then
-              /usr/bin/grep -a "LZ_PROVE_RANGE_DONE\|LIBZYNC_VERIFY_DEMO" prove.log | sed 's/^/  /'
-              echo "⭐ A native Windows host proved mainnet block 1 from genesis under the published libzync image,"
-              echo "   and verified the receipt (DEMO: genesis..1 is below the minimum chainwork, as it must be)."
-          elif [ -f prove.log ]; then
-              echo "⛔ prove.log exists but does NOT say the receipt verified. The prove did not pass,"
-              echo "   whatever this job's status says. Read the windows-build-log artifact."
-          else
-              echo "⚠ no prove.log -- the run did not reach the prove step. Nothing is claimed."
-          fi
-          echo "⛔ This is the CPU path. A windows-latest runner has no GPU, so it says nothing about"
-          echo "   CUDA on Windows -- hazync#631 tracks that, and it needs real hardware to run."
-          echo "⚠ CPU proving is for small/early blocks; GPUs (RTX 20-series and newer, #631) do the rest."
-
-      # ⛔⛔ THE ARTIFACT IS THE DELIVERABLE. A Windows desktop with an NVIDIA GPU needs neither Rust
-      # nor a CUDA toolkit to try this -- download and run.
+      # ⛔ THE ARTIFACT IS THE DELIVERABLE (name kept: scripts/windows-host.sh fetches it)
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -412,792 +128,11 @@ jobs:
           path: prover/target/release/host.exe
           retention-days: 14
 
-      # ⛔ The build log, ALWAYS. Two runs were spent discovering that the diagnostic had scrolled
-      # out of a tail window; the next failure should be readable without a third.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: windows-build-log
           path: |
             prover/build.log
-            prover/prove.log
+            prep.log
           retention-days: 14
-
-  # ── ⛔ #631: does the CUDA path COMPILE under MSVC? (it cannot be proved here) ──────────────────
-  #
-  # ⭐ WHY THIS IS NOW POSSIBLE AT ALL. #631 has sat on "neither CI nor the dev box has a Windows
-  # machine with an NVIDIA GPU", and `test_nvcc_flags.py` is only a SOURCE-level guard whose own
-  # comment says "nothing here compiles a kernel under MSVC". But COMPILING needs no GPU -- only
-  # proving does. The one thing that did need a GPU was this, in risc0-circuit-rv32im-sys/build.rs:
-  #
-  #     if env::var_os("NVCC_PREPEND_FLAGS").is_none() && env::var_os("NVCC_APPEND_FLAGS").is_none() {
-  #         build.flag("-arch=native");          // <- queries the LOCAL GPU, fails without one
-  #     }
-  #
-  # ⇒ Setting NVCC_APPEND_FLAGS skips it. Upstream left the escape hatch; no patch is needed, and
-  # the Linux path is untouched because that branch only runs when neither var is set.
-  #
-  # ⛔⛔ CUDA 12.x, NOT 13.x, AND THAT IS A HARD CONSTRAINT. CUDA 13 DROPPED Pascal (sm_61). The
-  # card available to test the result is a GTX 1050 Ti, so 13.x would build something it cannot run.
-  # Pinned to 12.9.1 (2025-06-05), the newest 12.x.
-  #
-  # ⚠ ONLY FOUR COMPONENTS, ~126 MB, instead of a ~3 GB installer. Taken from NVIDIA's own
-  # redistrib manifest and VERIFIED BY SHA256 -- so no third-party action is trusted to put a
-  # compiler on the machine. The kernels need exactly: nvcc, cudart, and cccl (which supplies
-  # <cuda/std/array>, <cuda/atomic>, <thrust/scan.h>, <thrust/execution_policy.h> -- measured by
-  # grepping the includes, not guessed) plus the profiler_api headers CUDA headers pull in.
-  #
-  # ⛔ WHAT THIS JOB CANNOT TELL YOU: whether it PROVES. windows-latest has no GPU. A green run here
-  # means the kernels compiled under MSVC and the binary carries the canonical id -- nothing more.
-  # The uploaded exe is what answers the rest, on real hardware.
-  build-cuda:
-    needs: [guest]
-    # ⛔⛔ windows-2022, NOT windows-latest — AND THE TOOLSET PIN COULD NEVER HAVE FIXED THIS.
-    #
-    # `windows-latest` now images Visual Studio 18 (VS 2026). Four runs died identically with
-    # `cudafe++ died with status 0xC0000005 (ACCESS_VIOLATION)`, including on a THREE-LINE
-    # hello-world kernel, which proved risc0 was never involved. The `nvcc -v` line says why
-    # selecting an older toolset inside that image cannot help:
-    #
-    #   cudafe++ --microsoft_version=1944 --compiler_bindir
-    #     "C:/.../MSVC/14.44.35207/bin/HostX64/x64/../../../../../../.."
-    #
-    # That path resolves to the VISUAL STUDIO INSTALL ROOT — `.../Visual Studio/18/Enterprise` —
-    # so cudafe++ is pointed at VS 2026 whichever toolset is selected. 14.44 and 14.29 failed the
-    # same way for that reason, and I spent two runs concluding "upstream" from it.
-    #
-    # ⭐ NVIDIA's forums report this exact break against the VS 2026 update (14.50.x works, 14.51
-    # fails), and name toolchain/header mixing as the usual cause of this crash. windows-2022 is a
-    # genuine VS 2022 image rather than a 2022 toolset inside a 2026 install.
-    #
-    # ⚠ The CPU `prove` job stays on windows-latest: it is PROVEN there (run 36933650193,
-    # `PROVED in 2875.1s — receipt VERIFIED`) and nothing about it touches nvcc.
-    runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { fetch-depth: 0 }
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: hazync-guest-elf
-          path: prover/methods        # ⛔ the crate dir; a build script's cwd is its own package root
-
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
-
-      - name: The guest arrived intact
-        shell: bash
-        run: |
-          n=$(wc -c < prover/methods/hazync-guest.elf)
-          echo "guest ELF: $n bytes"
-          [ "$n" -gt 60000000 ] || { echo "truncated artifact ($n bytes)"; exit 1; }
-
-      # ⛔ nvcc needs cl.exe, and windows-latest does NOT put it on PATH. Export only the four
-      # variables the toolchain needs rather than dumping all of `set` into GITHUB_ENV, where a
-      # multiline value would corrupt the file.
-      # ⛔⛔ CUDA 12.9 SUPPORTS VS 2017-2022 AND THE RUNNER SHIPS NEWER. Measured, run 37016080210:
-      #
-      #   crt/host_config.h(170): fatal error C1189: #error: -- unsupported Microsoft Visual Studio
-      #   version! Only the versions between 2017 and 2022 (inclusive) are supported!
-      #
-      # windows-latest now carries Visual Studio 18 with MSVC 14.51, which CUDA 12.9 (June 2025)
-      # refuses. ⛔ And 13.x is not the way out: it dropped Pascal, which is the card this binary
-      # exists to be tested on.
-      #
-      # ⭐ SO PREFER A SUPPORTED TOOLSET OVER AN OVERRIDE. A VS install usually carries several
-      # MSVC toolsets side by side, and `vcvars64.bat -vcvars_ver=` selects one. VS 2017-2022 are
-      # 14.1x-14.4x; 14.5x and later are what CUDA rejects. If a supported toolset is present this
-      # builds in a combination a real user could have.
-      #
-      # ⚠ `-allow-unsupported-compiler` is the fallback, NOT the plan. nvcc's own words: "using an
-      # unsupported host compiler may cause compilation failure or incorrect run time execution."
-      # A compile that only works with that flag is a weaker answer to #631 than one that does not,
-      # so the step reports loudly which of the two happened rather than hiding it.
-      - name: Put MSVC on PATH, preferring a toolset CUDA 12.9 supports
-        shell: pwsh
-        # ⛔⛔ THE DISPATCH INPUT COMES THROUGH env:, NOT SPLICED INTO THE SCRIPT — and this is the
-        # vector for real, not the benign case. `inputs.toolset` is operator-supplied, so anyone
-        # with write access chooses the string; GitHub substitutes ${{ }} BEFORE pwsh parses the
-        # block, so a value with shell metacharacters would execute as code. That is exactly how
-        # release-sign.yml once took a release tag while holding GPG_PRIVATE_KEY.
-        # ⚠ I wrote the interpolated form here one commit after fixing the same thing in #640, and
-        # check-workflow-injection.sh caught it locally before it was pushed. The gate is load-bearing.
-        env:
-          TOOLSET: ${{ inputs.toolset }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (-not (Test-Path $vswhere)) { throw "vswhere not found at $vswhere" }
-          $vs = & $vswhere -latest -products * `
-                  -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
-                  -property installationPath
-          if (-not $vs) { throw "no VC x86/x64 toolset found" }
-          $bat = Join-Path $vs "VC\Auxiliary\Build\vcvars64.bat"
-          if (-not (Test-Path $bat)) { throw "no vcvars64.bat at $bat" }
-
-          # Which toolsets are actually installed?
-          $tsRoot = Join-Path $vs 'VC\Tools\MSVC'
-          $all = @()
-          if (Test-Path $tsRoot) {
-            $all = Get-ChildItem $tsRoot -Directory | ForEach-Object { $_.Name } | Sort-Object
-          }
-          Write-Host "installed MSVC toolsets: $($all -join ', ')"
-
-          # CUDA 12.9 accepts VS 2017-2022 == MSVC 14.1x-14.4x. Take the NEWEST such toolset.
-          # CUDA 12.9 accepts VS 2017-2022 == MSVC 14.1x-14.4x. Default: the NEWEST such toolset.
-          $eligible = $all | Where-Object {
-            $p = $_.Split('.'); [int]$p[0] -eq 14 -and [int]$p[1] -lt 50
-          } | Sort-Object { [version]$_ }
-          # ⛔⛔ AN EXACT PREFIX IS SELECTABLE, BECAUSE "newest supported" IS A GUESS ABOUT WHICH
-          # ONE WORKS. Run 37021932694 reached ZERO compilation errors on 14.44 and still died with
-          # `cudafe++ died with status 0xC0000005 (ACCESS_VIOLATION)` on all seven .cu files — a
-          # crash inside NVIDIA's closed-source front end, on a toolset CUDA DECLARES supported.
-          # 14.29 (VS 2019) is also installed here and is a different front-end/host pairing, so it
-          # is worth one run. ⚠ This is an experiment, not a fix: if it also crashes, the blocker is
-          # upstream and no toolset on this runner will move it.
-          $want = $env:TOOLSET
-          if ($want -and $want -ne 'newest-supported') {
-            $pick = $eligible | Where-Object { $_.StartsWith($want) } | Select-Object -Last 1
-            if (-not $pick) {
-              Write-Host "requested toolset '$want' is not installed; have: $($all -join ', ')"
-              exit 1
-            }
-            $supported = $pick
-            Write-Host "toolset pinned by dispatch input: $want -> $supported"
-          } else {
-            $supported = $eligible | Select-Object -Last 1
-          }
-
-          $vcvarsArgs = @()
-          if ($supported) {
-            # -vcvars_ver takes major.minor, e.g. 14.44
-            $mm = ($supported.Split('.')[0..1]) -join '.'
-            $vcvarsArgs += "-vcvars_ver=$mm"
-            Write-Host "SELECTED toolset $supported (CUDA 12.9 supports this)"
-            "CUDA_HOST_SUPPORTED=1" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-            # ⛔⛔ PUTTING cl.exe ON PATH IS NOT ENOUGH, AND RUN 37016761710 PROVES IT. vcvars
-            # selected 14.44 and `cl.exe` reported 19.44 — yet nvcc was still invoked as
-            #     -ccbin=C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\...
-            # i.e. the 14.51 toolset, and host_config.h rejected it exactly as before.
-            #
-            # WHY: the vendored builder does `.ccbin(env::var("NVCC_CCBIN").is_err())`, so with
-            # NVCC_CCBIN unset the `cc` crate computes -ccbin from ITS OWN Visual Studio detection,
-            # which takes the NEWEST toolset and never looks at PATH.
-            #
-            # ⇒ Setting NVCC_CCBIN does both halves of the job: it makes `.ccbin(false)` so cc adds
-            # no -ccbin of its own, and nvcc reads NVCC_CCBIN as its host-compiler default. The
-            # builder left this hook deliberately; it just has to be used.
-            $hostBin = Join-Path $tsRoot (Join-Path $supported 'bin\HostX64\x64')
-            if (-not (Test-Path (Join-Path $hostBin 'cl.exe'))) {
-              throw "no cl.exe under $hostBin — cannot point nvcc at the supported toolset"
-            }
-            "NVCC_CCBIN=$hostBin" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-            Write-Host "NVCC_CCBIN=$hostBin"
-            $sel = (& (Join-Path $hostBin 'cl.exe') 2>&1 | Select-Object -First 1 | Out-String).Trim()
-            Write-Host "that toolset's cl.exe reports: $sel"
-          } else {
-            Write-Host "NO SUPPORTED TOOLSET: every installed toolset is 14.50+, which CUDA 12.9"
-            Write-Host "refuses. Falling back to -allow-unsupported-compiler, which nvcc warns may"
-            Write-Host "produce incorrect runtime behaviour. The receipt check is what would catch that."
-            "CUDA_HOST_SUPPORTED=0" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          }
-
-          $want = @("PATH","INCLUDE","LIB","LIBPATH")
-          $argline = if ($vcvarsArgs) { " " + ($vcvarsArgs -join " ") } else { "" }
-          cmd /c "`"$bat`"$argline >nul 2>&1 && set" | ForEach-Object {
-            if ($_ -match '^([^=]+)=(.*)$' -and $want -contains $matches[1].ToUpper()) {
-              "$($matches[1].ToUpper())=$($matches[2])" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-            }
-          }
-          # ⛔ POSITIVE: assert cl.exe is reachable AND report the version actually selected, rather
-          # than trusting that -vcvars_ver did what was asked.
-          $newPath = (Get-Content $env:GITHUB_ENV | Select-String '^PATH=' | Select-Object -Last 1) -replace '^PATH=',''
-          if (-not $newPath) { throw "vcvars exported no PATH" }
-          $env:PATH = $newPath
-          $clv = (& cl.exe 2>&1 | Select-Object -First 1 | Out-String).Trim()
-          Write-Host "cl.exe reports: $clv"
-          if ($clv -notmatch '19\.\d+') { throw "cl.exe did not report a version: $clv" }
-      - name: Install CUDA nvcc + cudart + cccl, each verified by sha256
-        shell: pwsh
-        # ⛔ The set name comes through env:, never spliced — inputs are operator-supplied.
-        env:
-          CUDA_SET: ${{ inputs.cuda }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          # name, path under the redist root, and the sha256 from NVIDIA's redistrib_12.9.1.json.
-          # ⛔ CUDA 12.x, NOT 13.x: CUDA 13 dropped Pascal (sm_61) and the card this is for is a
-          # GTX 1050 Ti.
-          $base = 'https://developer.download.nvidia.com/compute/cuda/redist'
-          # ⛔⛔ TWO FULLY PINNED SETS, SELECTED BY INPUT — NOT A MANIFEST FETCHED AT RUNTIME.
-          # Resolving hashes from NVIDIA's manifest at build time would make the manifest the trust
-          # anchor instead of this file, which is a weaker property than the one this step was
-          # written to have.
-          # ⚠ 12.9.1's four archives were downloaded and hash-checked locally before committing.
-          # 12.6.3's hashes come from the same NVIDIA manifest and have NOT been downloaded here —
-          # the step's own sha256 check is what verifies them, loudly, on first use. Claiming both
-          # were pre-verified would be a claim I did not earn.
-          # ⚠ 12.6.3 exists here as the LAST untried #631 experiment: 12.9.1 reached zero
-          # compilation errors on toolsets 14.44 AND 14.29 and died identically in cudafe++ both
-          # times, which rules the host-compiler pairing out and leaves the CUDA version itself.
-          $sets = @{
-            '12.9.1' = @(
-              @{ n='cuda_nvcc';         p='cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.9.86-archive.zip';                 s='227b109663b5e57d2718bcabb24a4ba0d9d4e52d958e327dc476f7c28691be85' },
-              @{ n='cuda_cudart';       p='cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.9.79-archive.zip';             s='179e9c43b0735ffe67207b3da556eb5a0c50f3047961882b7657d3b822d34ef8' },
-              @{ n='cuda_cccl';         p='cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.9.27-archive.zip';                 s='17aaa7c6b8f94a417d8f3261780b7e34b9cbdfab7513bce86768623b06aa28b5' },
-              @{ n='cuda_profiler_api'; p='cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.9.79-archive.zip'; s='b05519f8ce4f02167bfc859358f62eb771d89ac2af3a6952a82317f2af4bc5bd' }
-            )
-            '12.6.3' = @(
-              @{ n='cuda_nvcc';         p='cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.6.85-archive.zip';                 s='3fb9f76b87c37d02f947354be89b718ad5f2c76b6ab47995265bfa3a068a5e14' },
-              @{ n='cuda_cudart';       p='cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.6.77-archive.zip';             s='7a313bc0c93b1a50bb03aa9783a199ae70c3b66e2d8084da65e8254a8577b925' },
-              @{ n='cuda_cccl';         p='cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.6.77-archive.zip';                 s='469b783b6731964170b3d27ae214e97e2a63ec93c57ace3ed4052e6d01261f2e' },
-              @{ n='cuda_profiler_api'; p='cuda_profiler_api/windows-x86_64/cuda_profiler_api-windows-x86_64-12.6.77-archive.zip'; s='d0ed383bac1a84d5c1e1d6a3076b80bc581e488093fef5655d55c39a198aea29' }
-            )
-          }
-          $cudaVer = $env:CUDA_SET
-          if (-not $cudaVer) { $cudaVer = '12.9.1' }
-          if (-not $sets.ContainsKey($cudaVer)) {
-            Write-Host "unknown CUDA set '$cudaVer'; have: $($sets.Keys -join ', ')"; exit 1
-          }
-          Write-Host "CUDA redist set: $cudaVer"
-          $components = $sets[$cudaVer]
-          $root = Join-Path $env:RUNNER_TEMP 'cuda'
-          New-Item -ItemType Directory -Force -Path $root | Out-Null
-          foreach ($c in $components) {
-            Write-Host "-- $($c.n)"
-            $zip = Join-Path $env:RUNNER_TEMP (Split-Path $c.p -Leaf)
-            Invoke-WebRequest -Uri "$base/$($c.p)" -OutFile $zip -UseBasicParsing
-            $got = (Get-FileHash -Algorithm SHA256 -Path $zip).Hash.ToLower()
-            if ($got -ne $c.s) {
-              Write-Host "   SHA256 MISMATCH for $($c.n)"
-              Write-Host "      want $($c.s)"
-              Write-Host "      got  $got"
-              exit 1
-            }
-            Write-Host "   sha256 ok ($([math]::Round((Get-Item $zip).Length/1MB)) MB)"
-            $ex = Join-Path $env:RUNNER_TEMP "x-$($c.n)"
-            if (Test-Path $ex) { Remove-Item -Recurse -Force $ex }
-            [System.IO.Compression.ZipFile]::ExtractToDirectory($zip, $ex)
-            # ⛔ ASSERT THE EXTRACTION PRODUCED SOMETHING. An extractor that fails quietly turns the
-            # layout handling below into a guess -- that is exactly how an earlier version of this
-            # step came to run `cp -r /.` and start copying the whole filesystem.
-            $kids = Get-ChildItem -Path $ex -ErrorAction SilentlyContinue
-            if (-not $kids) { Write-Host "   $($c.n) extracted to NOTHING"; exit 1 }
-            # each archive holds ONE versioned top directory; merge them into a single CUDA root
-            $dirs = @($kids | Where-Object { $_.PSIsContainer })
-            $srcDir = if ($dirs.Count -eq 1) { $dirs[0].FullName } else { $ex }
-            Copy-Item -Path (Join-Path $srcDir '*') -Destination $root -Recurse -Force
-          }
-          # ⛔ TWO PATH FORMS, BECAUSE TWO CONSUMERS WANT DIFFERENT THINGS. CUDA_PATH and
-          # GITHUB_PATH are read by the runner and by nvcc/cargo (Windows form); CUDA_POSIX is for
-          # the bash step that globs for the runtime DLL, where `D:\...` never matches.
-          $posix = ($root -replace '\\', '/') -replace '^([A-Za-z]):', '/$1'
-          $posix = $posix.Substring(0,2).ToLower() + $posix.Substring(2)
-          "CUDA_PATH=$root"     | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          "CUDA_POSIX=$posix"   | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
-          (Join-Path $root 'bin') | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-          Write-Host "CUDA_PATH=$root"
-          Write-Host "CUDA_POSIX=$posix"
-          # ⛔ POSITIVE CONTROLS: nvcc must RUN and report 12.9, and the headers the kernels include
-          # must be present. "the files exist" is not the claim; "the toolchain works" is.
-          $nvcc = Join-Path $root 'bin\nvcc.exe'
-          if (-not (Test-Path $nvcc)) { Write-Host "no nvcc.exe at $nvcc"; exit 1 }
-          $ver = & $nvcc --version 2>&1 | Out-String
-          Write-Host $ver
-          # ⛔ ASSERT THE SELECTED SET, NOT A HARDCODED 12.9 — otherwise choosing 12.6 fails on
-          # this check rather than on the experiment, and the run would say nothing about #631.
-          $mm = ($cudaVer.Split('.')[0..1]) -join '.'
-          if ($ver -notmatch [regex]::Escape("release $mm")) {
-            Write-Host "nvcc does not report release $mm (asked for $cudaVer)"; exit 1
-          }
-          if ($mm -notmatch '^12\.') {
-            Write-Host "CUDA $mm is not 12.x -- Pascal (sm_61) support requires 12.x"; exit 1
-          }
-          foreach ($h in @('include\thrust\scan.h','include\thrust\execution_policy.h','include\cuda\atomic','include\cuda\std\array')) {
-            if (-not (Test-Path (Join-Path $root $h))) { Write-Host "missing header: $h (cccl incomplete)"; exit 1 }
-          }
-          Write-Host "nvcc 12.9 runs, and thrust + libcu++ headers are present"
-      - name: Install protoc, pinned and sha256-verified (#631)
-        shell: bash
-        run: |
-          set -euo pipefail
-          # ⛔⛔ THIS IS WHAT ACTUALLY FAILED TWO 2-HOUR RUNS, AND IT IS NOT A CUDA PROBLEM AT ALL.
-          #
-          # `circom-witnesscalc v0.2.1` runs a prost-build build script that shells out to `protoc`,
-          # which is not on a windows runner. The build spent ~2 h happily compiling sppark,
-          # risc0-sys and risc0-circuit-keccak-sys's CUDA kernels and then died here:
-          #
-          #     error: failed to run custom build command for `circom-witnesscalc v0.2.1`
-          #       Error: Could not find `protoc`. ... Try installing `protobuf-compiler`
-          #
-          # ⛔ AND IT WAS IN THE LOG THE WHOLE TIME, AT LINE 895 OF 962. I read the TAIL and
-          # concluded "no error message, so the build was killed" -- twice, and once in writing. Cargo
-          # flushes buffered build-script WARNINGS after the error, so the tail of a failed cargo log
-          # is warnings and the error sits above them. ⇒ grep the whole file; never read the tail of
-          # a cargo log and conclude anything about whether it failed.
-          #
-          # ⚠ Memory was never the constraint: 13.8 GB of 16 GB free at the moment of failure, 83 GB
-          # of disk. `CARGO_BUILD_JOBS=2` was added on that wrong hypothesis and made the run SLOWER
-          # (2 h 17 m vs 1 h 53 m); it is gone again.
-          URL="https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-win64.zip"
-          SHA="f0c128dc0d8492eceece83bb459a4c0e316764b929ffbf1aa416357fd644edd3"
-          curl -sSL --retry 3 -o protoc.zip "$URL"
-          # ⛔ sha256sum ESCAPES its output with a leading backslash when the name contains one, and
-          # on MSYS it can. Feed the file on STDIN so there is no name in the output to mangle.
-          got=$(sha256sum < protoc.zip | cut -d' ' -f1)
-          [ "$got" = "$SHA" ] || { echo "protoc sha256 MISMATCH: got $got want $SHA" >&2; exit 1; }
-          echo "protoc archive verified: $got"
-          mkdir -p "$RUNNER_TEMP/protoc"
-          unzip -q -o protoc.zip -d "$RUNNER_TEMP/protoc"
-          PROTOC_EXE="$RUNNER_TEMP/protoc/bin/protoc.exe"
-          [ -x "$PROTOC_EXE" ] || { echo "protoc.exe absent after unzip" >&2; exit 1; }
-          # ⚠ prost-build reads PROTOC as a native path; cygpath it or it gets an MSYS path it
-          # cannot exec. This project has the scar: a lone /DNOMINMAX became C:/Program Files/Git/...
-          echo "PROTOC=$(cygpath -w "$PROTOC_EXE")" >> "$GITHUB_ENV"
-          echo "$RUNNER_TEMP/protoc/bin" >> "$GITHUB_PATH"
-          # ⭐ POSITIVE check: it must RUN and print a version, not merely exist on disk.
-          "$PROTOC_EXE" --version
-
-      # ⛔⛔ RESTORE AND SAVE SEPARATELY, AND SAVE ON FAILURE TOO. `actions/cache` saves in a POST
-      # step, and a post step is SKIPPED when the job fails — so a 2-hour CUDA build that dies in a
-      # LATER step saves nothing and the next attempt rebuilds from scratch.
-      #
-      # 📏 That is exactly what happened: five #631 runs at ~2 h each, every one of them starting
-      # from "Cache not found for input keys: cargo-reg-Windows-6300caa…", because every one of them
-      # failed after the build — on protoc, on a DLL, on an encoding. The caching added earlier was
-      # real but could never take effect while the job kept failing.
-      #
-      # ⇒ `cache/restore` + an explicit `cache/save` with `if: always()` makes an expensive build
-      # survive a cheap failure downstream, which is the whole point of caching it.
-      # ⛔ NOT FOR A RELEASE BUILD (review 11-12, release #5): these caches are restored by PREFIX and saved even from
-      # failed runs, so a release exe built on them inherits whatever an earlier run left in the registry and target
-      # dirs. A release build starts clean (about two hours) and still banks its tree below for later test runs.
-      - name: Restore the cargo registry
-        if: inputs.release_build != 'true'
-        id: cache-reg
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}
-          restore-keys: cargo-reg-${{ runner.os }}-
-
-      - name: Restore the CUDA build tree
-        if: inputs.release_build != 'true'
-        id: cache-target
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: prover/target
-          # ⛔ THE GENERATION LIST IS IN THE KEY, AND IN THE PREFIX. sppark's build script does not
-          # declare NVCC_APPEND_FLAGS as an input, so cargo will NOT rebuild it when the flag
-          # changes: a tree restored from a Pascal-only build would hand back Pascal-only kernels
-          # under a log that shows the new flags. ⚠ Keep this tag in step with GPU_ARCHS below and
-          # with the save step's key.
-          key: cuda-target-${{ runner.os }}-a61-70-80-${{ hashFiles('prover/Cargo.lock') }}
-          restore-keys: cuda-target-${{ runner.os }}-a61-70-80-
-
-      - name: ⭐ Build the host for Windows WITH CUDA (#631)
-        shell: bash
-        working-directory: prover
-        env:
-          HAZYNC_GUEST_ELF: hazync-guest.elf
-          # libzync (2026-11-08): the published mainnet image; its pins sit beside the ELF (both resolve against the crate dir)
-          HAZYNC_LIBZYNC: '1'
-          HAZYNC_GUEST_PIN_DIR: lz-pins
-          # ⛔⛔ NO /std:c++20 HERE, AND THAT IS THE POINT. `cc` injects CXXFLAGS into EVERY C++
-          # compilation, and a `.cuda(true)` build is one — so this variable reached nvcc as
-          # `-Xcompiler /std:c++20` and `cudafe++` died with 0xC0000409 on all seven .cu files
-          # (run 37017347238). The CXX kernels DO need C++20 for keccak's designated initializers,
-          # so the flag now lives on the builder's CXX path (HAZYNC_631_MSVC_CXX20) where it can
-          # apply to C++ kernels without reaching the CUDA ones.
-          # ⚠ NOMINMAX stays (poolstl needs it; windows.h makes min/max MACROS), but as `-D`, NOT
-          # `/D`. ⛔⛔ MSYS PATH-MANGLED THE `/` FORM. Measured, run 37020607504: with CXXFLAGS
-          # narrowed to the single token `/DNOMINMAX`, Git Bash rewrote it as a path and cl.exe
-          # received two source FILENAMES:
-          #     c1xx: fatal error C1083: Cannot open source file: 'C:/Program'
-          #     c1xx: fatal error C1083: Cannot open source file: 'Files/Git/DNOMINMAX'
-          # ⚠ It survived in the CPU job because CXXFLAGS there is TWO tokens (`/std:c++20
-          # /DNOMINMAX`) and was not converted — so narrowing this value is what exposed it. That
-          # is measured, not a claim about MSYS's exact rule.
-          # ⇒ MSVC accepts `-D` as readily as `/D`, and `-D` cannot be taken for a path.
-          CXXFLAGS: -DNOMINMAX
-          RUSTFLAGS: -C link-arg=/STACK:33554432
-          # ⛔⛔ THIS VARIABLE DOES TWO JOBS. nvcc reads it as extra flags, AND its mere presence
-          # makes the vendored build.rs skip `-arch=native`, which would query a GPU this runner
-          # does not have. Both halves are required; dropping it fails the build on a GPU-less box.
-          #
-          # Which card generations it is told to build for is decided in the script below.
-        run: |
-          set -o pipefail
-          echo "CUDA_PATH=$CUDA_PATH"
-          # ⛔⛔ THE LAST THREE RUNS WERE KILLED, NOT FAILED. Each ran ~1h50m-2h and ended with
-          # cargo exit 101, NO error message, and cuda-build.log truncated mid-warning. A compile
-          # error prints a diagnostic; a killed process does not.
-          #
-          # ⚠ The suspects are memory and disk, and this project has both scars: the release
-          # profile is fat LTO + codegen-units=1, so the LINK peaks huge, and a CMake build here
-          # needs -j2 max to survive. A windows runner has 4 cores and 16 GB, and nvcc on sppark's
-          # and risc0's template-heavy kernels is not cheap per process.
-          #
-          # ⇒ REPORT IT RATHER THAN GUESS AGAIN. Free disk and memory are printed before the build
-          # and after a failure, so the next diagnosis reads a number instead of a hypothesis.
-          echo "=== resources BEFORE ==="
-          df -h / 2>/dev/null | tail -2
-          wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value 2>/dev/null | tr -d '\r' | grep -E '=[0-9]' \
-            || powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List" 2>/dev/null
-          # ⛔⛔ NVCC_APPEND_FLAGS IS BUILT HERE, NOT IN `env:`, BECAUSE ONE OF ITS FLAGS IS
-          # CONDITIONAL. Its mere PRESENCE also makes the vendored builder skip `-arch=native`,
-          # which queries a GPU this runner does not have — so it must be exported either way.
-          #
-          # ⛔⛔ ONE COMPILED IMAGE PER CARD GENERATION, BECAUSE AN IMAGE RUNS ONLY ON ITS OWN.
-          # This used to be sm_61 alone, for the one card being debugged, with a comment saying the
-          # compute_61 PTX "JITs forward onto newer cards". Nobody had checked. Reading the binary
-          # (2026-10-09) showed five modules, every one sm_61 only, and four of the five with no
-          # PTX at all -- so an RTX card had no native code in it.
-          #
-          # A compiled image is binary-compatible only WITHIN a major revision, upwards: sm_70 runs
-          # on 7.0 and 7.5, sm_80 on 8.0/8.6/8.9. So one image per major covers every card in it:
-          #
-          #     sm_61    GTX 10-series                  (Pascal; the hazync#631 card)
-          #     sm_70    GTX 16-series, RTX 20-series   (Turing is 7.5), Titan V
-          #     sm_80    RTX 30-series, RTX 40-series   (Ampere is 8.6, Ada 8.9)
-          #
-          # ⛔⛔ sm_120 (RTX 50-series, Blackwell) IS NOT IN THE LIST, AND IT WAS TRIED. Run
-          # 37939193159 asked for it and failed after 2h56m, in both risc0 kernel crates, on
-          # NVIDIA's own header:
-          #
-          #   include\cuda/__ptx/instructions/generated/clusterlaunchcontrol.h(78): error: asm
-          #   operand type size(4) does not match type/size implied by constraint 'l'
-          #
-          # Cluster launch control is a Blackwell instruction, and the same toolkit built sm_61
-          # alone without touching that header, so the reading is: it is compiled only for sm_100
-          # and up, and it assumes an 8-byte `long`, which MSVC does not have. ⚠ That is an
-          # inference from the error and the one-image build, not something isolated by a build
-          # that differed only in sm_120.
-          # ⇒ A 50-series card has NO native image in this binary, AND NO FALLBACK EITHER. The
-          # compute_61 PTX asked for below was meant to be one; reading the binary this produced
-          # (run 37961309707) shows it in ONE module of five. Why the other four drop it is not
-          # known. So this build is for 10-, 16-, 20-, 30- and 40-series cards and not 50-series.
-          #
-          # ⚠ Three images roughly triples what nvcc compiles. This build was 2h16m with one.
-          # ⚠ CUDA 12.9 deprecates sm_61 and sm_70 and will warn; a deprecation warning is not an error.
-          GPU_ARCHS="61 70 80"
-          # ⚠ `--list-gpu-code`, NOT `--list-gpu-arch`. The second prints `compute_61`, the first
-          # `sm_61`; matching `sm_` against the wrong one found nothing and stopped the first run
-          # of this in 38 seconds, which is the check doing its job on its own author.
-          KNOWN=$(nvcc --list-gpu-code 2>&1 | tr -d '\r' || true)
-          echo "this nvcc can target: $(echo "$KNOWN" | tr '\n' ' ')"
-          FLAGS=""
-          BUILT=""
-          for a in $GPU_ARCHS; do
-              # ⚠ Whole-line match: `sm_12` must not be satisfied by `sm_120`.
-              if echo "$KNOWN" | /usr/bin/grep -qx "sm_$a"; then
-                  FLAGS="$FLAGS -gencode=arch=compute_$a,code=sm_$a"
-                  BUILT="$BUILT $a"
-              else
-                  echo "⚠ this toolkit cannot target sm_$a — that generation is LEFT OUT of this build"
-              fi
-          done
-          BUILT=$(echo $BUILT | tr ' ' ',')
-          # ⛔ The three generations nearly every contributor's card belongs to are not optional. A
-          # toolkit that cannot build one of them must fail here, in seconds, not after two hours.
-          for must in 61 70 80; do
-              case ",$BUILT," in *",$must,"*) ;; *) echo "⛔ sm_$must cannot be built with this toolkit"; exit 1;; esac
-          done
-          echo "building GPU code for: $BUILT"
-          # The verification step below reads this, so it checks what was ASKED for, not a copy.
-          echo "GPU_ARCHS_BUILT=$BUILT" >> "$GITHUB_ENV"
-          # PTX too, as a last resort for a generation none of the images cover.
-          FLAGS="$FLAGS -gencode=arch=compute_61,code=compute_61"
-          FLAGS="$FLAGS -Wno-deprecated-gpu-targets"
-          # ⛔⛔ C++17, AND BOTH PASSES NEED IT. Run 37021158229, after /std:c++20 came off:
-          #
-          #   poseidon254.cuh(30): error: expected ...
-          #       static_assert(sizeof(fr_t) == 32);
-          #
-          # A SINGLE-ARGUMENT static_assert is C++17. MSVC defaults to C++14, so removing
-          # /std:c++20 did not just stop cudafe++ crashing — it dropped the host pass below the
-          # standard sppark's headers require. ⇒ The answer was never "no standard flag", it was
-          # C++17 rather than C++20: high enough to parse, and not whatever C++20 construct killed
-          # cudafe++ with 0xC0000409.
-          #
-          # ⚠ `-std=c++17` is nvcc's own (DEVICE pass); `-Xcompiler -std:c++17` is the HOST pass.
-          # Both, because the error above came from the host pass and the device pass needs it too.
-          # ⛔ A `-` prefix, not `/`: a lone `/std:...` is what MSYS rewrote into
-          # `C:/Program Files/Git/...` in run 37020607504. cl.exe accepts `-` for any option.
-          # ⛔⛔ C++20, AND THE EARLIER RETREAT TO 17 WAS A MISREADING OF THE SAME VS 2026 BUG.
-          # The vendored rv32im kernels use DESIGNATED INITIALIZERS —
-          #     NondetRegLayout{._super = /*offset=*/12}
-          # which MSVC accepts only at /std:c++20 (error C7555). That is blocker #3 of this chain.
-          # I had set c++20, hit `cudafe++ died with status 0xC0000409`, concluded C++20 was the
-          # cause and dropped to 17 — and run 37115534389 then produced 200 `expected an
-          # expression` errors, every one of them on layout.cu.inc's designated initializers.
-          # ⭐ The 0xC0000409 was the SAME VS 2026 front-end fault that windows-2022 has now fixed,
-          # not a C++20 incompatibility. Two symptoms, one cause, and retreating from 17 to 20
-          # traded a crash for a parse failure.
-          FLAGS="$FLAGS -std=c++20 -Xcompiler -std:c++20"
-          # ⛔⛔ `uint` COMES FROM A FORCED-INCLUDE TYPEDEF, NOT `-Duint=unsigned`.
-          # risc0-sys's kernels use the POSIX `uint`, which MSVC lacks — 13 errors. The obvious fix,
-          # a -D, cleared those and created 200+ new ones: the CUDA and libcu++ headers build the
-          # vector types uint1..uint4 by TOKEN PASTING `uint` with a digit, a macro participates in
-          # that paste, and run 37113822741 shows `unsigned1`..`unsigned4` ninety-six times each
-          # with every tuple trait over them failing to parse. A typedef cannot be pasted.
-          # ⚠ Both passes: `-include` is nvcc's own (device) and `/FI` is MSVC's (host), and the
-          # `uint` uses are in device code. ⛔ An ABSOLUTE Windows path, because a build script's
-          # cwd is its own crate directory, not this one.
-          UINTH=$(cygpath -w "$(pwd)/hazync_win_uint.h")
-          [ -f "$(pwd)/hazync_win_uint.h" ] || { echo "missing hazync_win_uint.h"; exit 1; }
-          FLAGS="$FLAGS -include $UINTH -Xcompiler /FI$UINTH"
-          if [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ]; then
-              echo "host compiler: a CUDA-supported MSVC toolset was selected — NO override needed"
-          else
-              # ⚠ nvcc's own warning: an unsupported host compiler "may cause compilation failure
-              # or incorrect run time execution". ⛔ So a build that needs this is a WEAKER answer
-              # to #631 than one that does not, and the summary step says so. The receipt check on
-              # real hardware is what would actually catch a miscompile.
-              echo "⚠ host compiler: NO supported toolset available — adding -allow-unsupported-compiler"
-              FLAGS="$FLAGS -allow-unsupported-compiler"
-          fi
-          export NVCC_APPEND_FLAGS="$FLAGS"
-          # ⚠ NO CARGO_BUILD_JOBS CAP. One was added here on an OOM hypothesis that the
-          # instrumentation then DISPROVED -- 13.8 GB of 16 GB free at the failure -- and it cost
-          # 24 minutes of extra wall-clock for nothing. Measure before constraining.
-          echo "NVCC_APPEND_FLAGS=$NVCC_APPEND_FLAGS"
-          # ⛔ CAPTURE, DO NOT TAIL. Two runs were spent on this file discovering that a tail window
-          # had eaten the diagnostic; the fix belongs here from the first run, not the third.
-          set +e
-          cargo build --release --locked -p host --features cuda > cuda-build.log 2>&1
-          rc=$?
-          set -e
-          echo "build exit: $rc  ($(wc -l < cuda-build.log) lines captured)"
-          echo "=== first 30 ==="; head -30 cuda-build.log
-          echo "=== last 60 ==="; tail -60 cuda-build.log
-          if [ "$rc" -ne 0 ]; then
-              echo "=== resources AFTER the failure ==="
-              df -h / 2>/dev/null | tail -2
-              powershell -NoProfile -Command "Get-CimInstance Win32_OperatingSystem | Select-Object FreePhysicalMemory,TotalVisibleMemorySize | Format-List" 2>/dev/null || true
-              # ⛔ A KILLED BUILD PRINTS NO DIAGNOSTIC. Say which case this is, because "no error
-              # line" was read three times as "the log is unhelpful" when it was itself the signal.
-              # ⛔⛔ STRIP ANSI BEFORE MATCHING, AND THE FIRST VERSION OF THIS CHECK DID NOT.
-              # cargo writes `\033[1m\033[91merror\033[0m:`, so an anchored `^error: ` matched
-              # NOTHING and this printed "the build was KILLED" over a perfectly ordinary compile
-              # error that was sitting at line 895. A check whose green means "I did not find the
-              # words I expected" is the exact shape that has misread this repo's CI three times.
-              sed -E 's/\x1b\[[0-9;]*m//g' cuda-build.log > cuda-build.plain
-              ERRN=$(/usr/bin/grep -acE "^error(\[|:)|could not compile|failed to run custom build" cuda-build.plain || true)
-              echo "cargo-style error lines found: $ERRN"
-              if [ "$ERRN" -eq 0 ]; then
-                  echo "⚠ cargo exited $rc and NO error line was found even after stripping ANSI —"
-                  echo "  only then is a kill (OOM/disk) the likely story. Check the figures above."
-              else
-                  echo "⇒ this is an ordinary build FAILURE, not a kill. The error:"
-                  /usr/bin/grep -aE -m3 -A 8 "^error(\[|:)|failed to run custom build" cuda-build.plain | head -24
-              fi
-              echo "=== every error line, WHOLE lines (⛔ excluding 'thiserror', which the previous"
-              echo "    pattern matched and reported as if it were the failure) ==="
-              /usr/bin/grep -nE "error|LNK[0-9]+|fatal|nvcc" cuda-build.log \
-                | /usr/bin/grep -vE "thiserror|ToolFamilyMacroNotFound" | head -40
-          fi
-          exit "$rc"
-
-      # ⭐ SAVE HERE, DIRECTLY AFTER THE EXPENSIVE PART, not in a post step that a later failure
-      # cancels. ⚠ `if: always()` so a build that fails PARTWAY still banks what it compiled; the
-      # next run resumes instead of restarting. ⚠ A save onto an existing exact key is a no-op that
-      # warns, which is why the `continue-on-error` is here and nowhere else.
-      - name: Bank the CUDA build tree even if a later step fails
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: prover/target
-          key: cuda-target-${{ runner.os }}-a61-70-80-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
-
-      - name: Bank the cargo registry even if a later step fails
-        if: always()
-        continue-on-error: true
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-reg-${{ runner.os }}-${{ hashFiles('prover/Cargo.lock') }}-${{ github.run_id }}
-
-      - name: Ship the CUDA runtime beside the exe (when one was built)
-        if: always()
-        shell: bash
-        run: |
-          set -o pipefail
-          OUT=prover/target/release
-          # ⚠ No exe means the build above already failed and said so; this step has nothing to
-          # add and must not invent a second failure. It DOES fail when an exe exists but its
-          # runtime does not — that is the case worth guarding.
-          [ -f "$OUT/host.exe" ] || { echo "no host.exe — the build failed; nothing to package"; exit 0; }
-          # ⚠ $CUDA_POSIX, not $CUDA_PATH: the latter is `D:\...` and a backslash path does not
-          # glob in bash, so this loop would silently match nothing.
-          CU="${CUDA_POSIX:-$(cygpath -u "$CUDA_PATH")}"
-          echo "looking for the CUDA runtime under $CU/bin"
-          n=0
-          for dll in "$CU"/bin/cudart64_*.dll; do
-              [ -f "$dll" ] || continue
-              cp -v "$dll" "$OUT"/ && n=$((n+1))
-          done
-          if [ "$n" -eq 0 ]; then
-              echo "⛔ no cudart64_*.dll found under $CU/bin — the exe would not load on a"
-              echo "   machine that has only a driver. Listing what IS there:"
-              ls "$CU"/bin 2>/dev/null | head -20
-              exit 1
-          fi
-          echo "✅ packaged $n CUDA runtime DLL(s) next to host.exe"
-          ls -la "$OUT"/host.exe "$OUT"/*.dll
-          # ⚠ cudart is shipped for a machine that will actually RUN this, but note it is NOT in
-          # the import table — the exe does not load it at startup. The import that matters is
-          # nvcuda.dll, the DRIVER api, which no redist supplies. See scripts/embedded_guest_sha.py.
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: hazync-host-windows-x86_64-cuda
-          path: |
-            prover/target/release/host.exe
-            prover/target/release/*.dll
-          retention-days: 14
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: always()
-        with:
-          name: windows-cuda-build-log
-          path: prover/cuda-build.log
-          retention-days: 14
-
-      - name: ⛔ the CUDA binary must carry the CANONICAL guest
-        id: canonical
-        shell: bash
-        working-directory: prover
-        run: |
-          set -o pipefail
-          # ⛔⛔ THIS USED TO RUN `host.exe method-id` AND IT CANNOT WORK HERE. Three runs died on
-          # exit 127 against a binary the same run uploaded. The import table says why:
-          #
-          #     nvcuda.dll   ← the CUDA DRIVER API, shipped with the NVIDIA driver, not the redist
-          #
-          # A GPU-less runner has no driver, so Windows cannot load the image, and nothing copied
-          # beside the exe changes it. ⚠ I shipped cudart twice on that theory; cudart is not even
-          # imported.
-          #
-          # ⇒ Verify the property from the FILE instead: the guest is embedded verbatim, so its
-          # sha256 can be compared with reproduce/GUEST_ELF_SHA256 with no GPU at all. Measured on
-          # run 37155135563's artifact: R0BF at offset 12,281,328, 69,980,208 B, sha 35e3f55e… .
-          #
-          # ⛔ AND IT REPORTS THE TWO THINGS SEPARATELY. A step here once printed "the binary is
-          # canonical" having checked only that a file EXISTED, in a run where the id check had
-          # just failed. The guest is verified; the image id is NOT read, and it says so.
-          PIN_SHA=$(cat methods/lz-pins/GUEST_ELF_SHA256); SIZE=$(wc -c < methods/hazync-guest.elf)
-          if python3 ../scripts/embedded_guest_sha.py target/release/host.exe --root .. --pin "$PIN_SHA" --size "$SIZE" ; then
-              echo "verdict=guest-canonical" >> "$GITHUB_OUTPUT"
-          else
-              echo "verdict=guest-mismatch" >> "$GITHUB_OUTPUT"
-              exit 1
-          fi
-
-      - name: ⛔ the atomics check must see THIS nvcc's output (live control, hazync#727)
-        shell: bash
-        working-directory: prover
-        env:
-          # Paths below are given in Windows form, so Git Bash must not rewrite any argument.
-          MSYS_NO_PATHCONV: '1'
-          MSYS2_ARG_CONV_EXCL: '*'
-        run: |
-          set -euo pipefail
-          # ⛔⛔ THE NEXT STEP'S "no system-scope atomics" IS ONLY AS GOOD AS ITS READER. The record
-          # it looks for (EIATTR_ATOM_SYS_INSTR_OFFSETS, 0x27) was measured on nvcc 12.9.86 and
-          # 12.6.85 on Linux; this job may use either, on Windows. So compile the same kernel at
-          # SYSTEM and at DEVICE scope with THIS job's nvcc and host compiler, and require the
-          # checker to REFUSE the first and PASS the second before its verdict on host.exe counts.
-          # A toolkit that renumbered the record would fail here, not wave host.exe through.
-          T="$RUNNER_TEMP\\atom-scope-live"
-          mkdir -p "$(cygpath -u "$T")"
-          SRC="$(cygpath -w "$(pwd)/../scripts/testdata/atom-scope/atom_scope.cu")"
-          X=""
-          [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ] || X="-allow-unsupported-compiler"
-          nvcc --version | tail -2
-          for sc in SYSTEM DEVICE; do
-              nvcc -fatbin $X -Wno-deprecated-gpu-targets -O2 -std=c++17 \
-                   -gencode=arch=compute_61,code=sm_61 -gencode=arch=compute_61,code=compute_61 \
-                   -DHZ_SCOPE_$sc -o "$T\\$sc.fatbin" "$SRC"
-          done
-          rc=0; out=$(python3 ../scripts/gpu_code_archs.py "$T\\SYSTEM.fatbin" --require 61) || rc=$?
-          printf '%s\n' "$out"
-          if [ "$rc" != 1 ] || ! printf '%s\n' "$out" | grep -q 'SYSTEM-SCOPE ATOMICS'; then
-              echo "⛔ the checker did NOT refuse a system-scope kernel built by this nvcc (exit $rc) -- it is blind here"
-              exit 1
-          fi
-          python3 ../scripts/gpu_code_archs.py "$T\\DEVICE.fatbin" --require 61 \
-              || { echo "⛔ the checker refused a DEVICE-scope kernel built by this nvcc"; exit 1; }
-          echo "✅ live control: this nvcc's system-scope kernel is refused and its device-scope one passes"
-
-      - name: ⛔ the CUDA binary must hold code for every card generation it was built for, and no system-scope atomics
-        shell: bash
-        working-directory: prover
-        run: |
-          set -o pipefail
-          # ⛔⛔ READ THE BINARY, NOT THE FLAGS. The flags were right in the log of a build whose
-          # exe held Pascal code only -- a cached library is not rebuilt when a flag changes. This
-          # reads the fat binaries inside host.exe and fails unless EVERY finished GPU module
-          # carries an image for each generation the build step said it was building.
-          #
-          # ⛔⛔ hazync#727: the same read also refuses SYSTEM-SCOPE ATOMICS. One `::cuda::atomic<T>`
-          # (default scope: system) in rv32im's lookup tables put EIATTR_ATOM_SYS_INSTR_OFFSETS in
-          # the sm_61 image, and the Windows driver then refused to LOAD the whole module on a GTX
-          # 1050 Ti (error 801, every kernel in it). sm_61 is in the --require list, and that image
-          # is the one that carries the marker -- sm_70+ images do not -- so it is checked here.
-          [ -n "${GPU_ARCHS_BUILT:-}" ] || { echo "⛔ the build step recorded no generation list"; exit 1; }
-          python3 ../scripts/gpu_code_archs.py target/release/host.exe --require "$GPU_ARCHS_BUILT"
-
-      - name: What this did and did not establish
-        if: always()
-        shell: bash
-        working-directory: prover
-        env:
-          # ⚠ via env, never spliced into the script body — ${{ }} inside a run block is the
-          # injection vector the repo's own guard rejects, and I tripped it twice already.
-          CANON_VERDICT: ${{ steps.canonical.outputs.verdict }}
-        run: |
-          # ⛔⛔ THIS LINE USED TO CLAIM "the binary is canonical" ON `-f host.exe` ALONE, and it
-          # printed exactly that in a run where the canonicality check had just FAILED. A file
-          # existing is not a property being verified. Report the check's OWN verdict, and when
-          # there is no verdict say so rather than choosing the flattering reading.
-          V="${CANON_VERDICT:-}"
-          if [ ! -f target/release/host.exe ]; then
-              echo "⛔ No host.exe — the CUDA build did not complete. Read the cuda-build.log artifact."
-          else
-              echo "✅ The CUDA kernels COMPILED under MSVC and a host.exe was produced (libzync, published image)."
-              case "$V" in
-                guest-canonical)
-                  echo "✅ and it embeds the PUBLISHED libzync guest, verified against reproduce/LIBZYNC_IDS."
-                  echo "⚠ its own METHOD_ID was NOT read: a CUDA-linked exe imports nvcuda.dll and"
-                  echo "  cannot start without an NVIDIA driver. On a GPU box: host.exe method-id" ;;
-                guest-mismatch)
-                  echo "⛔ but it does NOT embed the canonical guest — proofs from it are worthless." ;;
-                *)
-                  echo "⚠ the guest check reported no verdict, so canonicality is UNKNOWN." ;;
-              esac
-          fi
-          if [ "${CUDA_HOST_SUPPORTED:-0}" = "1" ]; then
-              echo "✅ host compiler was a CUDA-SUPPORTED MSVC toolset — no override was used."
-              echo "   nvcc was pointed at it via NVCC_CCBIN=${NVCC_CCBIN:-<unset!>}"
-          else
-              echo "⚠ BUILT WITH -allow-unsupported-compiler: every installed MSVC toolset is"
-              echo "  14.50+, which CUDA 12.9 refuses (it supports VS 2017-2022). nvcc warns this"
-              echo "  may produce incorrect runtime behaviour, so a receipt from this binary is the"
-              echo "  only thing that would settle it. Treat a compile alone as the weaker claim."
-          fi
-          echo "⛔ THIS RUNNER HAS NO GPU, so nothing here shows that it PROVES. That needs hardware."
-          echo "⚠ Supported cards: compute capability 7.0+ (RTX 20-series and newer) by default. Pascal (6.x)"
-          echo "  is used only when HAZYNC_SPPARK_MIN_MAJOR lowers sppark's floor -- the Windows app's opt-in --"
-          echo "  measured once: a GTX 1050 Ti proved mainnet block 1 with the #727 fixes."
-
-      # ⛔⛔ host.exe ALONE WOULD NOT START ON THE TEST MACHINE. The NVIDIA driver supplies
-      # `nvcuda.dll` (the driver API) but NOT `cudart64_*.dll` (the CUDA runtime) — that ships with
-      # the toolkit. A CUDA-linked binary handed to someone who has only a driver dies at load with
-      # a missing-DLL box and no useful message. ⇒ Ship the runtime beside it.
-      # ⚠ Asserted, not hoped: if no cudart DLL is found the step fails rather than uploading an exe
-      # that cannot run. Nothing here is static-linked, so its absence would be a real problem.

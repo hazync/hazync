@@ -58,3 +58,12 @@ board's services (6.4), image records for the engine chain (Stage 4 freeze).
   METHOD_ID, engine-export without RISC Zero, the RISC Zero commands, risc0 and vendor/ out) and steps 5-6 (CI,
   reproduce, notices) remain: step 4d first needs the core-vectors and regtest-rig runners on the engine (consensus
   evidence), and the Windows CPU driver host is built by windows-prove.yml with the RISC Zero guest until step 5.
+- 28.11.2026 C8 step 4 done (branch c8-step4, engine/C8_PLAN.md): prover/host engine only (4b the image id from the
+  engine image, never a constant; 4c engine-export; 4d the RISC Zero-only commands deleted, exec-chunk / test-locks /
+  test-merkle / signet-check-test ported to the engine; 4e the engine path unconditional; 4f risc0 and vendor/ out of
+  the workspace). Host 63 passed, 1 ignored. No guest input changed. Step 5 in part: windows-prove.yml builds and checks
+  the Windows driver host (run 46156577125: build and import check passed, prep then hit a Windows fsync defect from
+  before C8, fixed in 969e90ee, not re-run); the CI steps of the deleted code removed. Left (stopped: engine ports
+  first): adversarial.yml's heavy jobs and reproduce/'s RISC Zero pins. On hazync-coord (engine/results/c8_step4_box): engine-export
+  of five real blocks byte-identical to engine/openvm's but the image id at bytes 4..36; prep 1..8, two leaves and
+  their fold from both hosts with identical states, bundles and journals; verify-any end=board and its refusals.

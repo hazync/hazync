@@ -116,6 +116,80 @@ record that built on risc0-zkvm; nothing built, tested or ran them: history/READ
 history/rangestate stays (no zkVM dependency; accumulator's comment points at it). Comments elsewhere that say "as
 history/verifier-wasm/build.sh did" are left: they describe where a method came from.
 
-**Step 4 (prover/host engine only) not started here.** It needs the decisions above first (the consensus evidence's
-runners, the Windows driver build), and it is the change that touches prep, the board's commands and the coin log
-store: several commits, each checked on the box (the board dry run's commands on blocks 1..8) as well as here.
+**Step 4 done (28.11.2026, branch c8-step4: 4a dc5b2114, 4b-4e 089456a3, 4f fbd1f312; a Windows fix 969e90ee):**
+prover/host is the engine's driver only. 4a: `methods` is a profile crate (no risc0-build, no METHOD_ELF / METHOD_ID).
+4b: where a stream names this host's image (bytes 4..36 of an aggregate, a join, a trie combine) it is
+engine_backend::image_id() (the board key's image, else the keys dir's image.json), never a constant; prep states and
+the era rules take own_image() (that engine image, or none: zero, when no engine is set up; prep never runs the guest
+and every reader re-stamps a prep state); build_full's demonstration anchor names no image (self_id zero, as genesis's;
+a base step does not check the anchor's self_id). 4c: engine-export the engine path only (method_id = the engine image).
+4d: deleted agg-exec-fake, journal-sha, libzync-snark-wrap, prove-chunk, segment-size, receipt-digest, seg-* (seg.rs,
+2,968 lines), segment-mem, exec-time, chunk-profile, agg-chunks, core-vectors-export, xver-selftest, xver-encode,
+libzync-handover, the #119 segment retry and the RISC0_PROVER / GPU-OOM hooks; ported to the engine instead: exec-chunk,
+test-locks, test-merkle, signet-check-test; core-vectors is 818d978b's engine path only. 4e: libzync-prove-range, -join,
+-hints, -verify and cl_synth_around engine only (HAZYNC_HANDOVER_RECEIPT and HAZYNC_RESUME refused by name); method-id
+without an engine image exits 1, seg-po2 prints `engine`, verify-any without the board key refuses as a configuration
+error. 4f: the workspace's [patch] and vendor/ (six risc0 crates and sppark) deleted; `cargo tree --workspace -e all`
+has no risc0, sppark or bonsai crate; Cargo.lock 323 packages fewer, none changed version. Host tests 63 passed, 1
+ignored (was 109 + 1: the seg.rs wire tests, the RISC Zero receipt-decoder tests, the risc0 serde identity test and
+first_results' test went with their code; the identity test's five real blocks are pinned by SHA-256 instead,
+sink::pinned_streams). No guest input changed (prover/methods/guest, libzync, coinbase-smt, engine/guest, engine/zapps,
+patches: empty diff against engine/openvm), so no engine image id can move.
+
+**Checked on hazync-coord (28.11.2026, engine/results/c8_step4_box, /root/c8s4, 4 cores):** the base host
+(engine/openvm 7620ec78, RISC0_SKIP_BUILD=1 as the board dry run builds it; 2,594 s to build) against the new one
+(c8-step4), one hzengine, image keys-ch (c7fe0eb8, the dry run's core image). engine-export of the repo's five real
+blocks (130,000, 140,000, 741,000, 962,000 4 chunks, 965,500 5 chunks; new host at 199f4fde, with the cl_synth fix
+below): every file byte-identical except agg.in, agg_collect.in and method_id, which differ only in the image id at
+bytes 4..36 (base zero, new the engine image c7fe0eb8); 143 to 364 s a block. The board dry run's commands (new host
+at b2dda1ea) on mainnet 1..8: prep 1..8 with leaf bundles, all 8 states and 8 bundles byte-identical; genesis tip
+852c5c7e, method-id (board key and keys dir) c7fe0eb8, seg-po2 `engine` from both; prove-range-bridge 1 and 2 and
+fold-range 1+2 from both hosts: the three journals IDENTICAL base vs new (fold JOURNAL_SHA256 676d6ea3...; leaves
+722 / 745 s, fold 471 s on 4 cores); verify-any --check-end: RANGE-OK ... end=board for both leaves and the fold, the
+same lines from both hosts; a journal byte and a proof byte refused as "forged, tampered or corrupt", block 2 as range 1
+refused as not anchored, no board key a configuration error.
+
+**cl_synth (199f4fde; engine/results/attack_export_stall, 83160e51):** the modelled coin log of engine-export now holds
+at least twice the block's spends and places each by union-find "next free" (the positions linear probing gave, near-
+linear): a block spending more earlier coins than the counts model (mem_k1140: 859 positions, 24,374 spends) looped
+forever. Test cl_synth_tests: 5,000 spends against a 511-coin model finishes; without the fix no result in 60 s. The
+five real blocks' exports above (run with the fix) are byte-identical to the base host's.
+
+**Step 5 (part) done (24f7dd66):** windows-prove.yml builds the Windows driver host (CPU, MSVC, static CRT, no guest)
+and checks it on Windows with no engine: imports, genesis tip, method-id's refusal and the board key's image, prep
+1..200 then verify-any --check-end of the engine chain's proof of 1..200. Run 46156577125 (28.11.2026, on 24f7dd66):
+the build, the import check, the genesis tip (852c5c7e...), method-id (refusal; c7fe0eb8... with the key) passed; prep
+then panicked on Windows: fsync through a read-only handle ("Access is denied", a defect from before C8). Fixed in
+969e90ee (a writable handle, prep.rs and reorg.rs), not re-run on Windows (one CI run allowed). cuda-arch-audit.yml
+deleted (it audited the CUDA host artifact); cuda-probe.yml kept (no RISC Zero code in it). The accumulator-tests steps
+of the deleted files went (test-prebuilt-guest.sh, check_seg_guards.sh, test_nvcc_flags.py, test_kernel_host_flags.py,
+test-build-rerun.sh; b2dda1ea: no_proving_under_the_lock.py, test_guest_pin.py, the risc0_vectors data); check-guest-
+inputs.sh lost its methods/build.rs check; ci_changes.py's selftest probes engine/guest/Cargo.toml.in (it failed since
+before C8 on reproduce/METHOD_ID); test_proof_names.py takes a host with no default output name (cd96cf8a).
+Local CI (engine/results/ci_local/runci.py, detached tree of fbd1f312, 450 steps of changes, dependency-audit,
+libzync-tests, engine-tests, accumulator-tests, utreexo-follower, zapps): every failure but three was one of the
+deleted code's checks, removed since (re-run each by hand on the head: pass). The three: libzync-tests[9] (the release
+gate feeds RISC Zero receipts to the engine verifier: RISC Zero-shaped since before C8, ci_local/RESULTS.md),
+accumulator-tests[62] (no xvfb here), accumulator-tests[182] test_worker_release.py's Ctrl-C case (passed twice when
+re-run alone: a flake, no file of it changed).
+
+**Step 5 NOT done (stopped: they need engine ports, a decision each):**
+- adversarial.yml's heavy jobs (reproducible-image-id, libzync-hosts, -chain, -blocks, -vectors, -rig, -signet,
+  soundness-suite) build reproduce/libzync.Dockerfile, which needs methods' risc0-build: they cannot run since step 4.
+  Their drivers (scripts/libzync/ci/*.sh, negatives.py, experimental/libzync-bench/{leaf,join,prep,coord,handover,
+  core_rules}) drive RISC Zero receipts and RISC0_DEV_MODE. Deleting them without engine ports would lose the
+  consensus evidence they run (chain 1..200 vs the reference implementations, the join tree and its negatives, Core's
+  vectors under forged hints, the rig against Core 28.0, signet from genesis, the reorg tests). Each needs its engine
+  form (hzengine in the job, a metering image for HAZYNC_ENGINE_DEV=1, the CPU budget measured) first.
+- reproduce/'s RISC Zero pins (METHOD_ID, LIBZYNC_IDS, GUEST_ELF_SHA256, LINEAGE.tsv, libzync.Dockerfile, Dockerfile,
+  libzync-ids.sh, pin-libzync-ids.py): about 45 scripts read them (release.sh, windows-host.sh, check-dist.sh,
+  check-versions.sh, check-release-verifiers.sh, the coordinator's check-spine.py, run-workers.sh, deploy/backup.sh,
+  the heavy jobs). They go with the release tooling's engine steps (engine/RELEASE_TOOLING.md) and the ports above.
+  release-sign.yml and windows-installer.yml read them from the TAG's tree (v0.27.1), so they keep working.
+- Callers of deleted commands left as they are: the RISC Zero tip pipeline in coordinator/ (tip_runner.py, seg-serve
+  and prove-chunk paths; tip_engine.py is the engine's), tools/milestone, scripts/gpu-benchmark.sh, gpu-stack-ab.sh,
+  prover/build-release.sh, coordinator/verify-receipts.sh, the worker's libzync-handover call (reached only with a
+  handover configured), engine/scripts/negatives_engine.py (its exec-chunk is now the engine's: engine vs engine).
+
+**Step 6 (part):** THIRD_PARTY_NOTICES (RISC Zero no longer built; the vendored crates' section a record; RISC Zero's
+serde stays credited in engine/journal), prover/README.md.

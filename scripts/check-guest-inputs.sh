@@ -55,37 +55,10 @@ deps=$(grep -rhoE '#\[path = "[^"]+"\]' prover/methods/guest/src/*.rs 2>/dev/nul
 [ -n "$deps" ] || fail "no #[path] includes found in the guest — either the parser is broken or the
        shared SMT source is no longer compiled in, which would be a silent consensus change"
 
-# A #[path] include reaches OUTSIDE the methods package, and Cargo's build-script change detection
-# does not. Without coverage in prover/methods/build.rs, editing the SMT leaves the previously-built
-# guest ELF in place: the build succeeds, and the id silently describes the OLD source. That failure is
-# invisible, which is why it is gated here rather than left to reviewers.
-#
-# Two acceptable shapes: build.rs PARSES the includes (preferred — cannot go stale), or it lists each
-# one literally. Anything else is unguarded.
-BUILD_RS=prover/methods/build.rs
-[ -f "$BUILD_RS" ] || fail "$BUILD_RS is missing — the guest cannot be rebuilt reproducibly"
-if grep -q '#\[path' "$BUILD_RS"; then
-    note "ok   $BUILD_RS derives its rerun-if-changed set from the guest's #[path] includes"
-else
-    for d in $deps; do
-        base=$(basename "$d")
-        grep -q "$base" "$BUILD_RS" || fail "$BUILD_RS does not watch '$base'.
-       Cargo only re-runs a build script for changes INSIDE its own package, so editing that file
-       would leave a stale guest ELF and a METHOD_ID describing source that is no longer there."
-    done
-fi
-
-# Emitting any rerun-if-changed DISABLES Cargo's default "watch this whole package". So the moment
-# build.rs names anything, it must also name what the default used to cover — otherwise this check
-# would have fixed the outside-the-package hole by opening an inside-the-package one.
-if grep -q 'rerun-if-changed' "$BUILD_RS"; then
-    for restore in guest build.rs; do
-        grep -q "rerun-if-changed=$restore" "$BUILD_RS" || fail "$BUILD_RS emits rerun-if-changed but
-       never names '$restore'. That switches off Cargo's default package watch without replacing it,
-       so edits to the guest itself would no longer trigger a rebuild."
-    done
-    note "ok   $BUILD_RS restores the package watch its own emissions disable"
-fi
+# Until CUTOVER C8 step 4 prover/methods/build.rs BUILT the guest (risc0-build), and this checked that its
+# rerun-if-changed set covered every #[path] include (else an edit outside the package left a stale ELF and a wrong
+# id). Since C8 that crate builds no guest: the engine assembles a fresh copy of the sources for every build
+# (engine/guest/assemble.sh), so there is no build cache to go stale and nothing here to check.
 
 count=0
 for d in $deps; do

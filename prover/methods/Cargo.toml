@@ -2,46 +2,5 @@
 name = "methods"
 version = "0.1.0"
 edition = "2021"
-
-[build-dependencies]
-risc0-build = { version = "=3.0.7", features = ["unstable"] }
-# ⚠ Already in the lock (0.10.9) via risc0, so this pulls nothing new. Pure Rust, links anywhere.
-sha2 = "0.10"
-# ⛔⛔ THIS ONE LINE IS WHY A WINDOWS HOST CAN LINK THIS BUILD SCRIPT AT ALL.
-#
-# risc0-zkvm-platform gates its syscall symbols on a FEATURE, not on the platform:
-#
-#     #[cfg(not(feature = "export-syscalls"))]
-#     extern "C" { pub fn sys_alloc_aligned(...) -> *mut u8; }          <- an IMPORT
-#
-#     #[cfg(all(feature = "export-syscalls", not(target_os = "zkvm")))]
-#     pub unsafe extern "C" fn sys_alloc_aligned(...) { unimplemented!(...) }   <- host stub
-#
-# `risc0-zkvm` enables it (rust-runtime = ["export-libm", "export-syscalls"]), so the HOST BINARY
-# links. But `resolver = "2"` makes build-dependencies a SEPARATE feature-unification unit, and
-# both risc0-build and risc0-binfmt declare risc0-zkvm-platform with `default-features = false`.
-# So in the BUILD SCRIPT's graph the feature is off, the symbol is an unresolved import, and MSVC's
-# linker -- which will not tolerate one -- fails. Measured on windows-latest, run 36834204491:
-#
-#     librisc0_zkvm_platform.rlib : error LNK2019: unresolved external symbol sys_alloc_aligned
-#     build_script_build.exe : fatal error LNK1120: 1 unresolved externals
-#
-# ⚠ `export-syscalls` alone, NOT `rust-runtime`: the latter also drags in export-libm, which a
-# build script has no use for.
-#
-# ⛔ IT CANNOT MOVE METHOD_ID. The guest is a separate cargo invocation against methods/guest/,
-# which has its OWN Cargo.lock, so a host build-dependency cannot enter that graph -- and the stub
-# above is `not(target_os = "zkvm")`, an arm the guest never compiles. `reproducible-image-id`
-# rebuilds the guest and asserts the id on every push, so this is checked rather than argued.
-risc0-zkvm-platform = { version = "2.2.3", default-features = false, features = ["export-syscalls"] }
-
-# ⛔ risc0-binfmt pulls risc0-zkvm-platform, whose GUEST-side syscall `sys_alloc_aligned` is an
-# unresolved external when MSVC's link.exe links this build script -- measured on windows-latest,
-# run 36824751222: LNK2019 then LNK1120. Keeping it OUT of the MSVC build graph is what lets a
-# Windows host build the methods crate at all; the guest is verified by sha256 on every platform
-# and the id is additionally recomputed wherever this crate IS present.
-[target.'cfg(not(target_env = "msvc"))'.build-dependencies]
-risc0-binfmt = "=3.0.6"
-
-[package.metadata.risc0]
-methods = ["guest"]
+# The product guest's profile constants for the host (build.rs writes profile.rs). No zkVM: since CUTOVER C8 step 4 the
+# guest is built by the engine (hzengine build, engine/guest/assemble.sh), not by this crate.

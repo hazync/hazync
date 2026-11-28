@@ -1,19 +1,11 @@
-//! Chunking a block for proving: the per-input cost model, packing inputs into chunks, and the
-//! chunk executor inputs (write_chunk_inputs) shared by prove-chunk, the seg-* paths and libzync.
+//! Chunking a block for proving: the per-input cost model, packing inputs into chunks, and the chunk's input stream
+//! (write_chunk_inputs) shared by libzync-prove-range, libzync-hints and engine-export.
 
 use bitcoin::{Transaction, TxOut};
 use bitcoin::consensus::deserialize;
-use methods::{METHOD_ELF, METHOD_ID};
-use risc0_zkvm::{ExecutorEnv, default_executor};
-use crate::{BlockWitness, HZ_BLOCK_MTP, header_hash, hex, seg_po2};
+use crate::{BlockWitness, HZ_BLOCK_MTP, header_hash};
 use crate::lz::lz_bundle;
 
-pub(crate) const KIND_CHUNK: u32 = 0xC4A1_0004;
-/// libzync agg-lite chunk journal (guest src/agg_lite.rs).
-pub(crate) const KIND_CHUNK_LITE: u32 = 0xC4A1_0010;
-
-// ---- Multi-GPU fan-out: prove ONE chunk to a file (run one process per GPU via CUDA_VISIBLE_DEVICES),
-// then aggregate from the chunk-receipt files. HAZYNC_CHUNKS = total chunks; chunk index from arg. ----
 // ---- Chunk packing: balance predicted work, not input counts (#132) ----
 //
 // An input's cost is dominated by EC verification — ~95% of proving, per docs/ACCELERATION.md — and how
@@ -164,12 +156,6 @@ impl SigOps {
     /// Split out so a test can price the curves apart without editing a constant. A no-op test alone
     /// would pass for a refit that does nothing at all; this is what lets one prove it bites.
     fn cost_with(&self, ec: u64, schnorr: u64) -> u64 { ec * self.ecdsa + schnorr * self.schnorr }
-}
-
-/// Total signature verifications, curve-blind. Retained for the profile display, which reports a
-/// count rather than a cost; `predicted_sig_ops` is what the packer uses.
-pub(crate) fn predicted_ec_ops(raw_tx: &[u8], input_idx: u32, prevouts_blob: &[u8]) -> u64 {
-    predicted_sig_ops(raw_tx, input_idx, prevouts_blob).total()
 }
 
 /// Signature verifications this input performs, by script type. A prediction, not a guarantee — it is
@@ -718,31 +704,6 @@ pub(crate) fn chunk_bounds_raw(w: &BlockWitness, nchunks: usize) -> Vec<(usize, 
     pack_chunks(&input_costs(w), nchunks, None)
 }
 
-/// Run one chunk's inputs through the guest in execute mode and return the cycles it took. Same mode 4
-/// the prover uses, so the count is the real cost of proving that chunk, minus the proving itself.
-pub(crate) fn exec_chunk_cycles(w: &BlockWitness, lo: usize, hi: usize) -> u64 {
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.write(&4u32).unwrap();
-    b.write(&w.height).unwrap();
-    b.write(&chunk_block_hash(&w.header)).unwrap();
-    write_chunk_inputs(&mut b, &w, lo, hi);
-    let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
-        .unwrap_or_else(|e| panic!("{}", crate::lz::guest_failure("chunk execution", &e)));
-    crate::lz::require_committed(s.exit_code, "chunk execution"); // a cost figure only for a run that committed (round 9)
-    // Report what the chunk COMMITTED, not just how long it took. A payload-format change that
-    // silently mis-reads its input would show up as fewer cycles and look like a win; the journal
-    // digest is what makes an A/B trustworthy. #135.
-    let d = <sha2::Sha256 as sha2::Digest>::digest(&s.journal.bytes);
-    let j = &s.journal.bytes;
-    let w = |i: usize| u32::from_le_bytes([j[i], j[i + 1], j[i + 2], j[i + 3]]);
-    // The guest tags this journal KIND_CHUNK and the aggregate asserts it (H8). The host printed the
-    // tag and never checked it, so a payload-format change would have shown up as a plausible-looking
-    // cycle count rather than an error. Check it here too: this is the other end of the same contract.
-    assert!(w(0) == KIND_CHUNK || w(0) == KIND_CHUNK_LITE, "chunk journal is not a ChunkOut (domain tag {:#x})", w(0));
-    println!("        journal sha256 {}  kind={:#x} all_valid={} binds={}", hex(&d), w(0), w(4), w(8));
-    s.cycles()
-}
 /// Write a chunk's inputs onto the guest's stdin (mode 4's payload), grouped by transaction.
 ///
 /// #135. Two things are going on:
@@ -948,37 +909,6 @@ pub(crate) fn nchunks_for(w: &BlockWitness) -> usize {
         }
         None => max,
     }
-}
-
-/// Read and verify the chunk receipts an aggregate consumes (hazync#153).
-///
-/// Verified on the way in, not trusted: a chunk receipt that does not verify against METHOD_ID
-/// cannot become a valid assumption, and finding that out here names the file instead of failing
-/// somewhere inside the prover.
-pub(crate) fn read_chunk_receipts(nchunks: usize) -> Vec<risc0_zkvm::Receipt> {
-    // Directory the per-chunk receipts live in (hazync#229). `prove-chunk` writes each receipt to
-    // $HAZYNC_OUT, which is a full path, so the two halves of a run can disagree about where the
-    // receipts are: scripts/gpu-benchmark.sh has always exported HAZYNC_RECEIPTS here and nothing
-    // ever read it, so phase 3 resolved `chunk_0.bin` against its own CWD and died on a run whose
-    // proves had all succeeded.
-    //
-    // Defaults to `.`, which is exactly the previous behaviour — this adds a way to say where,
-    // it does not change where they are looked for when nobody says.
-    let dir = std::env::var("HAZYNC_RECEIPTS").unwrap_or_else(|_| ".".into());
-    let mut receipts: Vec<risc0_zkvm::Receipt> = Vec::with_capacity(nchunks);
-    for i in 0..nchunks {
-        // #278 renamed the WRITER's default to .hzk. This reader accepts either, because chunk
-        // receipts outlive the run that made them: a box with a staged set from an older host must
-        // still aggregate. Preferring .hzk and falling back keeps both directions working, and a
-        // missing chunk still panics by name rather than aggregating a short set.
-        let hzk = format!("{dir}/chunk_{i}.hzk");
-        let f = if std::path::Path::new(&hzk).exists() { hzk } else { format!("{dir}/chunk_{i}.bin") };
-        let r = crate::verify::decode_chunk_receipt(&std::fs::read(&f).unwrap_or_else(|e| panic!("chunk receipt {f}: {e}")))
-            .unwrap_or_else(|e| panic!("chunk receipt {f}: {e}"));
-        r.verify(METHOD_ID).unwrap_or_else(|e| panic!("chunk receipt {f} does not verify: {e}"));
-        receipts.push(r);
-    }
-    receipts
 }
 
 #[cfg(test)]
