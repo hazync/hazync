@@ -1,0 +1,4 @@
+#!/bin/bash
+# local CI shim: never change the local toolchain (CI runs `rustup update stable`; locally the installed one is used)
+if [ "$1" = update ]; then echo "[shim] skipped: rustup $*" >&2; exit 0; fi
+exec /home/defenwycke/.cargo/bin/rustup "$@"

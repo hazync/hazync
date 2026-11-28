@@ -1,0 +1,4 @@
+#!/bin/bash
+# local CI shim: no root, no package installs (tools are preinstalled locally)
+case "$1" in apt-get|apt) echo "[shim] skipped: sudo $*" >&2; exit 0;; esac
+exec "$@"
