@@ -49,3 +49,4 @@ differential test of the Rust tx parsers against Core's.
 | R2-5 #1 | FIXED: with_pinned_engine_key in every shipped path; with_engine_key_unchecked tests only; with_key needs a pin; verify_stark_bytes removed |
 | R2-1 #2 | FIXED: verify_full_trusted_key |
 | R2-2 L1 | FIXED: VERIFIER.md |
+| R2-3 #2 | TESTED 28.11.2026: differential test of the Rust tx parsers against Core v28.0's own deserialiser (prover/methods/guest/test-txparse.sh, 161e43ed): 139,620 cases (23,311 real mainnet txs, 213 Core vectors, 83,723 mutations); no mismatch on anything Core accepts; tx_io reads 14,494 inputs Core rejects but every call follows a Core parse that traps (no proof); a broken tx_io gives 12,537 mismatches (the test can fail) |
