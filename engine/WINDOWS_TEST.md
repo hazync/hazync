@@ -9,7 +9,7 @@ afterwards). Nothing here is measured yet: every number below is a Linux referen
 | part | where it comes from |
 |---|---|
 | `hzengine.exe` + `cudart64_12.dll` | engine-windows.yml run 46125613543 (28.11.2026, head 082daf2d, sm_61..sm_120), artifact `hzengine-windows-x86_64-cuda` |
-| `hzengine.exe` (CPU) | engine-windows.yml's new CPU step (28.11.2026), artifact `hzengine-windows-x86_64-cpu`: built only by a run after 1be0a1fd-or-later; PENDING its first run |
+| `hzengine.exe` (CPU) | engine-windows.yml's new CPU step (28.11.2026), artifact `hzengine-windows-x86_64-cpu`: built by runs from ab12d68b on; its first run is request 15 (28.11.2026) |
 | key folders | from the build box (hazync-coord, `/root/engine/keys-*`), packed as `hazync-keys-<name>.tar.gz` would be: the header image (keys-hdr29, exe a080482e..., vm 00e00077...) and the core image under test |
 | block 170's export | the product host's `engine-export` for block 170 (the GPU gate's b170 entry), as a .tgz |
 | the header-chain stream | the headers zAPP's input for 0..975,278 (~78 MB; built from `/root/mmr-v027/headers_0_975278.txt.gz` as engine/results/zapp_headers did) |
