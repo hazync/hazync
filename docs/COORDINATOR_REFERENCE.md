@@ -262,6 +262,10 @@ From `main()`'s dispatch table; usage and summary from the module docstring.
 | `MODE` | `prove` | What the loops run; see the modes table. |
 | `DRAIN_WAIT` | `7200` | Seconds `--drain` waits for blocks in flight to be submitted before it stops them anyway (default 7200). |
 | `HAZYNC_HOST` | (required) | Prover binary. Required, and must be executable. |
+| `HAZYNC_ENGINE` | `(empty)` | The OpenVM prover (`hzengine`), for the engine board (engine/BOARD_ENGINE.md). Set: the workers prove through it, `HAZYNC_HOST` drives them; checked executable before anything is claimed. Unset: the host proves alone. |
+| `HAZYNC_ENGINE_KEYS` | (required) | The image's key directory (the release's `hazync-keys-core.tar.gz` unpacked). Required with `HAZYNC_ENGINE`; every key file must be present before anything is claimed. |
+| `HAZYNC_ENGINE_VK` | `$HAZYNC_ENGINE_KEYS/vk.bin` | The key file readers verify with (default `$HAZYNC_ENGINE_KEYS/vk.bin`); its SHA-256 must be `HAZYNC_ENGINE_VK_PIN`. |
+| `HAZYNC_ENGINE_VK_PIN` | `(empty)` | The release's published core key pin (64 hex digits). Required with `HAZYNC_ENGINE`: the image id does not authenticate a key file, the pin does (engine/VERIFIER.md). |
 | `HAZYNC_BASE` | `$HOME/hazync-build` | Core/secp source root, exported to the workers. |
 | `SKIP_GPU_SMOKE` | `(empty)` | Non-empty skips the pre-flight `prove-block` on a box with a GPU (#261). |
 | `HAZYNC_HOME` | `$HOME/.hazync` | Where the handle check looks for `handle`. |

@@ -1,6 +1,8 @@
 #!/bin/bash
 # On the pod: the whole block (chunks, trie, aggregate verifying all of them in-guest), timed; then verify.
-cd /workspace; source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
+cd /workspace || exit 1
+# shellcheck source=/dev/null
+source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
 mkdir -p out; H=host/target/release/hzengine
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 2 > out/smi.log ) & SMI=$!
 s=$(date +%s); $H prove-block --dir keys --export export --out out/block > out/prove_block.log 2>&1; rc=$?

@@ -188,6 +188,29 @@ jobs:
           [ "$n" -gt 0 ] || { echo "::error::no zapps/*/test.sh: the zapps job ran nothing"; exit 1; }
           echo "$n zAPP test suites passed"
 
+  engine-tests:
+    # The OpenVM engine's own crates (engine/): until 28.11.2026 no workflow ran their tests (check-test-surfaces.sh
+    # flagged them). The journal word encoding, the guests' SHA-256 shim, the batch signature check and its MSM, and
+    # hzengine (engine/host); then the guest's Rust transaction parsers against Core v28.0's own deserialiser.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust toolchain
+        run: rustup update --no-self-update stable && rustc --version
+      - name: engine/journal (the guests' journal words, byte-identical to risc0's serde)
+        run: cargo test --release --manifest-path engine/journal/Cargo.toml
+      - name: engine/platform/sha2-test (the guests' SHA-256 shim against RustCrypto sha2)
+        run: cargo test --release --manifest-path engine/platform/sha2-test/Cargo.toml
+      - name: engine/guest/batch-test (the batched signature check, batch_ecdsa_ovm.rs)
+        run: cargo test --release --manifest-path engine/guest/batch-test/Cargo.toml
+      - name: engine/guest/msm-test (its multi-scalar multiplication, msm_ovm.rs)
+        run: cargo test --release --manifest-path engine/guest/msm-test/Cargo.toml
+      - name: engine/host (hzengine)
+        run: cargo test --release --manifest-path engine/host/Cargo.toml
+      - name: The guest's Rust transaction parsers against Core v28.0's (prover/methods/guest/test-txparse.sh)
+        run: prover/methods/guest/test-txparse.sh
+
   utreexo-follower:
     # The utreexo zyncAPP's tip follower (coordinator/deploy/utreexo, docs/libzync/UTREEXO_ZAPP.md §10.6): its own logic
     # with a stub prover and checker on header-only block files from a committed fixture (no proofs, no mainnet block
@@ -2160,9 +2183,10 @@ jobs:
         # run every check against the wrong directory, found no test surfaces, and PASSED.
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          # experimental/ holds one-off experiment and benchmark records, not tooling anything runs (the versions check
-          # skips it too); every other script is held to warning level
-          shellcheck -S warning $(git ls-files '*.sh' | grep -v '^experimental/')
+          # experimental/ and engine/results/ hold one-off experiment and measurement records (each a dated run's own
+          # script, kept as it ran), not tooling anything runs (the versions check skips experimental/ too); every other
+          # script is held to warning level
+          shellcheck -S warning $(git ls-files '*.sh' | grep -v '^experimental/\|^engine/results/')
 
   dependency-audit:
     # Nothing was scanning dependencies for known advisories until now. This job fails on any NEW one.

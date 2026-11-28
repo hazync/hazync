@@ -4,6 +4,7 @@
 # mark: Rust never gives memory back to the bump, freed C blocks are reused from their size class, so the bump only grows
 # when the live set does). Regtest: keys-rtchb (keys-rtch + bench-noverify, same guest tree and base). Mainnet: keys-chb.
 # Attack blocks: chunk streams from `engine-export` (the cost-based chunking a proof uses) by the regtest host.
+# shellcheck source=/dev/null
 source ~/.cargo/env; export PATH=$HOME/.cargo/bin:$HOME/.risc0/bin:$PATH
 for v in $(compgen -e | grep "^HAZYNC_"); do unset "$v"; done
 E=/root/engine-kit/engine/host/target/release/hzengine; G=/root/engine-guestch/prover/methods/guest

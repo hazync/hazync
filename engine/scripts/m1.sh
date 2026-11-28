@@ -1,7 +1,8 @@
 #!/bin/bash
 # M1 on CPU: keys, guest, two leaves, a node verifying both, a node verifying that node (nested deferral), verify all.
-source ~/.cargo/env; cd /root/engine; H=host/target/release/hzengine; K=/root/engine/keys; mkdir -p p
-t(){ local s=$(date +%s); "$@"; local rc=$?; echo "STEP rc=$rc secs=$(( $(date +%s)-s )) :: $*"; return $rc; }
+# shellcheck source=/dev/null
+source ~/.cargo/env; cd /root/engine || exit 1; H=host/target/release/hzengine; K=/root/engine/keys; mkdir -p p
+t(){ local s; s=$(date +%s); "$@"; local rc=$?; echo "STEP rc=$rc secs=$(( $(date +%s)-s )) :: $*"; return $rc; }
 [ -f $K/sdk.pk ] || t $H keygen --dir $K || exit 1
 rm -f $K/image.json
 t $H build --dir $K --guest selftest-guest || exit 1

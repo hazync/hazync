@@ -68,11 +68,22 @@ while read -r manifest; do
     vendor/*) ok "$d skipped — vendored upstream, not our test surface (our edits are gated by receipt equality)"; continue ;;
     # history/ is the record of the retired CORE design (history/README.md): kept, not built or run.
     history/*) ok "$d skipped — history/, the retired CORE design's record, not built"; continue ;;
+    # The engine guests' platform crate builds for the zkVM target only (natively its sha2 shim does not compile). Its
+    # #[test]s are upstream's serde tests: serializer.rs and deserializer.rs are byte-identical to engine/journal's,
+    # whose tests CI runs (engine-tests), and the round trips of its serde/mod.rs are run there too.
+    engine/platform/risc0-zkvm)
+      if cmp -s "$d/src/serde/serializer.rs" engine/journal/src/serde/serializer.rs && cmp -s "$d/src/serde/deserializer.rs" engine/journal/src/serde/deserializer.rs \
+         && grep -rqs -- "--manifest-path engine/journal/Cargo.toml" "$WF"; then
+        ok "$d skipped — a zkVM-target crate; its serde tests run as engine/journal's (the same source)"
+      else bad "$d: its serde source is no longer engine/journal's, or no workflow runs engine/journal's tests"; fi
+      continue ;;
     # A zAPP is a module of its own (zapps/<name>/, docs/libzync/ZYNCAPPS.md §9) and runs its tests from its own
     # directory: the zapps job runs every zapps/<name>/test.sh, which must test this crate by its manifest.
     zapps/*)
       z=zapps/$(cut -d/ -f2 <<<"$d"); m=".${d#"$z"}/Cargo.toml"
-      if grep -qsF -- "cargo test --release --manifest-path $m" "$z/test.sh" && grep -rqsF 'zapps/*/test.sh' "$WF"; then
+      # wasm_crate_test <dir> (scripts/zapp-checks.sh) runs `cargo test --release --locked` on that crate's engine-graph lock
+      if { grep -qsF -- "cargo test --release --manifest-path $m" "$z/test.sh" || grep -qsxE -- "\s*wasm_crate_test ${m%/Cargo.toml}\s*" "$z/test.sh"; } \
+         && grep -rqsF 'zapps/*/test.sh' "$WF"; then
         ok "$d has tests and CI runs them ($z/test.sh, the zapps job)"
       else bad "$d contains #[test] but $z/test.sh does not run them (cargo test --release --manifest-path $m), or no workflow runs zapps/*/test.sh"; fi
       continue ;;
@@ -83,6 +94,7 @@ while read -r manifest; do
   # only when EVERY file of $d that holds a #[test] is so included by a zapps/ crate that its zAPP's test.sh runs.
   if covered=$(tests_run_via_path_include "$d"); then ok "$d has tests and CI runs them (#[path]-included by $covered)"
   elif grep -rqs -- "--manifest-path $d/Cargo.toml" "$WF"; then ok "$d has tests and CI runs them"
+  elif grep -rqsxE -- "\s*wasm_crate_test $d\s*" "$WF"; then ok "$d has tests and CI runs them (wasm_crate_test, its engine-graph lock)"
   # prover/host's tests need a libzync guest, so they run inside the reproducible container, from
   # scripts/libzync/ci/build-hosts.sh (named by the libzync-hosts job), as `cargo test -p host`.
   elif [ "$d" = prover/host ] && grep -qs 'cargo test .*-p host' scripts/libzync/ci/build-hosts.sh \

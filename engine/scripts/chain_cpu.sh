@@ -7,7 +7,7 @@ set -u
 H=$1; K=$2; B=$3; O=$4; mkdir -p $O
 export HAZYNC_ENGINE=/root/engine/host/target/release/hzengine HAZYNC_ENGINE_KEYS=$K RAYON_NUM_THREADS=${THREADS:-10}
 CPUS=${CPUS:-6-15}
-t(){ local s=$(date +%s); "$@"; local rc=$?; echo "STEP rc=$rc secs=$(( $(date +%s)-s )) :: $*"; return $rc; }
+t(){ local s; s=$(date +%s); "$@"; local rc=$?; echo "STEP rc=$rc secs=$(( $(date +%s)-s )) :: $*"; return $rc; }
 t taskset -c $CPUS $H libzync-prove-range 1 2 $B genesis $O/a > $O/a.log 2>&1 || { tail -30 $O/a.log; exit 1; }
 grep -aE "engine:|block [0-9]+:|LZ_PROVE_RANGE_DONE" $O/a.log | head -30
 t taskset -c $CPUS $H libzync-prove-range 3 3 $B $O/a/state_2.json $O/b > $O/b.log 2>&1 || { tail -30 $O/b.log; exit 1; }

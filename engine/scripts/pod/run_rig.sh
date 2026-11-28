@@ -5,17 +5,20 @@
 # built HAZYNC_NETWORK=regtest proving through the ENGINE (HAZYNC_ENGINE), real proofs on this GPU, against a real
 # Bitcoin Core 31.1 on regtest. The bundle's export/ carries: host_regtest, bin/{bitcoind,bitcoin-cli},
 # core/test/functional/test_framework, rig.py. keys/ = the regtest engine image (keys-rt). RIG_CASES: optional subset.
-cd /workspace; source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
+cd /workspace || exit 1
+# shellcheck source=/dev/null
+source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
 mkdir -p out; X=/workspace/export
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader > out/gpu.txt
 chmod +x $X/host_regtest $X/bin/* host/target/release/hzengine
-export HAZYNC_ENGINE=/workspace/host/target/release/hzengine HAZYNC_ENGINE_KEYS=/workspace/keys HAZYNC_ENGINE_GPUS=$(nvidia-smi -L | wc -l)
+export HAZYNC_ENGINE=/workspace/host/target/release/hzengine HAZYNC_ENGINE_KEYS=/workspace/keys HAZYNC_ENGINE_GPUS
+HAZYNC_ENGINE_GPUS=$(nvidia-smi -L | wc -l)
 export BITCOIND=$X/bin/bitcoind HZ_CORE_SRC=$X/core
 ( nvidia-smi --query-gpu=utilization.gpu,memory.used --format=csv,noheader -l 5 > out/smi_rig.log ) & SMI=$!
 A=$X/attack
 # bundle switches (gpu_block.sh passes only JOBS/R0_BLOCKS): export/rig_only.txt = rig.py's RIG_ONLY (comma-separated
 # case names; the base chain is still built), export/skip_q7 = no attack blocks
-[ -f $X/rig_only.txt ] && export RIG_ONLY=$(tr -d " \n" < $X/rig_only.txt)
+[ -f $X/rig_only.txt ] && RIG_ONLY=$(tr -d " \n" < $X/rig_only.txt) && export RIG_ONLY
 [ -f $X/skip_q7 ] && export SKIP_Q7=1
 q7() { nm=$1 lo=$2 hi=$3 blk=$4 anc=$5; s=$(date +%s)
   $X/host_regtest libzync-prove-range $lo $hi $blk $anc out/q7_$nm > out/q7_$nm.log 2>&1; rc=$?
@@ -38,10 +41,10 @@ if [ -z "${SKIP_Q7:-}" ] && [ -d $A ]; then
   done
   export HAZYNC_ENGINE_KEYS=/workspace/keys
 fi
-if [ -f $X/skip_rig ]; then kill $SMI; echo done > out/RUN_DONE; exit 0; fi   # attack blocks only (export/skip_rig)
+if [ -f $X/skip_rig ]; then kill $SMI; echo "done" > out/RUN_DONE; exit 0; fi   # attack blocks only (export/skip_rig)
 s=$(date +%s)
 python3 $X/rig.py $X/host_regtest /workspace/rigroot ${RIG_CASES:-} > out/rig.log 2>&1; rc=$?
 kill $SMI
 echo -e "rig\trc=$rc\t$(( $(date +%s)-s ))s\t$(tail -1 out/rig.log)" >> out/times.tsv
 cp -r /workspace/rigroot/out out/rig_out 2>/dev/null
-echo done > out/RUN_DONE
+echo "done" > out/RUN_DONE

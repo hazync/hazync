@@ -35,8 +35,8 @@ run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk --vk-sha256 $PI
 # the pin is the caller's (review R1-6 #1): none, or one that is not the key file's SHA-256, is refused; a changed key
 # pinned to ITS OWN hash still fails (OpenVM's check under a key that is not the image's)
 run 1 $V --image $ID --vk $D/mainnet_1_200_engine.vk $P
-run 1 $V --image $ID --vk $D/mainnet_1_200_engine.vk --vk-sha256 $(printf '00%.0s' $(seq 32)) $P
-run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk --vk-sha256 $(sha256sum $D/mainnet_1_200_engine_key_flipped.vk | cut -c1-64) $P
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine.vk --vk-sha256 "$(printf '00%.0s' $(seq 32))" $P
+run 1 $V --image $ID --vk $D/mainnet_1_200_engine_key_flipped.vk --vk-sha256 "$(sha256sum $D/mainnet_1_200_engine_key_flipped.vk | cut -c1-64)" $P
 run 1 $V $K $D/mainnet_1_200_engine_proof_flipped.hze
 run 1 $V $K $T/junk.hze
 run 1 $V $K /nonexistent.hze

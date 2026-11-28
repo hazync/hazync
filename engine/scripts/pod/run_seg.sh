@@ -2,7 +2,9 @@
 # On the pod: does the segment cap's padding decide proving time? (1) padded trace cells per cap for every leaf of
 # EXPORT, by metered execution on the CUDA build's memory model (HZ_SEGMENTS; no GPU work), (2) each leaf proved alone
 # at the caps in PROVE_CAPS. Results: out/seg_sweep.tsv, out/seg_prove.tsv.
-cd /workspace; source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
+cd /workspace || exit 1
+# shellcheck source=/dev/null
+source ~/.cargo/env; export PATH=/usr/local/cuda-12.9/bin:$PATH
 mkdir -p out; H=$PWD/host/target/release/hzengine; X=export/${EXPORT:-976379t}
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader > out/gpu.txt
 CAPS=${CAPS:-"6 7 8 9 10 11 12 13 14 16 20 24"}

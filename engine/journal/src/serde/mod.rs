@@ -46,3 +46,38 @@ pub use deserializer::{from_slice, Deserializer, WordRead};
 pub use err::{Error, Result};
 pub use serializer::{to_vec, to_vec_with_capacity, Serializer, WordWrite};
 
+
+// The round trips of the engine platform crate's copy of this module (engine/platform/risc0-zkvm/src/serde/mod.rs,
+// upstream's), run here: that crate builds for the zkVM target only, so CI runs the shared serde source's tests in this
+// crate (deserializer.rs and serializer.rs are byte-identical; scripts/check-test-surfaces.sh). Upstream's fourth,
+// chrono's NaiveDate, needs a dependency this crate does not take.
+#[cfg(test)]
+mod tests {
+    use crate::serde::{from_slice, to_vec};
+    use alloc::{collections::BTreeMap, string::String, vec, vec::Vec};
+
+    #[test]
+    fn test_vec_round_trip() {
+        let input: Vec<u64> = vec![1, 2, 3];
+        let data = to_vec(&input).unwrap();
+        let output: Vec<u64> = from_slice(data.as_slice()).unwrap();
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_map_round_trip() {
+        let input: BTreeMap<String, u32> =
+            BTreeMap::from([("foo".into(), 1), ("bar".into(), 2), ("baz".into(), 3)]);
+        let data = to_vec(&input).unwrap();
+        let output: BTreeMap<String, u32> = from_slice(data.as_slice()).unwrap();
+        assert_eq!(input, output);
+    }
+
+    #[test]
+    fn test_tuple_round_trip() {
+        let input: (u32, u64) = (1, 2);
+        let data = to_vec(&input).unwrap();
+        let output: (u32, u64) = from_slice(data.as_slice()).unwrap();
+        assert_eq!(input, output);
+    }
+}
