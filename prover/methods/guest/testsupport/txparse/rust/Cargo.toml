@@ -1,0 +1,14 @@
+# The Rust side of the transaction-parser differential test (../../../test-txparse.sh). Not part of any guest: build.rs
+# copies the parser functions out of the guest's and libzync's sources at build time, so the test runs the shipped
+# text, not a copy that could drift.
+[package]
+name = "txparse-diff"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+libzync = { path = "../../../../../../libzync", default-features = false }
+sha2 = "0.10"
