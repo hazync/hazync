@@ -29,6 +29,10 @@ release hazync-engine-x86_64-linux-gnu-cuda
 # scripts/windows-host.sh does for the product host) and a proof on a real Windows card (ROADMAP 2.9, the gate's
 # record-windows).
 release hazync-engine-x86_64-windows-cuda.zip
+# The product host for Windows (CPU, host.exe alone): the app's driver (it runs hzengine.exe beside it); no proving of
+# its own. As the Linux CPU host above (user 28.11.2026: the product host stays as the driver). PENDING CUTOVER C8 and
+# a Windows check of its engine path (ROADMAP 2.9); windows-installer.yml takes it from this asset.
+release hazync-host-x86_64-windows-cpu.zip
 # The core chain verifier (swiftsync-verify, engine proofs only), CLI, WebAssembly module and its JavaScript glue.
 release hazync-verify-x86_64-linux-gnu
 release hazync-verify.wasm
