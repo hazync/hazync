@@ -4,7 +4,10 @@
 # Runs the two key-holding steps of .github/workflows/release-sign.yml, taken from the YAML itself, on synthetic
 # release assets with a throwaway GPG key and a stub `gh`:
 #   - a correct set signs, and the manifest names the tag, the tag's commit and its image;
-#   - a host or verifier that does not carry the tag's image (once) is refused, and an installer that is not one;
+#   - (the engine release, 28.11.2026) a key tarball that is not its record (image.json's id, vk.bin's pin), a core
+#     verifier without the core image, a Windows zip without exactly one hzengine.exe, an installer that is not one, and
+#     a tag with no reproduce/engine-release.tsv are refused. The records here are synthetic (the real ones come with
+#     the Stage 4 freeze);
 #   - a re-sign over unchanged assets passes; a re-sign after an asset was swapped is refused; a release whose
 #     existing manifest does not verify is refused.
 #
@@ -20,7 +23,6 @@ case "${1:-}" in
 esac
 command -v gpg >/dev/null || { echo "SKIP: no gpg"; exit 0; }
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
-ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' reproduce/LIBZYNC_IDS)
 fails=0
 check() { if [ "$1" = 1 ]; then echo "  ok   $2"; else echo "  FAIL $2"; fails=$((fails+1)); fi; }
 
@@ -66,27 +68,47 @@ chmod +x "$T/bin/gh"; export PATH="$T/bin:$PATH" RELEASE_TAG=v9.9.9 REPO=test/te
 workspace() {
     WS=$T/$1; export WS; rm -rf "$WS"; mkdir -p "$WS/dist" "$WS/prev" "$WS/tagtree/scripts" "$WS/tagtree/reproduce"
     cp scripts/release-assets.txt "$WS/tagtree/scripts/"; cp reproduce/LIBZYNC_IDS "$WS/tagtree/reproduce/"
-    git -C "$WS/tagtree" init -q && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t add -A \
-        && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t commit -qm tag
-    python3 - "$WS/dist" "$ID" "${2:-}" "$WS/tagtree/scripts/release-assets.txt" <<'PY'
-import os, sys, zipfile
-d, idh, mode, lst = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
-raw, hx = bytes.fromhex(idh), idh.encode()
+    # the assets and the tag's records, made together (a record = the key tarball's image id and vk.bin pin)
+    python3 - "$WS/dist" "${2:-}" "$WS/tagtree/scripts/release-assets.txt" "$WS/tagtree/reproduce/engine-release.tsv" <<'PY'
+import hashlib, io, json, os, sys, tarfile, zipfile
+d, mode, lst, rec = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 names = [l.split()[1] for l in open(lst) if l.split()[:1] in (["release"], ["sign"]) and l.split()[1].startswith("hazync-")]
+records = {}
 for n in names:
+    if n.startswith("hazync-keys-") and n.endswith(".tar.gz"):
+        name = n[len("hazync-keys-"):-len(".tar.gz")]
+        exe, vm, vk = os.urandom(32).hex(), os.urandom(32).hex(), os.urandom(256)
+        records[name] = (hashlib.sha256(bytes.fromhex(exe + vm)).hexdigest(), hashlib.sha256(vk).hexdigest())
+        if mode == "bad-keys" and name == "headers":
+            vk = os.urandom(256)                       # a key that is not the record's pinned one
+        with tarfile.open(os.path.join(d, n), "w:gz") as t:
+            for fn, data in (("vk.bin", vk), ("image.json", json.dumps({"exe": exe, "vm": vm}).encode()), ("sdk.pk", b"pk")):
+                ti = tarfile.TarInfo(fn); ti.size = len(data); t.addfile(ti, io.BytesIO(data))
+idh = records["core"][0]
+raw, hx = bytes.fromhex(idh), idh.encode()
+for n in names:
+    if n.startswith("hazync-keys-"):
+        continue
     body = os.urandom(64)
-    if n.startswith("hazync-host-x86_64-linux"): body += raw + os.urandom(64)
     if n in ("hazync-verify-x86_64-linux-gnu", "hazync-verify-aarch64", "hazync-verify.wasm"): body += hx + os.urandom(16)
-    if mode == "bad-host" and n == "hazync-host-x86_64-linux-gnu": body = os.urandom(200)
-    if mode == "bad-wasm-twice" and n == "hazync-verify.wasm": body += hx
+    if mode == "bad-verifier" and n == "hazync-verify.wasm": body = os.urandom(200)
     if n == "hazync-setup-x86_64-windows.exe": body = b"MZ" + os.urandom(64) + b"Inno Setup Setup Data (6.4.0)" + os.urandom(64)
     if mode == "not-installer" and n == "hazync-setup-x86_64-windows.exe": body = b"MZ" + os.urandom(200)
     p = os.path.join(d, n)
     if n.endswith(".zip"):
-        with zipfile.ZipFile(p, "w") as z: z.writestr("host.exe", os.urandom(64) + raw); z.writestr("cudart64_12.dll", b"x")
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("host.exe" if mode == "bad-zip" else "hzengine.exe", os.urandom(64)); z.writestr("cudart64_12.dll", b"x")
     else:
         open(p, "wb").write(body)
+if mode != "no-records":
+    with open(rec, "w") as f:
+        f.write("# name network image pin\n")
+        for name, (img, pin) in sorted(records.items()):
+            f.write(f"{name} {'signet' if name.endswith('-signet') else 'mainnet'} {img} {pin}\n")
 PY
+    git -C "$WS/tagtree" init -q && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t add -A \
+        && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t commit -qm tag
+    ID=$(awk '$1=="core" {print $3}' "$WS/tagtree/reproduce/engine-release.tsv" 2>/dev/null)
 }
 write() { (cd "$WS" && bash --noprofile --norc -eo pipefail -c "$WRITE") > "$WS/write.log" 2>&1; }
 sign()  { (cd "$WS" && bash --noprofile --norc -eo pipefail -c "$SIGN")  > "$WS/sign.log" 2>&1; }
@@ -100,21 +122,28 @@ check "$(grep -qx "# hazync v9.9.9 commit $commit image $ID" "$WS/SHA256SUMS.txt
 check "$( (cd "$WS/dist" && sha256sum --strict -c ../SHA256SUMS.txt >/dev/null 2>&1) && echo 1)" "sha256sum --strict -c still checks it (the binding lines are comments)"
 GOOD=$WS
 
-# 2. not this tag's image
-workspace badhost bad-host; write
-check "$([ $? != 0 ] && grep -q "not this tag's image" "$WS/write.log" && echo 1)" "a Linux host without the tag's image is refused"
-workspace badwasm bad-wasm-twice; write
-check "$([ $? != 0 ] && grep -q "hazync-verify.wasm carries it 2x" "$WS/write.log" && echo 1)" "a verifier carrying the image twice is refused"
+# 2. not this tag's images
+workspace badkeys bad-keys; write
+check "$([ $? != 0 ] && grep -q "hazync-keys-headers.tar.gz's vk.bin is not the headers record's pinned key" "$WS/write.log" && echo 1)" "a key tarball whose vk.bin is not its record's pinned key is refused"
+workspace badver bad-verifier; write
+check "$([ $? != 0 ] && grep -q "hazync-verify.wasm does not carry the core image" "$WS/write.log" && echo 1)" "a core verifier without the core image is refused"
+workspace badzip bad-zip; write
+check "$([ $? != 0 ] && grep -q "does not hold exactly one hzengine.exe" "$WS/write.log" && echo 1)" "a Windows zip without hzengine.exe is refused"
+workspace norec no-records; write
+check "$([ $? != 0 ] && grep -q "no engine image is published at this tag" "$WS/write.log" && echo 1)" "a tag with no reproduce/engine-release.tsv is refused"
 workspace notinst not-installer; write
 check "$([ $? != 0 ] && grep -q "is not an Inno Setup installer" "$WS/write.log" && echo 1)" "a Windows installer that is not an installer is refused"
 
-# 3. re-signs
-workspace resign; cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"
+# 3. re-signs: the good release's assets AND its tag's records (each workspace makes fresh ones)
+goodtag() { cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"
+            cp "$GOOD/tagtree/reproduce/engine-release.tsv" "$WS/tagtree/reproduce/"
+            git -C "$WS/tagtree" -c user.name=t -c user.email=t@t commit -qam "the good tag's records"; }
+workspace resign; goodtag
 write && sign; check "$([ $? = 0 ] && echo 1)" "a re-sign over unchanged assets passes"
-workspace swap; cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"
+workspace swap; goodtag
 echo "#!/bin/sh  swapped" > "$WS/dist/hazync-worker"
 write; sign; check "$([ $? != 0 ] && grep -q "differ from the hashes" "$WS/sign.log" && echo 1)" "a re-sign after swapping hazync-worker is refused"
-workspace forged; cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"
+workspace forged; goodtag
 sed -i 's/^\([0-9a-f]\)/0/' "$WS/prev/SHA256SUMS.txt"
 write; sign; check "$([ $? != 0 ] && grep -q "does not verify" "$WS/sign.log" && echo 1)" "a release whose existing manifest does not verify is refused"
 

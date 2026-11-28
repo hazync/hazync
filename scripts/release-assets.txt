@@ -9,27 +9,75 @@
 #
 # An exact set, not a minimum: a release once went out EMPTY and was called verified (the tag phase
 # of another project's release script), and a set that only has to contain some names cannot tell.
+#
+# THE ENGINE (OpenVM) RELEASE, 28.11.2026 (engine/RELEASE_TOOLING.md, engine/RELEASE_PLAN.md: the user's decisions of
+# 27.11.2026: full package, Windows in, v1.0.0 if the reviews go well). A PROPOSAL until the user has gone through the
+# contents. Lines marked PENDING have no build route yet: release.sh's exact-set check refuses a release without them,
+# which is the intended state until each route exists. release.sh itself refuses at preflight until its engine steps
+# are written.
 
-# The libzync host (mainnet image, reproduce/LIBZYNC_IDS), Linux CPU and CUDA.
+# The product host (Linux, CPU): the engine's driver (prep, engine-export, the board's commands). PENDING CUTOVER C8:
+# its RISC Zero backend is removed first. No CUDA build: the CUDA prover is hzengine.
 release hazync-host-x86_64-linux-gnu
-release hazync-host-x86_64-linux-gnu-cuda
-# The Windows CUDA host from windows-prove.yml's build-cuda job: host.exe + cudart64_12.dll, zipped
-# so the DLL keeps the name Windows looks for. Unzips to a folder the Windows GUI searches.
-release hazync-host-x86_64-windows-cuda.zip
-# The Windows CPU host from windows-prove.yml's prove job (which also ran it: method-id and a real prove of block 1),
-# host.exe alone: for a machine with no NVIDIA card the prover supports (owner, 16.11). Slower, and the app says so.
-release hazync-host-x86_64-windows-cpu.zip
-# The libzync verifier (swiftsync-verify), CLI, WebAssembly module and its JavaScript glue.
+# hzengine, the OpenVM prover, Linux CPU and CUDA 12.9. PENDING: no reproducible release build of hzengine exists
+# (reproduce/engine-ids.sh builds it inside its container but does not export it); package-release.sh stages
+# HZENGINE_CPU / HZENGINE_CUDA. The real-GPU gate proves with the CUDA one (scripts/release_gpu_gate.py).
+release hazync-engine-x86_64-linux-gnu
+release hazync-engine-x86_64-linux-gnu-cuda
+# hzengine.exe for Windows with its CUDA runtime, zipped: .github/workflows/engine-windows.yml's artifact
+# (hzengine-windows-x86_64-cuda; sm_61..sm_120). PENDING: a release step that fetches it for the release commit (as
+# scripts/windows-host.sh does for the product host) and a proof on a real Windows card (ROADMAP 2.9, the gate's
+# record-windows).
+release hazync-engine-x86_64-windows-cuda.zip
+# The core chain verifier (swiftsync-verify, engine proofs only), CLI, WebAssembly module and its JavaScript glue.
 release hazync-verify-x86_64-linux-gnu
 release hazync-verify.wasm
 release hazync-verify.js
-# Proof-party tooling.
+# Every zAPP's CLI (scripts/build-linux-verifier.sh with the zAPP's crate: the hosts' glibc floor).
+release hazync-zapp-assume-x86_64-linux-gnu
+release hazync-zapp-deposit-x86_64-linux-gnu
+release hazync-zapp-headers-x86_64-linux-gnu
+release hazync-zapp-hints-x86_64-linux-gnu
+release hazync-zapp-liveness-x86_64-linux-gnu
+release hazync-zapp-statement-x86_64-linux-gnu
+release hazync-zapp-utreexo-x86_64-linux-gnu
+release hazync-zapp-zeroconf-x86_64-linux-gnu
+# Every zAPP's browser module (its wasm/build.sh, the pinned container) and its glue. The zeroconf zAPP has no wasm
+# module yet (PENDING, so no line: add hazync-zapp-zeroconf.wasm / .js when it is built).
+release hazync-zapp-assume.wasm
+release hazync-zapp-assume.js
+release hazync-zapp-deposit.wasm
+release hazync-zapp-deposit.js
+release hazync-zapp-headers.wasm
+release hazync-zapp-headers.js
+release hazync-zapp-hints.wasm
+release hazync-zapp-hints.js
+release hazync-zapp-liveness.wasm
+release hazync-zapp-liveness.js
+release hazync-zapp-statement.wasm
+release hazync-zapp-statement.js
+release hazync-zapp-utreexo.wasm
+release hazync-zapp-utreexo.js
+# The key files of each published image (sdk.pk agg.vk openvm.toml guest.vmexe baseline.json image.json vk.bin), so a
+# reader has the pinned key and anyone can rebuild the image and compare. One per record of reproduce/engine-release.tsv
+# (written at the Stage 4 freeze; the names below are the images reproduce/engine-ids.sh builds, the handover verifier
+# left out until a handover is published). PENDING: engine-ids.sh does not export the key files and vk.bin yet.
+release hazync-keys-core.tar.gz
+release hazync-keys-core-signet.tar.gz
+release hazync-keys-headers.tar.gz
+release hazync-keys-hints.tar.gz
+release hazync-keys-utreexo.tar.gz
+release hazync-keys-utreexo-tip.tar.gz
+release hazync-keys-zeroconf.tar.gz
+# Proof-party tooling. PENDING 3.2: the engine-aware worker and coordinator (the board on the engine).
 release hazync-worker
 release hazync-coordinator.py
 release hazync-run-workers.sh
+# The aarch64 core verifier, built by release-sign.yml from the tag. PENDING: not yet built for the engine (OpenVM's
+# verifier for aarch64-unknown-linux-gnu, cross-compiled in CI).
 sign hazync-verify-aarch64
-# The Windows installer: the app with the release's prover and worker inside, built by windows-installer.yml
-# when signing (it needs the published Windows host). Not Authenticode-signed (owner, 11-13).
+# The Windows installer: the app with the release's prover inside, built by windows-installer.yml when signing.
+# PENDING 2.9: the Windows app on the engine (tools/win-gui drives the RISC Zero host today).
 sign hazync-setup-x86_64-windows.exe
 sign SHA256SUMS.txt
 sign SHA256SUMS.txt.asc

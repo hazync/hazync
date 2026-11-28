@@ -1,17 +1,22 @@
 #!/bin/bash
-# Runs ON A RENTED POD, in /workspace, for scripts/release_gpu_gate.py (never run it anywhere else). Real proofs, no
-# dev mode, with the EXACT staged release CUDA host:
+# Runs ON A RENTED POD, in /workspace, for scripts/release_gpu_gate.py (never run it anywhere else). Real proofs with the
+# EXACT staged release CUDA prover (the engine, OpenVM; engine/RELEASE_TOOLING.md):
 #
-#   /workspace/host             the staged hazync-host-x86_64-linux-gnu-cuda (pushed by the gate)
-#   /workspace/want_host_sha256 its sha256, as the operator gave it to the gate
-#   /workspace/gate/            the fixtures (prover/testdata/libzync/gpu-gate: GATE, SHA256SUMS, leaves, states)
+#   /workspace/hzengine          the staged hazync-engine-x86_64-linux-gnu-cuda (pushed by the gate)
+#   /workspace/want_host_sha256  its sha256, as the operator gave it to the gate
+#   /workspace/keys/<asset>      the staged key tarballs (hazync-keys-<name>.tar.gz) the entries name
+#   /workspace/want_keys_sha256  "<sha256>  <asset>" for each of them
+#   /workspace/gate/             the fixtures (engine/gpu-gate: GATE, SHA256SUMS, block exports, the header stream)
 #
-# For each line of gate/GATE (<height> <block hash> <leaf> <anchor> <state>) it proves the leaf exactly as a board
-# prover does: HAZYNC_LEAF_BUNDLE=<leaf> host libzync-prove-range h h unused leaf out/p<h>. Each run is timed into
-# out/proves.tsv. Nothing is judged here beyond "did it run": the receipts are verified on the maintainer's machine,
-# with the staged verifier, after harvest. Ends by writing ONE word (and a reason) to out/RESULT:
-#   PROVED | NO_GPU | HOST_SHA_BAD | FIXTURE_BAD | METHOD_ID_BAD | PROVE_FAILED <h> rc=<n>
-# No retry: a release gate that retries hides the fault it is there to see (#119-class faults included).
+# For each line of gate/GATE (<label> <kind> <keys> <input> <height> <hash> <anchor|-> <want>):
+#   block    the export (a .tgz of `engine-export`'s directory): hzengine prove-block --dir <keys> --export <it>
+#   headers  the headers zAPP's stream (gzip allowed): hzengine prove --dir <keys> --input <it>
+# then `hzengine pack` writes out/<label>.hze, the HZE1 file a reader verifies (pack checks it with the readers' own
+# verifier first). Raw proofs stay in /workspace/work (not harvested: they are large); each run is timed into
+# out/proves.tsv. Nothing is judged here beyond "did it run": the HZE1 files are verified on the maintainer's machine,
+# with the staged verifiers, after harvest. Ends by writing ONE word (and a reason) to out/RESULT:
+#   PROVED | NO_GPU | HOST_SHA_BAD | KEYS_SHA_BAD | FIXTURE_BAD | HOST_BAD | PROVE_FAILED <label> rc=<n> | PACK_FAILED <label> rc=<n>
+# No retry: a release gate that retries hides the fault it is there to see.
 #
 # --deadman <seconds> <expected pod id>: the POD-SIDE cap (scripts/release_gpu_gate.py arms it right after SSH
 # comes up; between the create and that moment -- up to the gate's boot wait -- there is NO dead-man, only the
@@ -72,9 +77,8 @@ if [ "${1:-}" = "--deadman" ]; then
     fi
     exit 1
 fi
-W=/workspace; O=$W/out
-mkdir -p "$O"; cd "$W" || exit 1
-unset RISC0_DEV_MODE HAZYNC_CHUNKS HAZYNC_PROFILE_LAYOUT HAZYNC_SEG_PO2 HAZYNC_NO_MEMPOOL HAZYNC_RESUME
+W=/workspace; O=$W/out; WK=$W/work
+mkdir -p "$O" "$WK"; cd "$W" || exit 1
 finish() { echo "$*" > "$O/RESULT"; exit 0; }
 date -u +%FT%TZ > "$O/started"
 nvidia-smi --query-gpu=name,compute_cap,driver_version,memory.total --format=csv,noheader > "$O/gpu.txt" 2>&1 \
@@ -83,20 +87,42 @@ nvidia-smi --query-gpu=name,compute_cap,driver_version,memory.total --format=csv
 nvidia-smi --query-gpu=name --format=csv,noheader | grep -q GeForce \
     && for d in /usr/local/cuda*/compat; do [ -d "$d" ] && mv "$d" "${d}.disabled"; done
 ldconfig 2>/dev/null
-sha256sum host | cut -c1-64 > "$O/host_sha256"
+sha256sum hzengine | cut -c1-64 > "$O/host_sha256"
 [ "$(cat "$O/host_sha256")" = "$(tr -dc '0-9a-f' < want_host_sha256)" ] || finish HOST_SHA_BAD
+# every key tarball by sha256, recorded for the judge, then extracted to work/k/<name>
+: > "$O/keys_sha256.txt"
+while read -r want asset; do
+    [ -n "$asset" ] || continue
+    got=$(sha256sum "keys/$asset" 2>/dev/null | cut -c1-64)
+    echo "$got $asset" >> "$O/keys_sha256.txt"
+    [ "$got" = "$want" ] || finish KEYS_SHA_BAD
+    n=${asset#hazync-keys-}; n=${n%.tar.gz}
+    mkdir -p "$WK/k/$n" && tar xzf "keys/$asset" -C "$WK/k/$n" || finish KEYS_SHA_BAD
+done < want_keys_sha256
 (cd gate && sha256sum -c --quiet SHA256SUMS) > "$O/fixtures.txt" 2>&1 || finish FIXTURE_BAD
-chmod +x host
-timeout 120 ./host method-id > "$O/method_id.txt" 2>&1 < /dev/null || finish METHOD_ID_BAD
-while read -r h _hash leaf _anchor _state; do
-    case "$h" in ''|\#*) continue ;; esac
-    rm -rf "$O/p$h"
+chmod +x hzengine
+timeout 120 ./hzengine --help > "$O/hzengine_help.txt" 2>&1 < /dev/null || finish HOST_BAD
+while read -r label kind keys input _h _hash _anchor _want; do
+    case "$label" in ''|\#*) continue ;; esac
+    K="$WK/k/$keys"; P="$WK/p_$label"; rm -rf "$P" "$O/$label.hze"
     t0=$(date +%s.%N)
-    ( cd "$O" && HAZYNC_LEAF_BUNDLE="$W/gate/$leaf" timeout "${PROVE_TIMEOUT_S:-2400}" \
-        "$W/host" libzync-prove-range "$h" "$h" unused leaf "$O/p$h" ) > "$O/prove_$h.log" 2>&1 < /dev/null
-    rc=$?
+    case "$kind" in
+        block)
+            mkdir -p "$WK/x_$label" && tar xzf "gate/$input" -C "$WK/x_$label" || finish "FIXTURE_BAD $label"
+            timeout "${PROVE_TIMEOUT_S:-2400}" ./hzengine prove-block --dir "$K" --export "$WK/x_$label" --out "$P" \
+                > "$O/prove_$label.log" 2>&1 < /dev/null
+            rc=$?; proof="$P/block" ;;
+        headers)
+            in="gate/$input"; case "$input" in *.gz) gunzip -c "$in" > "$WK/in_$label" || finish "FIXTURE_BAD $label"; in="$WK/in_$label" ;; esac
+            timeout "${PROVE_TIMEOUT_S:-2400}" ./hzengine prove --dir "$K" --input "$in" --out "$P" \
+                > "$O/prove_$label.log" 2>&1 < /dev/null
+            rc=$?; proof="$P" ;;
+        *) finish "FIXTURE_BAD $label kind $kind" ;;
+    esac
     t1=$(date +%s.%N)
-    printf '%s\t%s\t%s\n' "$h" "$rc" "$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')" >> "$O/proves.tsv"
-    [ "$rc" = 0 ] || finish "PROVE_FAILED $h rc=$rc"
+    printf '%s\t%s\t%s\n' "$label" "$rc" "$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.1f", b-a}')" >> "$O/proves.tsv"
+    [ "$rc" = 0 ] || finish "PROVE_FAILED $label rc=$rc"
+    ./hzengine pack --dir "$K" --proof "$proof" --out "$O/$label.hze" > "$O/pack_$label.log" 2>&1 < /dev/null
+    rc=$?; [ "$rc" = 0 ] || finish "PACK_FAILED $label rc=$rc"
 done < gate/GATE
 finish PROVED

@@ -25,6 +25,13 @@
 # list is scripts/release-assets.txt, which release-sign.yml reads too. The CORE design's last release
 # is v0.22.1, whose assets stay where they are.
 #
+# THE ENGINE RELEASE (28.11.2026, engine/RELEASE_TOOLING.md). scripts/release-assets.txt now lists the engine (OpenVM)
+# release's assets (hzengine, every zAPP CLI and wasm module, the key tarballs, Windows), and step 4b runs the engine's
+# real-GPU gate. Steps 2, 2b and 4 still build and check the RISC Zero product host and verifier: their engine
+# versions are pending (no reproducible hzengine / zAPP CLI release build yet, and the identity checks need the
+# records the Stage 4 freeze publishes). Until they are written this script REFUSES at preflight, so the asset list
+# and the old steps can never meet in a real release.
+#
 # RESUMABLE. Each phase checks whether its work is already done and skips it. A failure at phase 5
 # does not rebuild the guest; just run the same command again.
 set -uo pipefail
@@ -60,6 +67,15 @@ run()  { [ "$DRY" = 1 ] && { echo "  (dry-run, would run) $*"; return 0; }; "$@"
 [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] \
     || die "usage: $0 vMAJOR.MINOR.PATCH [--dry-run|--verify-only]   (release-sign.yml refuses anything else)"
 [ "$(echo $BINS | wc -w)" -ge 10 ] || die "scripts/release-assets.txt lists only $(echo $BINS | wc -w) release asset(s)"
+
+# The engine release's published images (written at the Stage 4 freeze): "<name> <network> <image id> <key pin>".
+ENGINE_RECORDS=reproduce/engine-release.tsv
+[ -f "$ENGINE_RECORDS" ] || die "$ENGINE_RECORDS does not exist: no engine image is published yet (Stage 4, the freeze).
+       Nothing can be released before it (engine/RELEASE_TOOLING.md)."
+ENGINE_CANON=$(awk '$1=="core" && $2=="mainnet" {print $3}' "$ENGINE_RECORDS")
+[[ "$ENGINE_CANON" =~ ^[0-9a-f]{64}$ ]] || die "$ENGINE_RECORDS has no core mainnet record"
+die "steps 2, 2b and 4 of this script still build and check the RISC Zero product host; the engine release's are
+       pending (engine/RELEASE_TOOLING.md, \"release.sh\"). Refusing before anything is built or published."
 
 # The id this release ships: the PUBLISHED libzync mainnet image, from its record. reproduce/METHOD_ID
 # names the same id since #676; if they disagree the repo contradicts itself, and nothing is shipped.
@@ -316,23 +332,26 @@ echo "  staged assets (sha256):"
 # check above green: this box has no GPU, so they all read BYTES. Nothing here ever ran a kernel. So publishing now
 # needs evidence from real cards, for the EXACT staged binaries (by sha256), in $DIST:
 #   .gpu-gate-linux-cuda.json    scripts/release-gpu-gate.sh run, from the maintainer's laptop (the RunPod key is
-#                                there, not here): an A40 and a Blackwell card prove the gate blocks with THIS host,
-#                                THIS verifier accepts every receipt and refuses a tampered one.
+#                                there, not here): a pre-Blackwell and a Blackwell card prove the gate entries (a
+#                                block, the header chain) with THIS hzengine and THESE key tarballs, and THESE
+#                                verifiers accept every proof and refuse a tampered one.
 #   .gpu-gate-windows-cuda.json  scripts/release-gpu-gate.sh record-windows, after the documented block-170 prove
-#                                with THIS zip's host.exe on a real card (CI has no GPU).
-# Rebuilding either host changes its sha256 and voids its marker. Resumable: run the gate, then re-run this
+#                                with THIS zip's hzengine.exe on a real card (CI has no GPU).
+# Rebuilding either prover changes its sha256 and voids its marker. Resumable: run the gate, then re-run this
 # command; the build, fetch and package steps find their work done.
-step "4b. real-GPU gate: the staged CUDA hosts proved real blocks on real cards"
-_cu_sha=$(sha256sum "$CU" | cut -c1-64)
-if python3 scripts/release_gpu_gate.py check --dist "$DIST" --image "$CANON" --commit "$HEAD_SHA"; then
+step "4b. real-GPU gate: the staged CUDA provers proved real blocks on real cards"
+# The engine's CUDA prover (hzengine) and the core record's image id (engine/RELEASE_TOOLING.md).
+ECU="$DIST/hazync-engine-x86_64-linux-gnu-cuda"
+_cu_sha=$(sha256sum "$ECU" | cut -c1-64)
+if python3 scripts/release_gpu_gate.py check --dist "$DIST" --image "$ENGINE_CANON" --commit "$HEAD_SHA"; then
     :
 elif [ "$DRY" = 1 ]; then
     echo "  !    (dry run) the publish step would REFUSE here until the gate has run for these exact files"
 else
-    die "no real-GPU evidence for the staged CUDA hosts -- do NOT publish. From the maintainer's laptop:
+    die "no real-GPU evidence for the staged CUDA provers -- do NOT publish. From the maintainer's laptop:
          scripts/release-gpu-gate.sh run --source <this box>:$(realpath -m "$DIST") --host-sha256 $_cu_sha
        (from a checkout of THIS commit), and for Windows scripts/release-gpu-gate-windows.ps1 with the staged zip's
-       host.exe on a real card, then scripts/release-gpu-gate.sh record-windows ...
+       hzengine.exe on a real card, then scripts/release-gpu-gate.sh record-windows ...
        (docs/BUILD_AND_RELEASE.md, \"The real-GPU gate\"). Then re-run: ./scripts/release.sh $TAG"
 fi
 

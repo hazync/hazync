@@ -10,14 +10,20 @@ so this tests the code that actually releases pods.
    sweep (per-pod terminate off). Each mechanism must be enough alone.
 2. Gate decisions: fail-fast, the spend cap counting only the run's own pods, leftover gate pods refused (or swept
    with --sweep-first), other pods named but left alone, the SECURE stock check and the pre-Blackwell fallback, the
-   dead-man armed on every pod, and judge's refusals (state mismatch, wrong method-id, a missing receipt).
-3. record-windows: the run's report must name the staged zip's host.exe, the receipt and log; a receipt already used
-   as evidence (the Linux marker, the history) is refused.
+   dead-man armed on every pod, and judge's refusals (a key tarball on the pod that is not the staged one, a proof
+   of the wrong block, a missing proof file).
+3. record-windows: the run's report must name the staged zip's hzengine.exe, the proof file and log; a proof already
+   used as evidence (the Linux marker, the history) is refused.
+
+The engine gate (28.11.2026): the records (reproduce/engine-release.tsv) and the fixtures (engine/gpu-gate) do not exist
+until the Stage 4 freeze, so this test makes its own: a records file, a GATE with a block entry (b170, from an anchor,
+DEMO) and the header chain (hdr, from genesis, OK), and key tarballs whose vk.bin / image.json match the records.
 
   python3 scripts/test_release_gpu_gate.py            # must PASS
   python3 scripts/test_release_gpu_gate.py --control  # both release mechanisms off: MUST FAIL
 """
 import argparse
+import hashlib
 import io
 import json
 import os
@@ -27,6 +33,7 @@ import sys
 import tempfile
 import threading
 import time
+import tarfile
 import zipfile
 from contextlib import redirect_stdout
 
@@ -48,6 +55,43 @@ class BrokenOut(io.StringIO):
         if BROKEN["on"]:
             raise OSError(5, "Input/output error")
         return super().write(x)
+# ---- the engine records and fixtures this test runs on (the real ones come with the freeze) -----------------------
+SETUP = tempfile.mkdtemp(prefix="hz-relgate-setup-")
+
+
+def mk_keys(name):
+    """A key tarball whose vk.bin and image.json give a record; returns (tar bytes path, image id, pin)."""
+    d = os.path.join(SETUP, f"k-{name}")
+    os.makedirs(d)
+    vk = os.urandom(512)
+    open(os.path.join(d, "vk.bin"), "wb").write(vk)
+    exe, vm = os.urandom(32).hex(), os.urandom(32).hex()
+    json.dump({"exe": exe, "vm": vm}, open(os.path.join(d, "image.json"), "w"))
+    for n in ("sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.json"):
+        open(os.path.join(d, n), "wb").write(os.urandom(64))
+    tp = os.path.join(SETUP, g.keys_asset(name))
+    with tarfile.open(tp, "w:gz") as t:
+        for n in sorted(os.listdir(d)):
+            t.add(os.path.join(d, n), arcname=n)
+    return tp, hashlib.sha256(bytes.fromhex(exe + vm)).hexdigest(), hashlib.sha256(vk).hexdigest()
+
+
+KEYS = {n: mk_keys(n) for n in ("core", "headers")}
+g.RELEASE_RECORDS = os.path.join(SETUP, "engine-release.tsv")
+open(g.RELEASE_RECORDS, "w").write("# name network image pin\n" + "".join(
+    f"{n} mainnet {KEYS[n][1]} {KEYS[n][2]}\n" for n in KEYS))
+g.FIXTURES = os.path.join(SETUP, "gpu-gate")
+os.makedirs(g.FIXTURES)
+H170, H_TIP = "1" * 64, "2" * 64        # synthetic: the fake verifier checks only that the --expect height matches
+for n, body in (("export_170.tgz", b"export-170"), ("state_169.json", b"{}"), ("headers_0_975278.stream.gz", b"stream")):
+    open(os.path.join(g.FIXTURES, n), "wb").write(body)
+open(os.path.join(g.FIXTURES, "GATE"), "w").write(
+    "# label kind keys input height hash anchor want\n"
+    f"b170 block core export_170.tgz 170 {H170} state_169.json DEMO\n"
+    f"hdr headers headers headers_0_975278.stream.gz 975278 {H_TIP} - OK\n")
+open(os.path.join(g.FIXTURES, "SHA256SUMS"), "w").write("".join(
+    f"{g.sha256_file(os.path.join(g.FIXTURES, n))}  {n}\n"
+    for n in ("export_170.tgz", "state_169.json", "headers_0_975278.stream.gz")))
 IMAGE = g.canon_image()
 BLOCKS = g.gate_blocks()
 fails = 0
@@ -129,10 +173,10 @@ class FakeAPI:
 
 class FakeTransport:
     """The pod side. `plan[family]` says what the pod does: `result` (None = never finishes), `raise`/`signal` at a
-    step, `pod_sha`, and judge-side faults (`state_bad`, `mid_bad`, `no_receipt`). family: 'A40'/'Blackwell'."""
+    step, `pod_sha`, and judge-side faults (`keys_bad`, `wrong_block`, `no_receipt`). family: 'A40'/'Blackwell'."""
     def __init__(self, api, host_sha, plan=None):
         self.api, self.host_sha, self.plan, self.pubkey = api, host_sha, plan or {}, "ssh-ed25519 FAKE"
-        self.harvested, self.armed, self.stop = [], {}, None
+        self.harvested, self.armed, self.stop, self.keys = [], {}, None, []
 
     def fam(self, port):
         gt = self.api.live.get(f"pod{port - 20000}", {}).get("gpu", "")
@@ -172,31 +216,33 @@ class FakeTransport:
                else "NVIDIA RTX PRO 4500 Blackwell Server Edition, 12.0, 575.51, 32623 MiB")
         open(os.path.join(d, "gpu.txt"), "w").write(gpu + "\n")
         open(os.path.join(d, "host_sha256"), "w").write(p.get("pod_sha", self.host_sha) + "\n")
-        open(os.path.join(d, "method_id.txt"), "w").write(f"METHOD_ID {'0' * 64 if p.get('mid_bad') else IMAGE}\n")
+        with open(os.path.join(d, "keys_sha256.txt"), "w") as f:
+            for n, h in self.keys:
+                f.write(f"{'0' * 64 if p.get('keys_bad') else h} {n}\n")
         with open(os.path.join(d, "proves.tsv"), "w") as f:
-            for h, *_ in BLOCKS:
-                f.write(f"{h}\t0\t12.5\n")
-        if (p.get("result", "PROVED") or "") == "PROVED":
-            for h, _bh, _l, _a, state in BLOCKS:
-                os.makedirs(os.path.join(d, f"p{h}"), exist_ok=True)
-                if not p.get("no_receipt"):
-                    open(os.path.join(d, f"p{h}", f"block_{h}.rcpt"), "w").write(f"GOOD-RECEIPT-{h}-" + "x" * 200)
-                st = json.load(open(os.path.join(g.FIXTURES, state)))
-                if p.get("state_bad"):
-                    st["utxo_leaves"] = int(st.get("utxo_leaves") or 0) + 1
-                json.dump(st, open(os.path.join(d, f"p{h}", f"state_{h}.json"), "w"))
+            for e in BLOCKS:
+                f.write(f"{e['label']}\t0\t12.5\n")
+        if (p.get("result", "PROVED") or "") == "PROVED" and not p.get("no_receipt"):
+            for e in BLOCKS:
+                h = e["height"] + (1 if p.get("wrong_block") else 0)
+                open(os.path.join(d, f"{e['label']}.hze"), "w").write(f"GOOD-PROOF-{h}-" + "x" * 200)
         self.harvested.append(port)
         return True
 
 
-# A stand-in for the staged verifier: accepts exactly an untouched GOOD receipt for the --expect height (DEMO, exit
-# 2, with the --expect line), refuses anything else (exit 1). LAX accepts everything: a verifier that checks nothing.
+# A stand-in for the staged verifiers: accepts exactly an untouched GOOD proof for the --expect height under the right
+# record (--image / --vk-sha256 as published, the key file's sha256 = the pin), refuses anything else (exit 1). With
+# --anchor: DEMO, exit 2, with the --expect line (the core CLI); without: OK, exit 0 (the headers CLI, whole chain).
+# LAX accepts everything: a verifier that checks nothing.
 VERIFIER = r'''#!/bin/bash
-r="${@: -1}"; h=""; while [ $# -gt 1 ]; do [ "$1" = --expect ] && h="${2%%:*}"; shift; done
-if [ "$LAX" = 1 ] || [ "$(tr -d 'x' < "$r")" = "GOOD-RECEIPT-$h-" ]; then
-  echo "  [ok] --expect: block $h is ..."; echo "SWIFTSYNC_VERIFY_DEMO: consistent with the chain FROM THE GIVEN ANCHOR ONLY"; exit 2
+r="${@: -1}"; h=""; an=0; im=""; pin=""; vk=""
+while [ $# -gt 1 ]; do case "$1" in --expect) h="${2%%:*}";; --anchor) an=1;; --image) im="$2";; --vk-sha256) pin="$2";; --vk) vk="$2";; esac; shift; done
+good=0; [ "$(tr -d 'x' < "$r")" = "GOOD-PROOF-$h-" ] && grep -q " $im $pin\$" "$RECORDS" && [ "$(sha256sum "$vk" | cut -c1-64)" = "$pin" ] && good=1
+if [ "$LAX" = 1 ] || [ $good = 1 ]; then
+  if [ $an = 1 ]; then echo "  [ok] --expect: block $h is ..."; echo "SWIFTSYNC_VERIFY_DEMO: consistent with the chain FROM THE GIVEN ANCHOR ONLY"; exit 2; fi
+  echo "  [ ok ] the tip is $h"; echo "SWIFTSYNC_VERIFY_OK: header chain from genesis to $h"; exit 0
 fi
-echo "  [FAIL] receipt does not verify"; echo "SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed"; exit 1
+echo "  [FAIL] proof does not verify"; echo "SWIFTSYNC_VERIFY_FAIL: 1 check(s) failed"; exit 1
 '''
 
 
@@ -206,8 +252,12 @@ def mkdist(lax=False):
     dist = os.path.join(t, "dist")
     os.makedirs(dist)
     open(os.path.join(dist, g.CUDA_ASSET), "wb").write(os.urandom(4096))
-    open(os.path.join(dist, g.VERIFIER_ASSET), "w").write(VERIFIER.replace("$LAX", "1" if lax else "0"))
-    os.chmod(os.path.join(dist, g.VERIFIER_ASSET), 0o755)
+    for v in (g.VERIFIER_ASSET, g.HEADERS_VERIFIER_ASSET):
+        open(os.path.join(dist, v), "w").write(VERIFIER.replace("$LAX", "1" if lax else "0")
+                                               .replace('"$RECORDS"', repr(g.RELEASE_RECORDS)))
+        os.chmod(os.path.join(dist, v), 0o755)
+    for n, (tp, _i, _p) in KEYS.items():
+        shutil.copyfile(tp, os.path.join(dist, g.keys_asset(n)))
     g.LOCAL_HISTORY = os.path.join(t, "local-history.txt")
     return t, dist
 
@@ -244,7 +294,7 @@ def has_marker(dist):
 SIGS = (signal.SIGTERM, signal.SIGHUP)
 FAILING = [
     ("the Blackwell pod never gets SSH", dict(api_kw=dict(boots=("A40",)))),
-    ("a prove fails on the A40 (segfault)", dict(plan={"A40": {"result": "PROVE_FAILED 200000 rc=139"}})),
+    ("a prove fails on the A40 (segfault)", dict(plan={"A40": {"result": "PROVE_FAILED hdr rc=139"}})),
     ("the pod script dies without a RESULT", dict(plan={"Blackwell": {"result": "POD_SCRIPT_DIED"}})),
     ("harvest raises on the Blackwell pod", dict(plan={"Blackwell": {"raise": "harvest"}})),
     ("the gate's own push step crashes", dict(plan={"A40": {"raise": "push"}})),
@@ -262,9 +312,9 @@ FAILING = [
     ("no Blackwell capacity at all", dict(api_kw=dict(capacity=("A40", "A5000")))),
     ("the pod ran a DIFFERENT host than the staged one", dict(plan={"A40": {"pod_sha": "0" * 64}})),
     ("the verifier accepts a tampered receipt (checks nothing)", dict(lax=True)),
-    ("judge: the pod's state differs from prep's", dict(plan={"Blackwell": {"state_bad": True}})),
-    ("judge: the host reports another method id", dict(plan={"A40": {"mid_bad": True}})),
-    ("judge: PROVED but no receipt was harvested", dict(plan={"A40": {"no_receipt": True}})),
+    ("judge: a key tarball on the pod is not the staged one", dict(plan={"Blackwell": {"keys_bad": True}})),
+    ("judge: the pod proved another block than the entry's", dict(plan={"A40": {"wrong_block": True}})),
+    ("judge: PROVED but no proof file was harvested", dict(plan={"A40": {"no_receipt": True}})),
 ]
 
 # ---- 1. lifecycle, under each release mechanism alone ------------------------------------------------------------
@@ -281,10 +331,16 @@ for cname, no_term, no_sweep in configs:
     check(rc == 0 and not billing(api) and len(api.deployed) == 2,
           f"happy path: exit 0, two pods, none left billing (rc {rc}, live {billing(api)})")
     m = json.load(open(os.path.join(dist, g.MARKER_LINUX))) if has_marker(dist) else {}
-    check(has_marker(dist) and g.marker_ok_linux(m, sha, g.sha256_file(os.path.join(dist, g.VERIFIER_ASSET)), IMAGE,
-                                                 [b[0] for b in BLOCKS], m.get("repo_commit"),
+    staged = {n: g.sha256_file(os.path.join(dist, n)) for n in sum(g.staged_needs(BLOCKS), [])}
+    check(has_marker(dist) and g.marker_ok_linux(m, sha, staged, IMAGE, [e["label"] for e in BLOCKS],
+                                                 m.get("repo_commit"),
                                                  g.sha256_file(os.path.join(g.FIXTURES, "SHA256SUMS"))) == [],
-          "  ...the marker clears exactly this host, with the commit and fixtures it ran")
+          "  ...the marker clears exactly this prover, verifiers and key tarballs, with the commit and fixtures it ran")
+    if cname == "as shipped":
+        st2 = dict(staged)
+        st2[g.keys_asset("core")] = "0" * 64
+        check(has_marker(dist) and g.marker_ok_linux(m, sha, st2, IMAGE, [e["label"] for e in BLOCKS]) != [],
+              "  ...and not a key tarball restaged after the gate ran")
     for title, kw in FAILING:
         if no_sweep and "lost create" in title:
             continue            # a pod no call handed back can ONLY be found by listing: that is the sweep's job
@@ -293,7 +349,7 @@ for cname, no_term, no_sweep in configs:
               f"{title}: fails, no marker, no pod left billing (rc {rc}, live {billing(api)})")
 g._CONTROL_NO_TERMINATE = g._CONTROL_NO_SWEEP = False
 if CONTROL:
-    for t in TEMPS:
+    for t in TEMPS + [SETUP]:
         shutil.rmtree(t, ignore_errors=True)
     print(f"CONTROL: {fails} failure(s)")
     sys.exit(0 if fails else 1)
@@ -345,7 +401,7 @@ check("podX" in _api.live, "the lost-create reaper leaves a pod whose create is 
 _gate.inflight.discard(_name)
 _gate.reap_lost()
 check("podX" not in _api.live, "  ...and releases it once no call is in flight for its name (a real lost create)")
-rc, api, dist, tr, rep = scenario(plan={"A40": {"result": "PROVE_FAILED 170 rc=139"}, "Blackwell": {"result": None}})
+rc, api, dist, tr, rep = scenario(plan={"A40": {"result": "PROVE_FAILED b170 rc=139"}, "Blackwell": {"result": None}})
 check("pre-blackwell card ended without PROVED" in rep.get("stop_reason", ""),
       f"fail-fast: the A40's failure stops the Blackwell card at once (stop_reason: {rep.get('stop_reason')!r})")
 rc, api, dist, tr, rep = scenario(api_kw=dict(cost=1000.0), plan={"A40": {"result": None}, "Blackwell": {"result": None}})
@@ -382,20 +438,20 @@ def win_case(edit_report=None, reuse=None, zip_other=False, args_drop=None, exe=
     exe = exe or os.urandom(2048)
     zp = os.path.join(dist, g.WIN_ASSET)
     with zipfile.ZipFile(zp, "w") as z:
-        z.writestr("host.exe", exe)
+        z.writestr(g.WIN_EXE, exe)
         z.writestr("cudart64_12.dll", b"dll")
     local_zip = os.path.join(t, "copy.zip")
     if zip_other:
         with zipfile.ZipFile(local_zip, "w") as z:
-            z.writestr("host.exe", b"other")
+            z.writestr(g.WIN_EXE, b"other")
     else:
         shutil.copyfile(zp, local_zip)
-    rc_path, log = os.path.join(t, "block_170.rcpt"), os.path.join(t, "prove.log")
-    open(rc_path, "w").write("GOOD-RECEIPT-170-" + "x" * 200)
+    rc_path, log = os.path.join(t, "block_170.hze"), os.path.join(t, "prove.log")
+    open(rc_path, "w").write("GOOD-PROOF-170-" + "x" * 200)
     open(log, "w").write("proved\n")
     rep = {"host_exe_sha256": g.hashlib.sha256(exe).hexdigest(), "zip_sha256": g.sha256_file(zp),
            "receipt_sha256": g.sha256_file(rc_path), "log_sha256": g.sha256_file(log), "exit_code": 0,
-           "gpu_name": "NVIDIA GeForce GTX 1050 Ti", "method_id": f"METHOD_ID {IMAGE}", "prove_s": 197.7}
+           "gpu_name": "NVIDIA GeForce GTX 1050 Ti", "image": f"image {IMAGE}", "prove_s": 197.7}
     if edit_report:
         edit_report(rep)
     rp = os.path.join(t, "gate-windows.json")
@@ -435,14 +491,14 @@ check(mw and g.marker_ok_windows(mw, g.sha256_file(zp), g.sha256_file(os.path.jo
 for title, kw in [
     ("the same receipt, already recorded for ANOTHER host.exe", dict(reuse="history")),
     ("report fields that are not strings", dict(edit_report=lambda r: r.update(host_exe_sha256=7, receipt_sha256=None,
-                                                                            gpu_name=["x"], method_id={"a": 1}))),
+                                                                            gpu_name=["x"], image={"a": 1}))),
     ("a report that is not a JSON object", dict(edit_report=lambda r: (r.clear(), r.update(_list=True)))),
-    ("the Linux gate's own receipt", dict(reuse="linux")),
-    ("a report for another host.exe", dict(edit_report=lambda r: r.update(host_exe_sha256="0" * 64))),
-    ("a report naming another receipt", dict(edit_report=lambda r: r.update(receipt_sha256="0" * 64))),
+    ("the Linux gate's own proof", dict(reuse="linux")),
+    ("a report for another hzengine.exe", dict(edit_report=lambda r: r.update(host_exe_sha256="0" * 64))),
+    ("a report naming another proof file", dict(edit_report=lambda r: r.update(receipt_sha256="0" * 64))),
     ("a report naming another log", dict(edit_report=lambda r: r.update(log_sha256="0" * 64))),
     ("a prove that exited 1", dict(edit_report=lambda r: r.update(exit_code=1))),
-    ("a host.exe of another image", dict(edit_report=lambda r: r.update(method_id="METHOD_ID " + "1" * 64))),
+    ("a proof of another image", dict(edit_report=lambda r: r.update(image="image " + "1" * 64))),
     ("a local zip that is not the staged one", dict(zip_other=True)),
     ("no --log", dict(args_drop="--log")),
     ("no --zip", dict(args_drop="--zip")),
@@ -466,7 +522,7 @@ rc, dist, out = win_case()
 g.repo_commit = lambda: (CLEAN, False)
 check(rc == 1 and "prover/x.rs" in out, "  ...and the refusal names the changed files")
 
-for t in TEMPS:
+for t in TEMPS + [SETUP]:
     shutil.rmtree(t, ignore_errors=True)
 print(f"{fails} failure(s)")
 sys.exit(1 if fails else 0)

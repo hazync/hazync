@@ -1,39 +1,39 @@
-# The release's Windows CUDA check (docs/BUILD_AND_RELEASE.md, "The real-GPU gate"). Run it on a Windows PC with an
-# NVIDIA card, in the folder where the STAGED hazync-host-x86_64-windows-cuda.zip was unzipped:
+# The release's Windows CUDA check for the ENGINE (OpenVM) release (docs/BUILD_AND_RELEASE.md, "The real-GPU gate";
+# engine/RELEASE_TOOLING.md). Run it on a Windows PC with an NVIDIA card, in the folder where the STAGED
+# hazync-engine-x86_64-windows-cuda.zip was unzipped (hzengine.exe and its CUDA runtime):
 #
-#   powershell -ExecutionPolicy Bypass -File release-gpu-gate-windows.ps1 -Leaf leaf_170.bin -Zip ..\hazync-host-x86_64-windows-cuda.zip
+#   powershell -ExecutionPolicy Bypass -File release-gpu-gate-windows.ps1 -Export export_170.tgz `
+#       -Keys ..\hazync-keys-core.tar.gz -Zip ..\hazync-engine-x86_64-windows-cuda.zip
 #
-# It hashes the host.exe it is about to run and the zip it came from (which also carries cudart64_12.dll, so -Zip is
-# required), asks nvidia-smi which card this is, runs `host.exe method-id`, proves block 170 from its real-state leaf
-# bundle (prover/testdata/libzync/gpu-gate/leaf_170.bin), and writes ONE JSON report (gate-windows.json) with every
-# sha256 and the timing. Bring the report, out\block_170.rcpt, prove.log and the zip back to the laptop for
-# `scripts/release-gpu-gate.sh record-windows`, which checks host.exe's sha256 against the STAGED zip and refuses a
-# receipt that was ever used as evidence before.
+# It hashes the hzengine.exe it is about to run, the zip it came from (-Zip is required), the block export
+# (engine/gpu-gate's b170 entry) and the key tarball, asks nvidia-smi which card this is, unpacks both with Windows'
+# own tar.exe, proves block 170 (`hzengine prove-block`), packs the proof into the HZE1 file a reader verifies
+# (`hzengine pack`, which prints the image id), and writes ONE JSON report (gate-windows.json) with every sha256 and
+# the timing. Bring the report, out\block_170.hze, prove.log and the zip back to the laptop for
+# `scripts/release-gpu-gate.sh record-windows`, which checks hzengine.exe's sha256 against the STAGED zip, verifies the
+# proof under the published record and refuses a proof that was ever used as evidence before.
 #
 # ⛔ Native programs are run with Start-Process and file redirection, NEVER `& exe ... *> file`: under Windows
 # PowerShell 5.1 (what `powershell -File` runs) with $ErrorActionPreference = "Stop", a native program's stderr
 # behind a redirect becomes a terminating NativeCommandError -- the script dies at the first stderr line, prove.log
 # is empty and $LASTEXITCODE is -1 (reproduced on 5.1.26100; scripts/test-release-gpu-gate-windows.sh).
 #
-# A Pascal card (GTX 10-series) needs -Pascal (HAZYNC_SPPARK_MIN_MAJOR=6, the app's opt-in floor, #727).
-#
-# The segment size (HAZYNC_SEG_PO2) follows the card's memory, from the app's own table
-# (tools/win-gui/supervisor.py _SEG_PO2_FOR_VRAM): the host's default, 21, peaks near 22 GB and ran out of memory on a
-# 4 GB GTX 1050 Ti in the v0.27.1 gate (21.11.2026); 18 proved the same block there. -SegPo2 N, or HAZYNC_SEG_PO2
-# already set in the environment, overrides the table. The report records the value and where it came from.
+# The segment memory: hzengine sizes segments itself unless HZ_SEG_MEM_GB is set (engine/ENGINE.md). -SegMemGb N sets
+# it, or an HZ_SEG_MEM_GB already in the environment is kept; the report records the value and where it came from.
+# Small cards (4 GB, the GTX 1050 Ti) are ROADMAP 2.8's experimental option: not measured on the engine yet.
 param(
-    [string]$HostExe = ".\host.exe",
-    [Parameter(Mandatory = $true)][string]$Leaf,
+    [string]$EngineExe = ".\hzengine.exe",
+    [Parameter(Mandatory = $true)][string]$Export,
+    [Parameter(Mandatory = $true)][string]$Keys,
     [Parameter(Mandatory = $true)][string]$Zip,
     [string]$Out = "out",
-    [switch]$Pascal,
-    [int]$SegPo2 = 0,               # 0 = from the card's memory (the app's table); else 17..21
-    [int]$ToolTimeoutS = 60,        # nvidia-smi and method-id
-    [int]$ProveTimeoutS = 2400      # the prove: 40 minutes (a GTX 1050 Ti took 197.7 s for block 1)
+    [int]$SegMemGb = 0,             # 0 = hzengine's own choice (or HZ_SEG_MEM_GB from the environment)
+    [int]$ToolTimeoutS = 120,       # nvidia-smi, tar, --help, pack
+    [int]$ProveTimeoutS = 2400      # the prove: 40 minutes
 )
 $ErrorActionPreference = "Stop"
 function Sha([string]$p) { (Get-FileHash -Algorithm SHA256 -LiteralPath $p).Hash.ToLower() }
-if ($Out -match "\s") { throw "-Out must not contain whitespace (it is passed to host.exe as one argument)" }
+if ($Out -match "\s") { throw "-Out must not contain whitespace (it is passed to hzengine.exe as one argument)" }
 function Run([string]$exe, [string[]]$argv, [string]$log, [int]$timeoutS) {
     # stdout and stderr to files, then one log; returns the exit code (-2 when killed at the timeout). Never throws
     # on the program's stderr. Any argument with a space is quoted (Start-Process joins them with spaces).
@@ -62,15 +62,17 @@ function Run([string]$exe, [string[]]$argv, [string]$log, [int]$timeoutS) {
     return $p.ExitCode
 }
 
-$hostPath = (Resolve-Path -LiteralPath $HostExe).Path
-$leafPath = (Resolve-Path -LiteralPath $Leaf).Path
+$enginePath = (Resolve-Path -LiteralPath $EngineExe).Path
+$exportPath = (Resolve-Path -LiteralPath $Export).Path
+$keysPath = (Resolve-Path -LiteralPath $Keys).Path
 $report = [ordered]@{
     schema          = 1
     kind            = "windows-cuda-run"
-    host_exe        = $hostPath
-    host_exe_sha256 = Sha $hostPath
+    engine_exe      = $enginePath
+    host_exe_sha256 = Sha $enginePath           # the prover's sha256 (record-windows reads this field name)
     zip_sha256      = Sha (Resolve-Path -LiteralPath $Zip).Path
-    leaf_sha256     = Sha $leafPath
+    export_sha256   = Sha $exportPath
+    keys_sha256     = Sha $keysPath
     started         = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 }
 $report.gpu_name = ""; $report.compute_cap = ""; $report.driver = ""; $report.vram_mib = $null
@@ -86,41 +88,49 @@ try {
         if ($parts.Count -gt 3 -and [int]::TryParse($parts[3], [ref]$mib)) { $report.vram_mib = $mib }
     }
 } catch { }                     # no nvidia-smi: gpu_name stays empty, and record-windows refuses the report
-$null = Run $hostPath @("method-id") "method-id.log" $ToolTimeoutS
-$report.method_id = ((Get-Content -LiteralPath method-id.log) -join "`n").Trim()
+$report.help_exit = Run $enginePath @("--help") "help.log" $ToolTimeoutS
 
-Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Out
-Remove-Item Env:RISC0_DEV_MODE -ErrorAction SilentlyContinue
-if ($Pascal) { $env:HAZYNC_SPPARK_MIN_MAJOR = "6" }
-# The segment size: -SegPo2, else an HAZYNC_SEG_PO2 the caller set, else the app's VRAM table, else the host default.
-$table = @(@(40000, 21), @(20000, 20), @(10000, 19), @(4000, 18), @(0, 17))     # = supervisor._SEG_PO2_FOR_VRAM
-if ($SegPo2 -ne 0) {
-    if ($SegPo2 -lt 17 -or $SegPo2 -gt 21) { throw "-SegPo2 must be 17..21 (got $SegPo2)" }
-    $env:HAZYNC_SEG_PO2 = "$SegPo2"; $report.seg_po2_source = "-SegPo2"
-} elseif ($env:HAZYNC_SEG_PO2) {
-    $report.seg_po2_source = "environment"
-} elseif ($report.vram_mib) {
-    foreach ($row in $table) { if ($report.vram_mib -ge $row[0]) { $env:HAZYNC_SEG_PO2 = "$($row[1])"; break } }
-    $report.seg_po2_source = "vram $($report.vram_mib) MiB"
+# the work folder: the key tarball and the export, unpacked fresh by Windows' own tar.exe
+$work = "gate-work"
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Out, $work
+New-Item -ItemType Directory -Force -Path $Out, "$work\keys", "$work\export" | Out-Null
+$report.untar_keys_exit = Run "tar" @("-xzf", $keysPath, "-C", "$work\keys") "untar-keys.log" $ToolTimeoutS
+$report.untar_export_exit = Run "tar" @("-xzf", $exportPath, "-C", "$work\export") "untar-export.log" $ToolTimeoutS
+
+# The segment memory: -SegMemGb, else an HZ_SEG_MEM_GB the caller set, else hzengine's own choice.
+if ($SegMemGb -ne 0) {
+    if ($SegMemGb -lt 1 -or $SegMemGb -gt 64) { throw "-SegMemGb must be 1..64 (got $SegMemGb)" }
+    $env:HZ_SEG_MEM_GB = "$SegMemGb"; $report.seg_mem_source = "-SegMemGb"
+} elseif ($env:HZ_SEG_MEM_GB) {
+    $report.seg_mem_source = "environment"
 } else {
-    $report.seg_po2_source = "host default (nvidia-smi gave no memory size)"
+    $report.seg_mem_source = "hzengine default"
 }
-$report.seg_po2 = $(if ($env:HAZYNC_SEG_PO2) { $env:HAZYNC_SEG_PO2 } else { "default" })
+$report.seg_mem_gb = $(if ($env:HZ_SEG_MEM_GB) { $env:HZ_SEG_MEM_GB } else { "default" })
 # A prove writes segment files as it goes; 1.4 GB free was not enough on the v0.27.1 gate's laptop (os error 112).
 $drive = (Get-Item -LiteralPath $PWD.Path).PSDrive
 if ($drive.Free -ne $null) {
     $report.disk_free_gb = [math]::Round($drive.Free / 1GB, 1)
     if ($drive.Free -lt 3GB) { Write-Warning ("only {0} GB free on {1}: the prove may stop with 'not enough space on the disk'" -f $report.disk_free_gb, $drive.Name) }
 }
-$env:HAZYNC_LEAF_BUNDLE = $leafPath
 $t0 = Get-Date
-$report.exit_code = Run $hostPath @("libzync-prove-range", "170", "170", "unused", "leaf", $Out) "prove.log" $ProveTimeoutS
+$report.exit_code = -3          # not run: the unpacking failed
+if ($report.untar_keys_exit -eq 0 -and $report.untar_export_exit -eq 0) {
+    $report.exit_code = Run $enginePath @("prove-block", "--dir", "$work\keys", "--export", "$work\export", "--out", "$work\p") "prove.log" $ProveTimeoutS
+} else {
+    "not proved: unpacking failed (keys $($report.untar_keys_exit), export $($report.untar_export_exit))" | Set-Content -Encoding ascii -LiteralPath "prove.log"
+}
 $report.prove_s = [math]::Round(((Get-Date) - $t0).TotalSeconds, 1)
+$hze = Join-Path $Out "block_170.hze"
+$report.pack_exit = $null; $report.image = ""
+if ($report.exit_code -eq 0) {
+    $report.pack_exit = Run $enginePath @("pack", "--dir", "$work\keys", "--proof", "$work\p\block", "--out", $hze) "pack.log" $ToolTimeoutS
+    $report.image = ((Get-Content -LiteralPath pack.log) -join "`n").Trim()     # pack prints the image id and the pin
+}
 $report.finished = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
 $report.log_sha256 = Sha (Resolve-Path -LiteralPath "prove.log").Path
-$rc = Join-Path $Out "block_170.rcpt"
-$report.receipt_sha256 = $(if (Test-Path -LiteralPath $rc) { Sha (Resolve-Path -LiteralPath $rc).Path } else { $null })
+$report.receipt_sha256 = $(if (Test-Path -LiteralPath $hze) { Sha (Resolve-Path -LiteralPath $hze).Path } else { $null })
 $report | ConvertTo-Json | Set-Content -Encoding ascii gate-windows.json
-Write-Output ("gate-windows.json written: exit {0}, {1} s on '{2}' at HAZYNC_SEG_PO2={3} ({4}); host.exe {5}" -f `
-    $report.exit_code, $report.prove_s, $report.gpu_name, $report.seg_po2, $report.seg_po2_source, $report.host_exe_sha256.Substring(0, 16))
-if ($report.exit_code -ne 0 -or -not $report.receipt_sha256) { exit 1 }
+Write-Output ("gate-windows.json written: exit {0}, {1} s on '{2}' at HZ_SEG_MEM_GB={3} ({4}); hzengine.exe {5}" -f `
+    $report.exit_code, $report.prove_s, $report.gpu_name, $report.seg_mem_gb, $report.seg_mem_source, $report.host_exe_sha256.Substring(0, 16))
+if ($report.exit_code -ne 0 -or $report.pack_exit -ne 0 -or -not $report.receipt_sha256) { exit 1 }

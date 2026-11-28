@@ -3,24 +3,35 @@
 
 v0.26.1 and v0.27.0 published a Linux CUDA host that segfaulted on its first GPU step: the release box has no GPU,
 so every check before publishing read BYTES (ids, imports, sizes) and none of them ran a kernel. This gate runs the
-EXACT staged binary (by sha256) on real cards, proves real blocks, verifies the receipts with the EXACT staged
-verifier, and writes a marker that scripts/release.sh requires before it publishes.
+EXACT staged binary (by sha256) on real cards, proves real blocks, verifies the proofs with the EXACT staged
+verifiers, and writes a marker that scripts/release.sh requires before it publishes.
+
+THE ENGINE (OpenVM) RELEASE (28.11.2026, engine/RELEASE_TOOLING.md). The staged CUDA prover is hzengine
+(hazync-engine-x86_64-linux-gnu-cuda); each pod also gets the staged key tarballs (hazync-keys-<image>.tar.gz) the
+gate entries name. The entries (engine/gpu-gate/GATE) are whole blocks from an engine export (`hzengine prove-block`,
+then `hzengine pack` to the HZE1 file a reader verifies) and the header chain from genesis (`hzengine prove` on the
+headers zAPP's stream). The laptop verifies each HZE1 file with the staged verifier for its kind (hazync-verify for a
+block, hazync-zapp-headers for the header chain) under the PUBLISHED record (reproduce/engine-release.tsv: image id
+and key pin), with the key read from the staged tarball and checked against that pin. Times are compared with the
+measured reference for the same card where one exists (REFERENCE_S), as information: the gate fails on a wrong
+answer, not on a slow one. Until Stage 4 publishes the records and the fixtures are made from the frozen image, the
+gate refuses to start (no records, no fixtures): that is the intended state, not a bug.
 
 Commands (scripts/release-gpu-gate.sh is the wrapper; docs/BUILD_AND_RELEASE.md "The real-GPU gate" is the procedure):
 
   run --source BOX:DIST --host-sha256 <sha>   from the MAINTAINER'S LAPTOP, at the release commit. Refuses while an
         hz-relgate-* pod is listed (--sweep-first), names other pods, checks SECURE stock; rents a pre-Blackwell card
         (A40, else A5000/A6000/L40S) and a Blackwell one (PRO 4500, else PRO 6000) in parallel; arms each pod's own
-        dead-man; the release box pushes the staged host; each pod proves the GATE blocks (170, full block 200,000);
-        harvest, ALWAYS terminate, reap lost creates, sweep; the staged verifier must accept every receipt and refuse
+        dead-man; the release box pushes the staged prover and key tarballs; each pod proves the GATE entries;
+        harvest, ALWAYS terminate, reap lost creates, sweep; the staged verifiers must accept every proof and refuse
         a tampered one. Fail-fast; caps on this run's own spend (--max-usd 2) and time (--max-min 60).
         PASS => DIST/.gpu-gate-linux-cuda.json on the release box.
-  record-windows --source BOX:DIST --report gate-windows.json --receipt block_170.rcpt --log prove.log --zip <zip>
-        After scripts/release-gpu-gate-windows.ps1 ran the STAGED zip's host.exe on a real card: checks the report
-        against the staged zip's host.exe, the receipt and the log, refuses a receipt ever used as evidence before,
+  record-windows --source BOX:DIST --report gate-windows.json --receipt block_170.hze --log prove.log --zip <zip>
+        After scripts/release-gpu-gate-windows.ps1 ran the STAGED zip's hzengine.exe on a real card: checks the report
+        against the staged zip's hzengine.exe, the proof file and the log, refuses a proof ever used as evidence before,
         verifies it, and writes DIST/.gpu-gate-windows-cuda.json, result ATTESTED (the maintainer's word, bound).
   sweep [--terminate]                          list (and release) every hz-relgate-* pod: after ANY abnormal exit.
-  check --dist DIST --image <id> --commit <sha>   what scripts/release.sh runs. No network.
+  check --dist DIST [--image <id>] --commit <sha>   what scripts/release.sh runs. No network.
 
 The markers catch mistakes; they are not tamper-proof (anyone who can write dist/ can write one).
 
@@ -49,11 +60,29 @@ REPO = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(REPO, "coordinator"))
 import sponsor_bot  # noqa: E402
 
-FIXTURES = os.path.join(REPO, "prover", "testdata", "libzync", "gpu-gate")
+# HAZYNC_TEST_* : scripts/test-release-gpu-gate.sh only (it runs release.sh's step 4b against its own records/fixtures)
+FIXTURES = os.environ.get("HAZYNC_TEST_GPU_GATE_FIXTURES") or os.path.join(REPO, "engine", "gpu-gate")
 POD_SCRIPT = os.path.join(HERE, "release-gpu-gate-pod.sh")
-CUDA_ASSET = "hazync-host-x86_64-linux-gnu-cuda"
-VERIFIER_ASSET = "hazync-verify-x86_64-linux-gnu"
-WIN_ASSET = "hazync-host-x86_64-windows-cuda.zip"
+CUDA_ASSET = "hazync-engine-x86_64-linux-gnu-cuda"          # hzengine, CUDA (scripts/release-assets.txt)
+VERIFIER_ASSET = "hazync-verify-x86_64-linux-gnu"           # the core chain verifier (swiftsync-verify)
+HEADERS_VERIFIER_ASSET = "hazync-zapp-headers-x86_64-linux-gnu"
+WIN_ASSET = "hazync-engine-x86_64-windows-cuda.zip"         # hzengine.exe + its CUDA runtime (engine-windows.yml)
+WIN_EXE = "hzengine.exe"
+# The published engine records a release ships (engine/RELEASE_TOOLING.md): "<name> <network> <image id> <key pin>".
+# Written at the Stage 4 freeze; until then it does not exist and every command that needs an image refuses.
+RELEASE_RECORDS = os.environ.get("HAZYNC_TEST_ENGINE_RELEASE_TSV") or os.path.join(REPO, "reproduce", "engine-release.tsv")
+# The verifier asset for each kind of gate entry, and the image record whose key and id it is checked under.
+KIND_VERIFIER = {"block": VERIFIER_ASSET, "headers": HEADERS_VERIFIER_ASSET}
+
+
+def keys_asset(name):
+    """The staged key tarball of a published image: sdk.pk agg.vk openvm.toml guest.vmexe baseline.json image.json vk.bin."""
+    return f"hazync-keys-{name}.tar.gz"
+
+
+# Measured references (only measured numbers; engine/results): the same work on the same card. Information only.
+REFERENCE_S = {("headers", "NVIDIA RTX PRO 6000 Blackwell Workstation Edition"): 268.0,   # zapp_headers, 26.11.2026 re-run
+               ("headers", "NVIDIA RTX A6000"): 722.0}                                     # zapp_headers, 27.11.2026
 MARKER_LINUX = ".gpu-gate-linux-cuda.json"
 MARKER_WIN = ".gpu-gate-windows-cuda.json"
 SCHEMA = 1
@@ -62,14 +91,20 @@ POD_PREFIX = "hz-relgate-"
 # pre-Blackwell card -- the A40 (sm_86, $0.49/hr), else an RTX A5000 / A6000 (sm_86) or an L40S (sm_89) -- and a
 # Blackwell sm_120 card -- the PRO 4500 ($0.72/hr), else the PRO 6000 ($2.09/hr, the board's card and the one v0.26.1
 # crashed on). Prices: docs/OPERATIONS.md 4.1 (measured 2026-09). Only types with SECURE stock are tried (in_stock).
-CARDS = (("pre-blackwell", ("NVIDIA A40", "NVIDIA RTX A5000", "NVIDIA RTX A6000", "NVIDIA L40S")),
-         ("blackwell", ("NVIDIA RTX PRO 4500 Blackwell Server Edition",
+# The engine gate (28.11.2026) puts the cards with a measured reference first (the RTX A6000, 722.0 s for the header
+# chain; the RTX PRO 6000 Blackwell Workstation Edition, 268.0 s), so its times can be compared like for like; the
+# cheaper cards stay as fallbacks.
+CARDS = (("pre-blackwell", ("NVIDIA RTX A6000", "NVIDIA A40", "NVIDIA RTX A5000", "NVIDIA L40S")),
+         ("blackwell", ("NVIDIA RTX PRO 6000 Blackwell Workstation Edition",
+                        "NVIDIA RTX PRO 4500 Blackwell Server Edition",
                         "NVIDIA RTX PRO 6000 Blackwell Server Edition")))
 # What a pod is assumed to cost when RunPod's answer carries no (or a zero) $/hr: the cap must never count a pod as
 # free. Above the measured prices (docs/OPERATIONS.md 4.1); UNKNOWN_PRICE for a type not listed.
 PRICE_CEILING = {"NVIDIA A40": 0.60, "NVIDIA RTX A5000": 0.60, "NVIDIA RTX A6000": 0.90, "NVIDIA L40S": 1.20,
                  "NVIDIA RTX PRO 4500 Blackwell Server Edition": 1.00,
-                 "NVIDIA RTX PRO 6000 Blackwell Server Edition": 2.60}
+                 "NVIDIA RTX PRO 6000 Blackwell Server Edition": 2.60,
+                 # 26.11.2026: $1.03 for a 22-minute pod (zapp_headers), $2.81/hr including boot: ceiling above it
+                 "NVIDIA RTX PRO 6000 Blackwell Workstation Edition": 3.00}
 UNKNOWN_PRICE = 3.00
 TERMINATE_BUDGET_S = 360     # sponsor_bot.TERMINATE_BUDGET_S: what one terminate may take after the cap fires
 SPEND_MARGIN = 1.15          # on the run's own $/hr x time estimate (billing granularity, a pod's last seconds)
@@ -77,7 +112,7 @@ HARVEST_OK_S = 900           # the harvest deadline of a card that PROVED (a fai
 DEADMAN_MARGIN_S = 1500      # the pod-side dead-man fires this long after the time cap: more than a harvest (900 s)
                              # plus a terminate (360 s), so it never races the laptop's own release of the pod
 STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT)   # all handled like Ctrl-C: release the pods first
-HISTORY = ".gpu-gate-history.txt"   # on the release box's dist/: every receipt sha256 a marker ever recorded
+HISTORY = ".gpu-gate-history.txt"   # on the release box's dist/: every proof file's sha256 a marker ever recorded
 LOCAL_HISTORY = os.path.expanduser("~/.hazync/gpu-gate-receipts.txt")
 GRAPHQL = "https://api.runpod.io/graphql"   # gqlbal: the account balance, the one allowed GraphQL call (v2 has none)
 UA = "hazync-release-gpu-gate/1 (+https://github.com/hazync/hazync)"
@@ -111,34 +146,66 @@ def sha256_file(path):
     return h.hexdigest()
 
 
-def canon_image():
-    for line in open(os.path.join(REPO, "reproduce", "LIBZYNC_IDS")):
-        p = line.split()
-        if len(p) >= 4 and p[0] == "libzync-product" and p[1] == "mainnet":
-            return p[3]
-    raise SystemExit("reproduce/LIBZYNC_IDS has no libzync-product mainnet line")
-
-
-def gate_blocks(fixtures=FIXTURES):
-    """[(height, hash, leaf, anchor, state)] from GATE, after checking every fixture against SHA256SUMS."""
-    out = []
-    for line in open(os.path.join(fixtures, "GATE")):
+def release_records(path=None):
+    """{name: (network, image id, key pin)} from reproduce/engine-release.tsv; SystemExit when there is none yet."""
+    path = path or RELEASE_RECORDS
+    if not os.path.isfile(path):
+        raise SystemExit(f"{os.path.relpath(path, REPO)} does not exist: no engine image is published yet (Stage 4 "
+                         "writes it at the freeze; engine/RELEASE_TOOLING.md). Nothing to gate.")
+    out = {}
+    for line in open(path):
         p = line.split()
         if not p or p[0].startswith("#"):
             continue
-        if len(p) != 5 or not p[0].isdigit() or not re.fullmatch(r"[0-9a-f]{64}", p[1]):
-            raise SystemExit(f"{fixtures}/GATE: bad line {line.strip()!r}")
-        out.append((int(p[0]), p[1], p[2], p[3], p[4]))
+        if len(p) != 4 or not all(re.fullmatch(r"[0-9a-f]{64}", x) for x in p[2:]):
+            raise SystemExit(f"{path}: bad line {line.strip()!r} (want <name> <network> <image id> <key pin>)")
+        if p[0] in out:
+            raise SystemExit(f"{path}: {p[0]} is listed twice")
+        out[p[0]] = (p[1], p[2], p[3])
+    if "core" not in out:
+        raise SystemExit(f"{path} has no core record")
+    return out
+
+
+def canon_image():
+    """The release's core image id (the chain proof's), from its published record."""
+    return release_records()["core"][1]
+
+
+def gate_blocks(fixtures=None):
+    """The gate entries from GATE, after checking every fixture against SHA256SUMS. Each line:
+    <label> <kind> <keys> <input> <height> <hash> <anchor|-> <want>
+      kind   block (an engine export, a .tgz, proved with prove-block) | headers (the headers zAPP's stream)
+      keys   the published record it proves under (reproduce/engine-release.tsv; staged as hazync-keys-<keys>.tar.gz)
+      anchor the state the block's proof starts from (a base step), or - (from genesis)
+      want   the verdict the staged verifier must give: DEMO (exit 2) or OK (exit 0)"""
+    fixtures = fixtures or FIXTURES
+    out, labels = [], set()
+    gate = os.path.join(fixtures, "GATE")
+    if not os.path.isfile(gate):
+        raise SystemExit(f"{gate} does not exist: the engine gate's fixtures are made from the frozen image "
+                         "(engine/RELEASE_TOOLING.md). Nothing to gate.")
+    for line in open(gate):
+        p = line.split()
+        if not p or p[0].startswith("#"):
+            continue
+        if (len(p) != 8 or p[1] not in KIND_VERIFIER or not p[4].isdigit() or not re.fullmatch(r"[0-9a-f]{64}", p[5])
+                or p[7] not in ("DEMO", "OK") or not re.fullmatch(r"[A-Za-z0-9_.-]+", p[0]) or p[0] in labels):
+            raise SystemExit(f"{gate}: bad line {line.strip()!r}")
+        labels.add(p[0])
+        out.append({"label": p[0], "kind": p[1], "keys": p[2], "input": p[3], "height": int(p[4]), "hash": p[5],
+                    "anchor": None if p[6] == "-" else p[6], "want": p[7]})
     if not out:
-        raise SystemExit(f"{fixtures}/GATE lists no blocks")
+        raise SystemExit(f"{gate} lists no entries")
     want = {}
     for line in open(os.path.join(fixtures, "SHA256SUMS")):
-        s, n = line.split()
-        want[n] = s
-    for b in out:
-        for n in b[2:]:
-            if want.get(n) != sha256_file(os.path.join(fixtures, n)):
-                raise SystemExit(f"fixture {n} does not match {fixtures}/SHA256SUMS")
+        sh, n = line.split()
+        want[n] = sh
+    for e in out:
+        for n in [e["input"]] + ([e["anchor"]] if e["anchor"] else []):
+            f = os.path.join(fixtures, n)
+            if not os.path.isfile(f) or want.get(n) != sha256_file(f):
+                raise SystemExit(f"fixture {n} is missing or does not match {fixtures}/SHA256SUMS")
     return out
 
 
@@ -152,65 +219,97 @@ def is_blackwell(gpu_name, compute_cap=""):
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# verification: the STAGED verifier (fetched by sha256), on the maintainer's machine
+# verification: the STAGED verifiers (fetched by sha256), on the maintainer's machine
 #
-# Since the verifier is built in the hosts' ubuntu:22.04 image (scripts/build-linux-verifier.sh) and check-dist.sh
-# refuses any Linux asset needing more than glibc 2.34, the staged verifier runs on a 22.04+ laptop. (Before, it was
-# built by the release box's own cargo and needed GLIBC_2.39: v0.27.0's does not start on 22.04.) Measured 20.11.2026
-# with the v0.27.0 verifier (in an ubuntu:24.04 container) on a real CPU proof of leaf 170 (image 46666b6f): exit 2,
-# SWIFTSYNC_VERIFY_DEMO "FROM THE GIVEN ANCHOR ONLY", `[ok] --expect`; the same receipt with its middle byte flipped,
-# a wrong --expect hash or a wrong anchor: exit 1; prove-range's state_170.json equals prep's but for anchor_id.
+# Both are built in the hosts' ubuntu:22.04 image (scripts/build-linux-verifier.sh) and check-dist.sh refuses any Linux
+# asset needing more than glibc 2.34, so they run on a 22.04+ laptop. Each HZE1 file is checked under the PUBLISHED
+# record: --image <the record's id> --vk <vk.bin from the staged key tarball> --vk-sha256 <the record's pin>; a key
+# that is not the pinned one is refused by the verifier itself (read_pinned_key), before it reads the proof.
 
 class LocalVerifier:
     def __init__(self, path):
         self.path = path
 
-    def run(self, anchor, expect, receipt):
-        r = subprocess.run([self.path, "--anchor", anchor, "--expect", expect, receipt],
-                           capture_output=True, text=True, timeout=600)
+    def run(self, args, proof):
+        r = subprocess.run([self.path, *args, proof], capture_output=True, text=True, timeout=600)
         return r.returncode, r.stdout, r.stderr
 
 
-def verify_receipt(verifier, receipt, anchor, height, block_hash):
-    """(ok, verdict line). OK means: exit 2 (DEMO: a valid receipt FROM THE GIVEN ANCHOR), a DEMO verdict, no
-    failed check, and the --expect identity check present and passed."""
+class KeySet:
+    """A published record with its key file: (image id, pin, path of vk.bin) for one gate entry's keys name."""
+    def __init__(self, name, image, pin, vk_path):
+        self.name, self.image, self.pin, self.vk = name, image, pin, vk_path
+
+
+def unpack_keys(tar_path, name, record, workdir):
+    """Extract vk.bin and image.json from a staged key tarball and check both against the published record.
+    Returns (KeySet, None) or (None, reason)."""
+    import tarfile
+    _net, image, pin = record
+    d = os.path.join(workdir, f"keys-{name}")
+    os.makedirs(d, exist_ok=True)
+    try:
+        with tarfile.open(tar_path) as t:
+            members = {m.name.lstrip("./"): m for m in t.getmembers() if m.isfile()}
+            for n in ("vk.bin", "image.json"):
+                if n not in members:
+                    return None, f"{os.path.basename(tar_path)} has no {n}"
+                with t.extractfile(members[n]) as f, open(os.path.join(d, n), "wb") as o:
+                    o.write(f.read())
+    except (OSError, tarfile.TarError) as e:
+        return None, f"{os.path.basename(tar_path)}: {e}"
+    vk = os.path.join(d, "vk.bin")
+    if sha256_file(vk) != pin:
+        return None, f"{os.path.basename(tar_path)}: vk.bin is {sha256_file(vk)[:16]}..., the record pins {pin[:16]}..."
+    try:
+        im = json.load(open(os.path.join(d, "image.json")))
+        got = hashlib.sha256(bytes.fromhex(im["exe"] + im["vm"])).hexdigest()
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        return None, f"{os.path.basename(tar_path)}: image.json unreadable ({e})"
+    if got != image:
+        return None, f"{os.path.basename(tar_path)}: image.json gives {got[:8]}, the record is {image[:8]}"
+    return KeySet(name, image, pin, vk), None
+
+
+def verify_receipt(verifier, proof, entry, keys, fixtures=None):
+    """(ok, verdict line) for one HZE1 file. DEMO entries (a block from a given anchor): exit 2, a DEMO verdict, no
+    failed check, the --expect check present and passed. OK entries (the header chain from genesis): exit 0 and an OK
+    verdict, which the headers CLI gives only with the tip compared (--expect)."""
     if isinstance(verifier, str):
         verifier = LocalVerifier(verifier)
+    args = ["--image", keys.image, "--vk", keys.vk, "--vk-sha256", keys.pin]
+    if entry.get("anchor"):
+        args += ["--anchor", os.path.join(fixtures or FIXTURES, entry["anchor"])]
+    args += ["--expect", f"{entry['height']}:{entry['hash']}"]
     try:
-        rc, out, err = verifier.run(anchor, f"{height}:{block_hash}", receipt)
+        rc, out, err = verifier.run(args, proof)
     except (OSError, subprocess.SubprocessError, RuntimeError) as e:
         return False, f"verifier did not run: {e}"
     lines = out.splitlines()
     verdict = next((x for x in reversed(lines) if x.startswith("SWIFTSYNC_VERIFY_")), "(no verdict)")
     if "GLIBC_" in (err or ""):
         verdict += " -- the staged verifier cannot run on this machine's glibc (it must need <= 2.34: check-dist.sh)"
-    ok = (rc == 2 and verdict.startswith("SWIFTSYNC_VERIFY_DEMO:")
-          and not any(x.lstrip().startswith("[FAIL]") for x in lines)
-          and any(x.lstrip().startswith("[ok] --expect") for x in lines))
+    no_fail = not any(x.lstrip().startswith("[FAIL]") for x in lines)
+    if entry["want"] == "DEMO":
+        ok = (rc == 2 and verdict.startswith("SWIFTSYNC_VERIFY_DEMO:") and no_fail
+              and any(x.lstrip().startswith("[ok] --expect") for x in lines))
+    else:
+        ok = rc == 0 and verdict.startswith("SWIFTSYNC_VERIFY_OK:") and no_fail
     return ok, f"exit {rc}: {verdict}"
 
 
-def tamper_refused(verifier, receipt, anchor, height, block_hash, workdir):
-    """The control: the same receipt with one byte flipped mid-seal must NOT verify. A verifier that accepts it is
-    not checking anything, and the gate must not believe its other answers."""
-    data = bytearray(open(receipt, "rb").read())
+def tamper_refused(verifier, proof, entry, keys, workdir, fixtures=None):
+    """The control: the same proof file with one byte flipped in the middle (inside the proof, past the HZE1 header)
+    must NOT verify. A verifier that accepts it is not checking anything, and the gate must not believe its other
+    answers."""
+    data = bytearray(open(proof, "rb").read())
     if len(data) < 64:
-        return False, "receipt too small to tamper"
+        return False, "proof file too small to tamper"
     data[len(data) // 2] ^= 0x01
-    bad = os.path.join(workdir, f"tampered_{height}.rcpt")
+    bad = os.path.join(workdir, f"tampered_{entry['label']}.hze")
     open(bad, "wb").write(bytes(data))
-    ok, verdict = verify_receipt(verifier, bad, anchor, height, block_hash)
+    ok, verdict = verify_receipt(verifier, bad, entry, keys, fixtures)
     return (not ok), verdict
-
-
-def state_matches(got_path, want_path):
-    """prep's S(h) and the leaf proof's S(h) agree on every field but anchor_id (a leaf is a base step on S(h-1))."""
-    try:
-        a, b = json.load(open(got_path)), json.load(open(want_path))
-    except (OSError, ValueError) as e:
-        return False, str(e)
-    diff = sorted(k for k in set(a) | set(b) if k != "anchor_id" and a.get(k) != b.get(k))
-    return not diff, ("equal but anchor_id" if not diff else f"differs in {diff}")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -299,6 +398,7 @@ class SshTransport:
     def __init__(self, key, source, workdir, log):
         self.key, self.source, self.workdir, self.log = key, source, workdir, log
         self.box_dir, self.stop = None, None
+        self.keys = []      # [(asset, sha256)]: the staged key tarballs the gate entries need (set by cmd_run)
 
     def _pod(self, ip, port, cmd, timeout=600, stop=True):
         return run_cmd(["ssh", "-i", self.key, *SSH_OPTS, "-p", str(port), f"root@{ip}", cmd], timeout,
@@ -314,8 +414,8 @@ class SshTransport:
         return self._pod(ip, port, "true", timeout=60)[0] == 0
 
     def setup(self):
-        """Before any pod: give the release box this run's throwaway pod key, so IT pushes the 400+ MB host straight
-        to each pod (a datacenter link) instead of through the laptop's uplink."""
+        """Before any pod: give the release box this run's throwaway pod key, so IT pushes the prover and the key
+        tarballs straight to each pod (a datacenter link) instead of through the laptop's uplink."""
         if not self.source.remote:
             return
         self.box_dir = f"/tmp/hz-relgate-{os.getpid()}-{int(time.time())}"
@@ -342,22 +442,26 @@ class SshTransport:
         tmp = os.path.join(self.workdir, f"push-{port}")
         os.makedirs(tmp, exist_ok=True)
         open(os.path.join(tmp, "want_host_sha256"), "w").write(host_sha + "\n")
-        rc, _o, err = self._pod(ip, port, "mkdir -p /workspace/gate", timeout=120)
+        # "<sha256> <asset>" per key tarball: the pod checks each before it extracts it (KEYS_SHA_BAD otherwise)
+        open(os.path.join(tmp, "want_keys_sha256"), "w").write("".join(f"{h}  {n}\n" for n, h in self.keys))
+        rc, _o, err = self._pod(ip, port, "mkdir -p /workspace/gate /workspace/keys", timeout=120)
         if rc:
             raise RuntimeError(f"pod mkdir failed: {err.strip()[:200]}")
         self._scp(ip, port, [os.path.join(FIXTURES, n) for n in sorted(os.listdir(FIXTURES))], "/workspace/gate/")
-        self._scp(ip, port, [os.path.join(tmp, "want_host_sha256")], "/workspace/", timeout=300)
-        if self.source.remote:
-            cmd = (f"scp -q -i {self.box_dir}/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
-                   f"-o LogLevel=ERROR -P {int(port)} {shlex.quote(self.source.path(CUDA_ASSET))} root@{ip}:/workspace/host")
-            rc, _o, err = run_cmd(["ssh", *BOX_OPTS, self.source.box, cmd], 3600, self.stop)
-            if rc:
-                raise RuntimeError(f"the release box could not push the host (rc {rc}): {err.strip()[:200]}")
-        else:
-            rc, _o, err = run_cmd(["scp", "-q", "-C", "-i", self.key, *SSH_OPTS, "-P", str(port),
-                                   self.source.path(CUDA_ASSET), f"root@{ip}:/workspace/host"], 7200, self.stop)
-            if rc:
-                raise RuntimeError(f"could not push the host (rc {rc}): {err.strip()[:200]}")
+        self._scp(ip, port, [os.path.join(tmp, "want_host_sha256"), os.path.join(tmp, "want_keys_sha256")],
+                  "/workspace/", timeout=300)
+        for name, dest in [(CUDA_ASSET, "/workspace/hzengine")] + [(n, f"/workspace/keys/{n}") for n, _h in self.keys]:
+            if self.source.remote:
+                cmd = (f"scp -q -i {self.box_dir}/key -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "
+                       f"-o LogLevel=ERROR -P {int(port)} {shlex.quote(self.source.path(name))} root@{ip}:{dest}")
+                rc, _o, err = run_cmd(["ssh", *BOX_OPTS, self.source.box, cmd], 3600, self.stop)
+                if rc:
+                    raise RuntimeError(f"the release box could not push {name} (rc {rc}): {err.strip()[:200]}")
+            else:
+                rc, _o, err = run_cmd(["scp", "-q", "-C", "-i", self.key, *SSH_OPTS, "-P", str(port),
+                                       self.source.path(name), f"root@{ip}:{dest}"], 7200, self.stop)
+                if rc:
+                    raise RuntimeError(f"could not push {name} (rc {rc}): {err.strip()[:200]}")
 
     def start(self, ip, port):
         rc, _o, err = self._pod(ip, port, "cd /workspace && (setsid nohup bash release-gpu-gate-pod.sh > run.out 2>&1 "
@@ -737,9 +841,11 @@ class Gate:
                 r["terminated"] = True
 
 
-def judge(gate, runs, verifier, blocks, image, workdir):
-    """Verify every harvested receipt with the staged verifier. True only if every card proved and verified."""
-    ok, tampered = True, False
+def judge(gate, runs, verifiers, blocks, keysets, workdir, key_shas=None):
+    """Verify every harvested HZE1 file with the staged verifier for its kind. True only if every card proved and
+    verified every entry, ran the staged prover and key tarballs, and each verifier refused a tampered proof.
+    verifiers: {kind: path or LocalVerifier}; keysets: {keys name: KeySet}; key_shas: {asset: sha256} staged."""
+    ok, tampered = True, set()
     for r in runs:
         d = os.path.join(workdir, r["role"], "out")
         r["blocks"] = []
@@ -754,46 +860,61 @@ def judge(gate, runs, verifier, blocks, image, workdir):
         parts = [x.strip() for x in (read("gpu.txt").strip().splitlines() or [""])[0].split(",")]
         r["gpu_name"], r["compute_cap"] = (parts + ["", ""])[:2]
         r["host_sha256_on_pod"] = read("host_sha256").strip()
-        r["method_id_ok"] = image in read("method_id.txt")
-        if r["host_sha256_on_pod"] != gate.host_sha or not r["method_id_ok"]:
+        on_pod = {}
+        for line in read("keys_sha256.txt").splitlines():
+            q = line.split()
+            if len(q) == 2:
+                on_pod[q[1]] = q[0]
+        r["keys_sha256_on_pod"] = on_pod
+        r["keys_ok"] = bool(key_shas) and all(on_pod.get(n) == h for n, h in key_shas.items())
+        if r["host_sha256_on_pod"] != gate.host_sha or not r["keys_ok"]:
             ok = False
         times = {}
         for line in read("proves.tsv").splitlines():
-            p = line.split()
-            if len(p) == 3:
-                times[int(p[0])] = float(p[2])
-        for h, bh, _leaf, anchor, state in blocks:
-            rc = os.path.join(d, f"p{h}", f"block_{h}.rcpt")
-            a = os.path.join(FIXTURES, anchor)
-            b = {"height": h, "block_hash": bh, "prove_s": times.get(h)}
-            if not os.path.isfile(rc):
-                b.update(verified=False, verdict="no receipt harvested")
+            q = line.split()
+            if len(q) == 3:
+                times[q[0]] = float(q[2])
+        for e in blocks:
+            pf = os.path.join(d, f"{e['label']}.hze")
+            b = {"label": e["label"], "kind": e["kind"], "height": e["height"], "block_hash": e["hash"],
+                 "prove_s": times.get(e["label"])}
+            ref = REFERENCE_S.get((e["kind"], r.get("gpu_name")))
+            if ref and b["prove_s"]:
+                b["reference_s"], b["vs_reference"] = ref, round(b["prove_s"] / ref, 3)
+            ks = keysets.get(e["keys"])
+            if ks is None:
+                b.update(verified=False, verdict=f"no published record / key for {e['keys']}")
+                ok = False
+            elif not os.path.isfile(pf):
+                b.update(verified=False, verdict="no proof file harvested")
                 ok = False
             else:
-                v, verdict = verify_receipt(verifier, rc, a, h, bh)
-                sm, sm_note = state_matches(os.path.join(d, f"p{h}", f"state_{h}.json"), os.path.join(FIXTURES, state))
-                b.update(verified=v, verdict=verdict, receipt_sha256=sha256_file(rc), state_matches_prep=sm, state_note=sm_note)
-                if v and not tampered:
-                    refused, tv = tamper_refused(verifier, rc, a, h, bh, workdir)
+                ver = verifiers[e["kind"]]
+                v, verdict = verify_receipt(ver, pf, e, ks)
+                b.update(verified=v, verdict=verdict, receipt_sha256=sha256_file(pf), image=ks.image)
+                if v and e["kind"] not in tampered:
+                    refused, tv = tamper_refused(ver, pf, e, ks, workdir)
                     b["tamper_control"] = ("refused: " if refused else "ACCEPTED: ") + tv
-                    tampered = True
+                    tampered.add(e["kind"])
                     if not refused:
                         ok = False
-                if not (v and sm):
+                if not v:
                     ok = False
             r["blocks"].append(b)
-            gate.log(f"{r['role']} {r.get('gpu_name')}: block {h}: {b['verdict']}")
+            gate.log(f"{r['role']} {r.get('gpu_name')}: {e['label']}: {b['verdict']}"
+                     + (f" ({b['prove_s']} s, {b['vs_reference']}x the reference)" if b.get("vs_reference") else ""))
     roles = [is_blackwell(r.get("gpu_name"), r.get("compute_cap")) for r in runs if r.get("blocks")]
     if not (True in roles and False in roles):
         ok = False
-    if not tampered:
+    if tampered != {e["kind"] for e in blocks}:
         ok = False
     return ok
 
 
-def marker_ok_linux(m, host_sha, verifier_sha, image, heights, commit=None, fixtures_sha=None):
+def marker_ok_linux(m, host_sha, verifier_shas, image, labels, commit=None, fixtures_sha=None):
     """Reasons a Linux CUDA marker does NOT clear the staged files ([] = it does). A mistake-catcher, not a
-    signature: anyone who can write dist/ can write a marker (docs/BUILD_AND_RELEASE.md)."""
+    signature: anyone who can write dist/ can write a marker (docs/BUILD_AND_RELEASE.md).
+    verifier_shas: {asset: sha256} of every staged verifier the gate used (and, for the key tarballs, their sha)."""
     why = []
     if not isinstance(m, dict):
         return ["not a JSON object"]
@@ -805,8 +926,13 @@ def marker_ok_linux(m, host_sha, verifier_sha, image, heights, commit=None, fixt
         why.append(f"asset {m.get('asset')!r}")
     if m.get("host_sha256") != host_sha:
         why.append(f"it is for host {str(m.get('host_sha256'))[:16]}..., the staged host is {str(host_sha)[:16]}...")
-    if m.get("verifier_sha256") != verifier_sha:
-        why.append(f"receipts were verified by {str(m.get('verifier_sha256'))[:16]}..., the staged verifier is {str(verifier_sha)[:16]}...")
+    if VERIFIER_ASSET in verifier_shas and m.get("verifier_sha256") != verifier_shas[VERIFIER_ASSET]:
+        why.append(f"proofs were verified by {str(m.get('verifier_sha256'))[:16]}..., the staged verifier is "
+                   f"{str(verifier_shas[VERIFIER_ASSET])[:16]}...")
+    got = m.get("staged_sha256") if isinstance(m.get("staged_sha256"), dict) else {}
+    for n, h in sorted(verifier_shas.items()):
+        if got.get(n) != h:
+            why.append(f"{n}: the gate used {str(got.get(n))[:16]}..., the staged one is {str(h)[:16]}...")
     if m.get("image") != image:
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
     if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("repo_commit") or "")):
@@ -816,35 +942,39 @@ def marker_ok_linux(m, host_sha, verifier_sha, image, heights, commit=None, fixt
     if m.get("repo_dirty") is not False:
         why.append("the gate ran from a checkout with uncommitted changes")
     if fixtures_sha and m.get("fixtures_sha256") != fixtures_sha:
-        why.append("the gate proved other fixtures than this tree's prover/testdata/libzync/gpu-gate")
+        why.append("the gate proved other fixtures than this tree's engine/gpu-gate")
     runs = m.get("runs") if isinstance(m.get("runs"), list) else []
     kinds = set()
     for r in runs:
         if not isinstance(r, dict):
             why.append("a run is not an object")
             continue
-        got = {b.get("height") for b in r.get("blocks") or [] if isinstance(b, dict) and b.get("verified") is True
-               and re.fullmatch(r"[0-9a-f]{64}", str(b.get("receipt_sha256", "")))}
-        if not set(heights) <= got:
-            why.append(f"{r.get('gpu_name')!r}: verified blocks {sorted(got)}, the gate needs {sorted(heights)}")
+        got_l = {b.get("label") for b in r.get("blocks") or [] if isinstance(b, dict) and b.get("verified") is True
+                 and re.fullmatch(r"[0-9a-f]{64}", str(b.get("receipt_sha256", "")))}
+        if not set(labels) <= got_l:
+            why.append(f"{r.get('gpu_name')!r}: verified {sorted(got_l)}, the gate needs {sorted(labels)}")
             continue
-        if r.get("host_sha256_on_pod") != host_sha or r.get("terminated") is not True:
-            why.append(f"{r.get('gpu_name')!r}: host on the pod {str(r.get('host_sha256_on_pod'))[:16]}..., terminated={r.get('terminated')}")
+        if r.get("host_sha256_on_pod") != host_sha or r.get("terminated") is not True or r.get("keys_ok") is not True:
+            why.append(f"{r.get('gpu_name')!r}: host on the pod {str(r.get('host_sha256_on_pod'))[:16]}..., "
+                       f"keys_ok={r.get('keys_ok')}, terminated={r.get('terminated')}")
             continue
         kinds.add(is_blackwell(r.get("gpu_name"), r.get("compute_cap")))
     if True not in kinds:
-        why.append("no Blackwell card proved and verified every gate block")
+        why.append("no Blackwell card proved and verified every gate entry")
     if False not in kinds:
-        why.append("no pre-Blackwell card proved and verified every gate block")
+        why.append("no pre-Blackwell card proved and verified every gate entry")
     return why
 
 
+WIN_LABEL = "b170"     # the gate entry the Windows run proves (block 170): GATE must hold it
+
+
 def zip_host_exe_sha(zip_path):
-    """sha256 of host.exe inside the Windows zip, or None."""
+    """sha256 of the prover (hzengine.exe) inside the Windows zip, or None."""
     import zipfile
     try:
         with zipfile.ZipFile(zip_path) as z:
-            names = [n for n in z.namelist() if n.replace("\\", "/").split("/")[-1].lower() == "host.exe"]
+            names = [n for n in z.namelist() if n.replace("\\", "/").split("/")[-1].lower() == WIN_EXE]
             if len(names) != 1:
                 return None
             return hashlib.sha256(z.read(names[0])).hexdigest()
@@ -865,9 +995,9 @@ def marker_ok_windows(m, zip_sha, verifier_sha, image, host_exe_sha=None, commit
     if m.get("zip_sha256") != zip_sha:
         why.append(f"it is for zip {str(m.get('zip_sha256'))[:16]}..., the staged zip is {str(zip_sha)[:16]}...")
     if host_exe_sha is not None and m.get("host_exe_sha256") != host_exe_sha:
-        why.append(f"the run hashed host.exe {str(m.get('host_exe_sha256'))[:16]}..., the staged zip's is {str(host_exe_sha)[:16]}...")
+        why.append(f"the run hashed {WIN_EXE} {str(m.get('host_exe_sha256'))[:16]}..., the staged zip's is {str(host_exe_sha)[:16]}...")
     if m.get("verifier_sha256") != verifier_sha:
-        why.append("the receipt was verified by a different verifier than the staged one")
+        why.append("the proof was verified by a different verifier than the staged one")
     if m.get("image") != image:
         why.append(f"image {str(m.get('image'))[:8]}, the release ships {image[:8]}")
     if not re.fullmatch(r"[0-9a-f]{40}", str(m.get("repo_commit") or "")):
@@ -881,14 +1011,23 @@ def marker_ok_windows(m, zip_sha, verifier_sha, image, host_exe_sha=None, commit
     blocks = m.get("blocks") if isinstance(m.get("blocks"), list) else []
     if not any(isinstance(b, dict) and b.get("height") == 170 and b.get("verified") is True
                and re.fullmatch(r"[0-9a-f]{64}", str(b.get("receipt_sha256", ""))) for b in blocks):
-        why.append("no verified receipt of block 170")
+        why.append("no verified proof of block 170")
     return why
+
+
+def staged_needs(blocks):
+    """Every staged asset the Linux gate depends on: the CUDA prover, the verifier for each entry kind, the key
+    tarball of each record an entry names."""
+    kinds = sorted({e["kind"] for e in blocks})
+    keys = sorted({e["keys"] for e in blocks})
+    return [KIND_VERIFIER[k] for k in kinds], [keys_asset(k) for k in keys]
 
 
 def cmd_check(a):
     dist = a.dist
     image = a.image or canon_image()
-    heights = [b[0] for b in gate_blocks()]
+    blocks = gate_blocks()
+    labels = [e["label"] for e in blocks]
     fsha = sha256_file(os.path.join(FIXTURES, "SHA256SUMS"))
     fails = []
 
@@ -896,9 +1035,11 @@ def cmd_check(a):
         p = os.path.join(dist, n)
         return sha256_file(p) if os.path.isfile(p) else None
 
+    vers, keys = staged_needs(blocks)
     host, ver, z = sha(CUDA_ASSET), sha(VERIFIER_ASSET), sha(WIN_ASSET)
-    for n, s in ((CUDA_ASSET, host), (VERIFIER_ASSET, ver), (WIN_ASSET, z)):
-        if not s:
+    staged = {n: sha(n) for n in vers + keys}
+    for n, s_ in [(CUDA_ASSET, host), (VERIFIER_ASSET, ver), (WIN_ASSET, z)] + list(staged.items()):
+        if not s_:
             fails.append(f"{n} is not staged in {dist}")
 
     def load(n):
@@ -912,31 +1053,31 @@ def cmd_check(a):
 
     m, err = load(MARKER_LINUX)
     if err:
-        fails.append(f"Linux CUDA host: {err} -- run the real-GPU gate (scripts/release-gpu-gate.sh run ...)")
-    elif host and ver:
-        fails += [f"Linux CUDA host: {w}" for w in marker_ok_linux(m, host, ver, image, heights, a.commit, fsha)]
+        fails.append(f"Linux CUDA prover: {err} -- run the real-GPU gate (scripts/release-gpu-gate.sh run ...)")
+    elif host and all(staged.values()):
+        fails += [f"Linux CUDA prover: {w}" for w in marker_ok_linux(m, host, staged, image, labels, a.commit, fsha)]
     w, err = load(MARKER_WIN)
     if err:
-        fails.append(f"Windows CUDA host: {err} -- prove block 170 on a real card (scripts/release-gpu-gate-windows.ps1) "
+        fails.append(f"Windows CUDA prover: {err} -- prove block 170 on a real card (scripts/release-gpu-gate-windows.ps1) "
                      "and run scripts/release-gpu-gate.sh record-windows")
     elif z and ver:
         hx = zip_host_exe_sha(os.path.join(dist, WIN_ASSET))
         if not hx:
-            fails.append(f"Windows CUDA host: {WIN_ASSET} does not hold exactly one host.exe")
-        fails += [f"Windows CUDA host: {x}" for x in marker_ok_windows(w, z, ver, image, hx, a.commit)]
+            fails.append(f"Windows CUDA prover: {WIN_ASSET} does not hold exactly one {WIN_EXE}")
+        fails += [f"Windows CUDA prover: {x}" for x in marker_ok_windows(w, z, ver, image, hx, a.commit)]
         if isinstance(m, dict) and isinstance(w, dict):
             lin = {b.get("receipt_sha256") for r in m.get("runs") or [] if isinstance(r, dict)
                    for b in r.get("blocks") or [] if isinstance(b, dict)}
             if any(isinstance(b, dict) and b.get("receipt_sha256") in lin for b in w.get("blocks") or []):
-                fails.append("Windows CUDA host: its receipt is one of the Linux gate's: not a Windows run")
+                fails.append("Windows CUDA prover: its proof is one of the Linux gate's: not a Windows run")
     if fails:
         for f in fails:
             say(f"  REFUSED  {f}")
         return 1
-    say(f"  ok   real-GPU gate: the staged Linux CUDA host {host[:16]}... PROVED {heights} on "
+    say(f"  ok   real-GPU gate: the staged Linux CUDA prover {host[:16]}... PROVED {labels} on "
           + ", ".join(f"{r.get('gpu_name')}" for r in m["runs"]) + f" ({m.get('finished')})")
-    say(f"  ok   the staged Windows CUDA host {z[:16]}... is ATTESTED by {w.get('recorded_by')} to have proved block "
-          f"170 on {w.get('gpu_name')} ({w.get('recorded_at')}): the maintainer's word, bound to host.exe's sha256")
+    say(f"  ok   the staged Windows CUDA prover {z[:16]}... is ATTESTED by {w.get('recorded_by')} to have proved block "
+          f"170 on {w.get('gpu_name')} ({w.get('recorded_at')}): the maintainer's word, bound to {WIN_EXE}'s sha256")
     return 0
 
 
@@ -1046,7 +1187,8 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     host_sha = a.host_sha256.lower()
     if not re.fullmatch(r"[0-9a-f]{64}", host_sha):
         raise SystemExit("--host-sha256 must be 64 hex digits (release.sh prints the staged files' sha256s in step 4)")
-    image = canon_image()
+    records = release_records()
+    image = records["core"][1]
     blocks = gate_blocks()
     commit, dirty = repo_commit()
     if dirty and not a.dry_run:
@@ -1060,14 +1202,31 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     got = src.sha256(CUDA_ASSET)
     if got != host_sha:
         raise SystemExit(f"the staged {CUDA_ASSET} at {a.source} is {got}, not {host_sha}: nothing rented")
-    vsha = src.sha256(VERIFIER_ASSET)
-    if not vsha:
-        raise SystemExit(f"no staged {VERIFIER_ASSET} at {a.source}: nothing rented")
-    vpath = src.fetch(VERIFIER_ASSET, os.path.join(work, VERIFIER_ASSET))
-    if sha256_file(vpath) != vsha:
-        raise SystemExit("the fetched verifier is not the staged one: nothing rented")
-    verifier = LocalVerifier(vpath)
-    say(f"gate: host {host_sha[:16]}..., verifier {vsha[:16]}..., image {image[:8]}, blocks {[b[0] for b in blocks]}, "
+    vers, keys = staged_needs(blocks)
+    staged = {}
+    for n in vers + keys:
+        h = src.sha256(n)
+        if not h:
+            raise SystemExit(f"no staged {n} at {a.source}: nothing rented")
+        local = src.fetch(n, os.path.join(work, n))
+        if sha256_file(local) != h:
+            raise SystemExit(f"the fetched {n} is not the staged one: nothing rented")
+        staged[n] = h
+    verifiers = {k: LocalVerifier(os.path.join(work, v)) for k, v in KIND_VERIFIER.items() if v in staged}
+    keysets = {}
+    for e in blocks:
+        if e["keys"] in keysets:
+            continue
+        if e["keys"] not in records:
+            raise SystemExit(f"gate entry {e['label']} proves under {e['keys']}, which has no published record: nothing rented")
+        ks, why = unpack_keys(os.path.join(work, keys_asset(e["keys"])), e["keys"], records[e["keys"]], work)
+        if not ks:
+            raise SystemExit(f"{why}: nothing rented")
+        keysets[e["keys"]] = ks
+    key_shas = {n: staged[n] for n in keys}
+    vsha = staged[VERIFIER_ASSET] if VERIFIER_ASSET in staged else None
+    say(f"gate: prover {host_sha[:16]}..., verifiers {[n for n in vers]}, keys {[n for n in keys]}, image {image[:8]}, "
+        f"entries {[e['label'] for e in blocks]}, "
           f"caps ${a.max_usd:.2f} / {a.max_min:.0f} min, commit {commit[:8]}{' (DIRTY)' if dirty else ''}, work {work}")
     if a.dry_run:
         say("DRY RUN: nothing rented")
@@ -1089,6 +1248,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
                            check=True)
         transport = SshTransport(key, src, work, print)
         transport.pubkey = open(key + ".pub").read().strip()
+    transport.keys = sorted(key_shas.items())
     gate = Gate(api, transport, host_sha, work, blocks, cards=cards, max_usd=a.max_usd, max_min=a.max_min,
                 balance=balance, sleep=sleep, clock=clock, **gate_kw)
     started = now_utc()
@@ -1117,12 +1277,13 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
             spent = round(gate.b0 - balance(api), 2)
         except Exception:  # noqa: BLE001
             spent = None
-    ok = (not rc_interrupt) and gate.sweep_clean and judge(gate, runs, verifier, blocks, image, work)
-    if ok and src.sha256(VERIFIER_ASSET) != vsha:
-        say("the staged verifier changed during the gate")
+    ok = (not rc_interrupt) and gate.sweep_clean and judge(gate, runs, verifiers, blocks, keysets, work, key_shas)
+    if ok and any(src.sha256(n) != h for n, h in staged.items()):
+        say("a staged verifier or key tarball changed during the gate")
         ok = False
     report = {"schema": SCHEMA, "kind": "linux-cuda", "result": "PASS" if ok else "FAIL", "asset": CUDA_ASSET,
-              "host_sha256": host_sha, "verifier_sha256": vsha, "image": image,
+              "host_sha256": host_sha, "verifier_sha256": vsha, "staged_sha256": staged, "image": image,
+              "records": {k: {"image": v.image, "key_pin": v.pin} for k, v in keysets.items()},
               "fixtures_sha256": sha256_file(os.path.join(FIXTURES, "SHA256SUMS")),
               "repo_commit": commit, "repo_dirty": bool(dirty),
               "started": started, "finished": now_utc(), "spent_usd_estimate": round(gate.est_spend(), 2),
@@ -1132,7 +1293,7 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     json.dump(report, open(rp, "w"), indent=1)
     say(f"report: {rp}")
     if not ok:
-        say("GATE FAIL: no marker written. Do NOT publish this CUDA host." + (" (interrupted)" if rc_interrupt else ""))
+        say("GATE FAIL: no marker written. Do NOT publish this CUDA prover." + (" (interrupted)" if rc_interrupt else ""))
         if not gate.sweep_clean:
             say("⛔ some pods may still bill: scripts/release-gpu-gate.sh sweep --terminate")
         return 130 if rc_interrupt else 1
@@ -1141,17 +1302,21 @@ def cmd_run(a, api=None, transport=None, balance=runpod_balance, sleep=time.slee
     src.put_marker(mp, MARKER_LINUX)
     remember(src, [b["receipt_sha256"] for r in runs for b in r.get("blocks", []) if b.get("receipt_sha256")],
              f"linux-cuda {host_sha[:16]}")
-    say(f"GATE PASS: {MARKER_LINUX} written to {a.source}; scripts/release.sh can publish this exact host.")
+    say(f"GATE PASS: {MARKER_LINUX} written to {a.source}; scripts/release.sh can publish this exact prover.")
     return 0
 
 
 def cmd_record_windows(a):
-    """The Windows CUDA host: the maintainer ran scripts/release-gpu-gate-windows.ps1 with the STAGED zip's host.exe
-    on a real card. Its JSON report binds the run to host.exe's sha256; this checks that against the staged zip, the
-    receipt and log against the report, refuses a receipt already used as evidence, and verifies it."""
-    image = canon_image()
-    blocks = {b[0]: b for b in gate_blocks()}
-    h, bh, _leaf, anchor, _state = blocks[170]
+    """The Windows CUDA prover: the maintainer ran scripts/release-gpu-gate-windows.ps1 with the STAGED zip's
+    hzengine.exe on a real card (gate entry WIN_LABEL, block 170). Its JSON report binds the run to hzengine.exe's
+    sha256; this checks that against the staged zip, the proof file and log against the report, refuses a proof
+    already used as evidence, and verifies it under the published record."""
+    records = release_records()
+    image = records["core"][1]
+    blocks = {e["label"]: e for e in gate_blocks()}
+    if WIN_LABEL not in blocks or blocks[WIN_LABEL]["height"] != 170:
+        raise SystemExit(f"engine/gpu-gate/GATE has no {WIN_LABEL} entry (block 170): the Windows run proves it")
+    e = blocks[WIN_LABEL]
     src = Source(a.source)
     zsha = src.sha256(WIN_ASSET)
     if not zsha:
@@ -1160,11 +1325,11 @@ def cmd_record_windows(a):
         raise SystemExit(f"{a.zip} is not the staged {WIN_ASSET} ({zsha[:16]}...): prove with the STAGED zip")
     hx = zip_host_exe_sha(a.zip)
     if not hx:
-        raise SystemExit(f"{a.zip} does not hold exactly one host.exe")
+        raise SystemExit(f"{a.zip} does not hold exactly one {WIN_EXE}")
     try:
         rep = json.load(open(a.report))
-    except (OSError, ValueError) as e:
-        raise SystemExit(f"{a.report}: {e}")
+    except (OSError, ValueError) as ex:
+        raise SystemExit(f"{a.report}: {ex}")
     if not isinstance(rep, dict):
         say(f"  REFUSED  {a.report} is not a JSON object")
         return 1
@@ -1178,59 +1343,64 @@ def cmd_record_windows(a):
     if dirty:
         why.append(dirty_msg(dirty, "record"))
     if field("host_exe_sha256") != hx:
-        why.append(f"the run hashed host.exe {field('host_exe_sha256')[:16] or '(none)'}..., the staged zip's is {hx[:16]}...")
+        why.append(f"the run hashed {WIN_EXE} {field('host_exe_sha256')[:16] or '(none)'}..., the staged zip's is {hx[:16]}...")
     if field("zip_sha256") != zsha:
         why.append(f"the run names zip {field('zip_sha256')[:16] or '(none)'}..., the staged zip is {zsha[:16]}...")
     if field("receipt_sha256") != rsha:
-        why.append(f"{a.receipt} is not the receipt the run wrote")
+        why.append(f"{a.receipt} is not the proof file the run wrote")
     if field("log_sha256") != lsha:
         why.append(f"{a.log} is not the log the run wrote")
     if rep.get("exit_code") != 0 or isinstance(rep.get("exit_code"), bool):
         why.append(f"the prove exited {rep.get('exit_code')!r}")
     if not field("gpu_name"):
         why.append("the run names no GPU (nvidia-smi)")
-    if image not in field("method_id"):
-        why.append(f"host.exe method-id is not {image[:8]}")
+    if records[e["keys"]][1] not in field("image"):
+        why.append(f"the run's proof is not of image {records[e['keys']][1][:8]} (hzengine pack prints it)")
     try:
         used = reuse_of(src, rsha, hx)
-    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-        used = [f"could not read the evidence history: {e}"]
+    except (RuntimeError, OSError, subprocess.SubprocessError) as ex:
+        used = [f"could not read the evidence history: {ex}"]
     if used:
-        why.append("this receipt was already used as evidence (" + "; ".join(used) + "): a proof is randomised, so a "
+        why.append("this proof was already used as evidence (" + "; ".join(used) + "): a proof is randomised, so a "
                    "fresh run never repeats one")
     if why:
         for w in why:
             say(f"  REFUSED  {w}")
         return 1
     vsha = src.sha256(VERIFIER_ASSET)
-    if not vsha:
-        raise SystemExit(f"no staged {VERIFIER_ASSET} at {a.source}")
+    ksha = src.sha256(keys_asset(e["keys"]))
+    if not vsha or not ksha:
+        raise SystemExit(f"no staged {VERIFIER_ASSET} / {keys_asset(e['keys'])} at {a.source}")
     with tempfile.TemporaryDirectory(prefix="hz-relgate-win-") as work:
-        return _record_windows(a, src, image, h, bh, anchor, zsha, hx, rep, rsha, lsha, vsha, work)
+        return _record_windows(a, src, image, e, records, zsha, hx, rep, rsha, lsha, vsha, ksha, work)
 
 
-def _record_windows(a, src, image, h, bh, anchor, zsha, hx, rep, rsha, lsha, vsha, work):
+def _record_windows(a, src, image, e, records, zsha, hx, rep, rsha, lsha, vsha, ksha, work):
     vpath = src.fetch(VERIFIER_ASSET, os.path.join(work, VERIFIER_ASSET))
-    if sha256_file(vpath) != vsha:
-        raise SystemExit("the fetched verifier is not the staged one")
+    kpath = src.fetch(keys_asset(e["keys"]), os.path.join(work, keys_asset(e["keys"])))
+    if sha256_file(vpath) != vsha or sha256_file(kpath) != ksha:
+        raise SystemExit("the fetched verifier or key tarball is not the staged one")
+    ks, why = unpack_keys(kpath, e["keys"], records[e["keys"]], work)
+    if not ks:
+        raise SystemExit(why)
     verifier = LocalVerifier(vpath)
-    a_path = os.path.join(FIXTURES, anchor)
-    ok, verdict = verify_receipt(verifier, a.receipt, a_path, h, bh)
-    refused, tv = tamper_refused(verifier, a.receipt, a_path, h, bh, work) if ok else (False, "")
-    say(f"block 170 receipt: {verdict}" + (f"; tampered copy: {tv}" if ok else ""))
+    ok, verdict = verify_receipt(verifier, a.receipt, e, ks)
+    refused, tv = tamper_refused(verifier, a.receipt, e, ks, work) if ok else (False, "")
+    say(f"block 170 proof: {verdict}" + (f"; tampered copy: {tv}" if ok else ""))
     if not (ok and refused):
-        say("NOT RECORDED: the receipt did not verify (or the verifier accepted a tampered copy).")
+        say("NOT RECORDED: the proof did not verify (or the verifier accepted a tampered copy).")
         return 1
     commit, dirty = repo_commit()
     m = {"schema": SCHEMA, "kind": "windows-cuda", "result": "ATTESTED", "asset": WIN_ASSET, "zip_sha256": zsha,
-         "host_exe_sha256": hx, "verifier_sha256": vsha, "image": image, "gpu_name": rep.get("gpu_name"),
-         "compute_cap": rep.get("compute_cap"), "driver": rep.get("driver"), "prove_s": rep.get("prove_s"),
-         "blocks": [{"height": 170, "block_hash": bh, "receipt_sha256": rsha, "verified": True,
-                     "verdict": verdict, "tamper_control": "refused: " + tv}],
+         "host_exe_sha256": hx, "verifier_sha256": vsha, "keys_sha256": ksha, "image": image,
+         "gpu_name": rep.get("gpu_name"), "compute_cap": rep.get("compute_cap"), "driver": rep.get("driver"),
+         "prove_s": rep.get("prove_s"),
+         "blocks": [{"label": e["label"], "height": 170, "block_hash": e["hash"], "receipt_sha256": rsha,
+                     "verified": True, "verdict": verdict, "tamper_control": "refused: " + tv}],
          "prove_log_sha256": lsha, "report": rep, "repo_commit": commit, "repo_dirty": bool(dirty),
          "recorded_by": who(), "recorded_at": now_utc(),
-         "attestation": "the maintainer ran scripts/release-gpu-gate-windows.ps1 with the staged zip's host.exe on "
-                        "this GPU; the receipt verifies and was never used before, the run is the maintainer's word"}
+         "attestation": f"the maintainer ran scripts/release-gpu-gate-windows.ps1 with the staged zip's {WIN_EXE} on "
+                        "this GPU; the proof verifies and was never used before, the run is the maintainer's word"}
     mp = os.path.join(work, MARKER_WIN)
     json.dump(m, open(mp, "w"), indent=1)
     src.put_marker(mp, MARKER_WIN)
@@ -1256,14 +1426,14 @@ def main(argv=None):
     w = sub.add_parser("record-windows")
     w.add_argument("--source", required=True)
     w.add_argument("--report", required=True, help="the JSON scripts/release-gpu-gate-windows.ps1 wrote")
-    w.add_argument("--receipt", required=True, help="block_170.rcpt that run wrote")
+    w.add_argument("--receipt", required=True, help="block_170.hze (the HZE1 proof file) that run wrote")
     w.add_argument("--log", required=True, help="the prove log that run wrote")
     w.add_argument("--zip", required=True, help="your local copy of the staged zip (checked against the staged sha256)")
     s = sub.add_parser("sweep", help="list (and with --terminate release) every hz-relgate-* pod on the key")
     s.add_argument("--terminate", action="store_true")
     c = sub.add_parser("check")
     c.add_argument("--dist", required=True)
-    c.add_argument("--image")
+    c.add_argument("--image", help="the core image id (default: reproduce/engine-release.tsv's core record)")
     c.add_argument("--commit", help="the release commit: each marker must have been made from it")
     a = p.parse_args(argv)
     try:

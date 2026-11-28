@@ -13,6 +13,20 @@
 # contributor's ed25519 signing key and decides what is submitted under their name, so shipping it
 # unsigned — or, as before, not shipping it at all and telling people to clone — is the worst option
 # on the list.
+#
+# THE ENGINE RELEASE (28.11.2026, engine/RELEASE_TOOLING.md; the user: "full package", every zAPP CLI and wasm
+# module ships, in the signed manifest). Also staged here:
+#   hazync-zapp-<name>-x86_64-linux-gnu   every zAPP CLI, built like the verifier CLI (build-linux-verifier.sh: the
+#                                         hosts' ubuntu:22.04 image, --locked, the glibc floor); HAZYNC_SKIP_CLIS=1 skips
+#   hazync-zapp-<name>.wasm / .js         every zAPP's browser module (its build.sh, the pinned container, clean and
+#                                         published required) and its glue
+#   hazync-keys-<name>.tar.gz             each published image's key files (ENGINE_KEYS_ROOT=<dir with one directory
+#                                         per record name>), checked against reproduce/engine-release.tsv, packed
+#                                         reproducibly (sorted, owner 0, mtime 0, gzip -n)
+#   hazync-engine-x86_64-linux-gnu[-cuda] hzengine, from HZENGINE_CPU / HZENGINE_CUDA (paths): no reproducible release
+#                                         build of hzengine exists yet, so this only stages and checks what it is given
+# Anything this machine cannot make is SKIPPED with a line on stderr naming what is missing; scripts/release.sh's
+# exact-set check then refuses the release, so a skip can never ship a short set.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
 OUT="${OUT:-$PWD/dist}"
@@ -92,11 +106,95 @@ else
     echo "! skipping hazync-verify.wasm — swiftsync-verify-wasm/build.sh needs docker, cargo, python3 and git on this machine" >&2
 fi
 
+# ---- the engine release: zAPP CLIs and wasm modules, key tarballs, hzengine ------------------------------------
+skip() { echo "! skipping $1 — $2" >&2; }
+# name : CLI crate dir : CLI bin : wasm dir (- when the zAPP has no wasm module yet) : wasm file : glue
+ZAPPS="assume:zapps/assume/cli:zapp-assume:zapps/assume/wasm:zapp_assume_wasm.wasm:zapp-assume.js
+deposit:zapps/deposit/cli:zapp-deposit:zapps/deposit/wasm:zapp_deposit_wasm.wasm:zapp-deposit.js
+headers:zapps/headers/cli:zapp-headers:zapps/headers/wasm:zapp_headers_wasm.wasm:zapp-headers.js
+hints:zapps/hints/cli:zapp-hints:zapps/hints/wasm:zapp_hints_wasm.wasm:zapp-hints.js
+liveness:zapps/liveness/cli:zapp-liveness:zapps/liveness/wasm:zapp_liveness_wasm.wasm:zapp-liveness.js
+statement:zapps/statement/cli:zapp-statement:zapps/statement/wasm:zapp_statement_wasm.wasm:zapp-statement.js
+utreexo:zapps/utreexo/cli:zapp-utreexo:zapps/utreexo/wasm:zapp_utreexo_wasm.wasm:zapp-utreexo.js
+zeroconf:zapps/zeroconf/cli:zapp-zeroconf:-:-:-"
+HAVE_WASM_TOOLS=0
+command -v docker >/dev/null && command -v cargo >/dev/null && command -v python3 >/dev/null && command -v git >/dev/null && HAVE_WASM_TOOLS=1
+while IFS=: read -r name crate bin wdir wfile glue; do
+    [ -n "$name" ] || continue
+    if [ "${HAZYNC_SKIP_CLIS:-0}" = 1 ]; then
+        skip "hazync-zapp-$name-x86_64-linux-gnu" "HAZYNC_SKIP_CLIS=1"
+    elif command -v docker >/dev/null; then
+        ./scripts/build-linux-verifier.sh x86_64 "$OUT/hazync-zapp-$name-x86_64-linux-gnu" "$crate" "$bin" >/dev/null \
+            || { echo "::error::the $name zAPP CLI did not build" >&2; exit 1; }
+        # it must run: every zAPP CLI answers no arguments with its usage and exit 1 (a FAIL), never a crash (101, a
+        # signal) or a missing loader (126/127)
+        rc=0; "$OUT/hazync-zapp-$name-x86_64-linux-gnu" >/dev/null 2>&1 < /dev/null || rc=$?
+        [ "$rc" = 1 ] || { echo "::error::hazync-zapp-$name-x86_64-linux-gnu does not run (no arguments: exit $rc, want 1)" >&2; exit 1; }
+    else
+        skip "hazync-zapp-$name-x86_64-linux-gnu" "build-linux-verifier.sh needs docker"
+    fi
+    if [ "$wdir" = - ]; then
+        skip "hazync-zapp-$name.wasm" "the $name zAPP has no wasm module yet (engine/RELEASE_TOOLING.md)"
+        continue
+    fi
+    cp "$wdir/$glue" "$OUT/hazync-zapp-$name.js"
+    if [ "$HAVE_WASM_TOOLS" = 1 ]; then
+        HAZYNC_WASM_REQUIRE_CLEAN=1 HAZYNC_WASM_REQUIRE_PUBLISHED=1 "./$wdir/build.sh" >/dev/null \
+            || { echo "::error::the $name zAPP wasm module did not build" >&2; exit 1; }
+        cp "$wdir/target/wasm32-unknown-unknown/release/$wfile" "$OUT/hazync-zapp-$name.wasm"
+    else
+        skip "hazync-zapp-$name.wasm" "its build.sh needs docker, cargo, python3 and git on this machine"
+    fi
+done <<< "$ZAPPS"
+
+# The key tarballs: one per published record (reproduce/engine-release.tsv, written at the Stage 4 freeze).
+REC=reproduce/engine-release.tsv
+KEYFILES="sdk.pk agg.vk openvm.toml guest.vmexe baseline.json image.json vk.bin"
+if [ ! -f "$REC" ]; then
+    skip "hazync-keys-*.tar.gz" "$REC does not exist (no engine image is published yet: Stage 4)"
+elif [ -z "${ENGINE_KEYS_ROOT:-}" ]; then
+    skip "hazync-keys-*.tar.gz" "ENGINE_KEYS_ROOT is not set (a directory holding one key directory per record name)"
+else
+    while read -r name _net id pin; do
+        case "$name" in ''|\#*) continue ;; esac
+        d="$ENGINE_KEYS_ROOT/$name"
+        for f in $KEYFILES; do [ -s "$d/$f" ] || { echo "::error::$d/$f is missing or empty" >&2; exit 1; }; done
+        # the key directory must BE the record: the image id from its image.json, the pin from its vk.bin
+        got=$(python3 -c "import json,hashlib,sys;i=json.load(open(sys.argv[1]));print(hashlib.sha256(bytes.fromhex(i['exe']+i['vm'])).hexdigest())" "$d/image.json")
+        [ "$got" = "$id" ] || { echo "::error::$d/image.json gives image ${got:0:8}, the $name record is ${id:0:8}" >&2; exit 1; }
+        [ "$(sha256sum "$d/vk.bin" | cut -c1-64)" = "$pin" ] || { echo "::error::$d/vk.bin is not the $name record's pinned key" >&2; exit 1; }
+        # reproducible: the same files give the same bytes on any machine (sorted, no owner, no time, gzip without a name)
+        # shellcheck disable=SC2086  # KEYFILES is a fixed list of plain names
+        tar --sort=name --owner=0 --group=0 --numeric-owner --mtime=@0 --format=gnu -cf - -C "$d" $KEYFILES \
+            | gzip -9 -n > "$OUT/hazync-keys-$name.tar.gz.tmp" && mv -f "$OUT/hazync-keys-$name.tar.gz.tmp" "$OUT/hazync-keys-$name.tar.gz"
+    done < "$REC"
+fi
+
+# hzengine: staged from what the operator built (no reproducible release build of it exists yet).
+for v in cpu cuda; do
+    asset=hazync-engine-x86_64-linux-gnu; [ "$v" = cuda ] && asset="$asset-cuda"
+    src=$([ "$v" = cpu ] && echo "${HZENGINE_CPU:-}" || echo "${HZENGINE_CUDA:-}")
+    if [ -z "$src" ]; then
+        skip "$asset" "no reproducible release build of hzengine yet; set HZENGINE_$(echo $v | tr a-z A-Z)=<binary> to stage one"
+        continue
+    fi
+    [ -x "$src" ] || { echo "::error::$src is not an executable" >&2; exit 1; }
+    ./scripts/check-glibc-floor.sh "$src" || { echo "::error::$src needs a newer glibc than the hosts" >&2; exit 1; }
+    # the CPU build must run here; a CUDA build needs libcuda, so only its bytes are checked on a GPU-less box
+    if [ "$v" = cpu ]; then
+        "$src" --help >/dev/null 2>&1 || { echo "::error::$src --help failed" >&2; exit 1; }
+    fi
+    install -m 0755 "$src" "$OUT/$asset"
+done
+
 echo "packaged into $OUT:"
 # List everything this script stages, not a subset. A summary that under-reports is how an asset gets
 # dropped without anyone noticing — the operator reads the summary, not the source.
-for f in hazync-worker hazync-coordinator.py hazync-run-workers.sh hazync-verify.wasm hazync-verify.js; do
-    [ -f "$OUT/$f" ] && printf '  %-22s %9d bytes  %s\n' "$f" "$(stat -c%s "$OUT/$f")" "$(sha256sum "$OUT/$f" | cut -c1-16)"
+for f in hazync-worker hazync-coordinator.py hazync-run-workers.sh hazync-verify.wasm hazync-verify.js \
+         hazync-zapp-* hazync-keys-* hazync-engine-x86_64-linux-gnu hazync-engine-x86_64-linux-gnu-cuda; do
+    for g in "$OUT"/$f; do
+        [ -f "$g" ] && printf '  %-40s %10d bytes  %s\n' "$(basename "$g")" "$(stat -c%s "$g")" "$(sha256sum "$g" | cut -c1-16)"
+    done
 done
 echo
 echo "Upload these to the release BEFORE publishing — release-sign.yml signs whatever is attached"

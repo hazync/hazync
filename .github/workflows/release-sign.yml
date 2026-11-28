@@ -99,6 +99,9 @@ jobs:
                   --target aarch64-unknown-linux-gnu --bin swiftsync-verify
             cp swiftsync-verify/target/aarch64-unknown-linux-gnu/release/swiftsync-verify hazync-verify-aarch64
           fi
+      # ⛔ PENDING for the engine release (engine/RELEASE_TOOLING.md): this job still builds and checks the RISC Zero-era
+      # verifier against reproduce/LIBZYNC_IDS. The engine's: the same build (OpenVM's verifier cross-compiled), the
+      # core record of reproduce/engine-release.tsv, and check-release-verifiers.sh on engine proofs.
       - name: Assert it embeds the CANONICAL guest id
         # The whole reason this job exists. A verifier pinned to the wrong guest rejects every real
         # proof, and nothing downstream would notice — sha256 and PGP both pass over a stale binary.
@@ -236,6 +239,7 @@ jobs:
           sparse-checkout: |
             scripts/release-assets.txt
             reproduce/LIBZYNC_IDS
+            reproduce/engine-release.tsv
           sparse-checkout-cone-mode: false
           path: tagtree
       - name: Download the release binaries
@@ -328,41 +332,56 @@ jobs:
           done
 
           # EVERY HOST AND VERIFIER MUST CARRY THIS TAG'S PUBLISHED IMAGE (review 11-12, release #2). The signature used
-          # to attest "whatever is on the release": the name set and non-empty files were the only checks. The image id
-          # comes from the TAG's reproduce/LIBZYNC_IDS. Hosts store it as 32 raw bytes, the verifiers as 64-hex text;
-          # each exactly once (the Windows exe at least once, as scripts/windows-host.sh accepts it).
-          ID=$(awk '$1=="libzync-product" && $2=="mainnet" {print $4}' ../tagtree/reproduce/LIBZYNC_IDS)
-          [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no libzync mainnet image id in the tag's reproduce/LIBZYNC_IDS"; exit 1; }
-          python3 - "$ID" <<'PY'
-          import sys, zipfile
-          idh = sys.argv[1]; raw, hx = bytes.fromhex(idh), idh.encode()
-          want = {"hazync-host-x86_64-linux-gnu": (raw, 1, 1), "hazync-host-x86_64-linux-gnu-cuda": (raw, 1, 1),
-                  "hazync-verify-x86_64-linux-gnu": (hx, 1, 1), "hazync-verify-aarch64": (hx, 1, 1),
-                  "hazync-verify.wasm": (hx, 1, 1)}
+          # to attest "whatever is on the release": the name set and non-empty files were the only checks.
+          # THE ENGINE RELEASE (28.11.2026, engine/RELEASE_TOOLING.md): the images are the TAG's reproduce/engine-release.tsv
+          # records ("<name> <network> <image id> <key pin>", written at the Stage 4 freeze). Each record's key tarball
+          # must BE that record: the image id from its image.json (SHA-256(exe || vm)) and its vk.bin's SHA-256 = the pin.
+          # The core verifiers must carry the core image id (64-hex text or the raw 32 bytes) at least once. hzengine
+          # carries no image (the keys do), so the provers are checked by name and, for Windows, that the zip holds
+          # exactly one hzengine.exe. What each zAPP verifier embeds is fixed at the freeze: checked then (PENDING).
+          REC=../tagtree/reproduce/engine-release.tsv
+          [ -s "$REC" ] || { echo "::error::the tag has no reproduce/engine-release.tsv: no engine image is published at this tag"; exit 1; }
+          ID=$(awk '$1=="core" && $2=="mainnet" {print $3}' "$REC")
+          [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no core mainnet record in the tag's reproduce/engine-release.tsv"; exit 1; }
+          python3 - "$REC" <<'PY'
+          import hashlib, json, sys, tarfile, zipfile
+          recs = {}
+          for line in open(sys.argv[1]):
+              p = line.split()
+              if p and not p[0].startswith("#"):
+                  recs[p[0]] = (p[2], p[3])
+          idh = recs["core"][0]
+          raw, hx = bytes.fromhex(idh), idh.encode()
           bad = []
-          for name, (needle, lo, hi) in want.items():
-              n = open(name, "rb").read().count(needle)
-              print(f"{name}: image {idh[:8]} {n}x"); bad += [] if lo <= n <= hi else [f"{name} carries it {n}x"]
-          # Both Windows hosts (CUDA, and CPU since v0.26.1) as the list names them: the list check above already made
-          # the release carry exactly the listed set.
-          for zn in ("hazync-host-x86_64-windows-cuda.zip", "hazync-host-x86_64-windows-cpu.zip"):
+          for name, (img, pin) in sorted(recs.items()):
+              tn = f"hazync-keys-{name}.tar.gz"
               try:
-                  zf = zipfile.ZipFile(zn)
-              except FileNotFoundError:
-                  if zn.endswith("-cpu.zip"):
-                      continue      # a tag from before the CPU host: its list does not name it
-                  raise
-              with zf as z:
-                  n = z.read("host.exe").count(raw)
-              print(f"{zn} host.exe: image {idh[:8]} {n}x"); bad += [] if n >= 1 else [f"{zn} host.exe does not carry it"]
-          # The installer is compressed, so the id cannot be seen in it. windows-installer.yml (build-installer above)
-          # installed it and checked the installed host.exe is the zip's byte for byte; here, only that it is one.
+                  with tarfile.open(tn) as t:
+                      files = {m.name.lstrip("./"): m for m in t.getmembers() if m.isfile()}
+                      vk = t.extractfile(files["vk.bin"]).read()
+                      im = json.loads(t.extractfile(files["image.json"]).read())
+              except (OSError, KeyError, ValueError, tarfile.TarError) as e:
+                  bad.append(f"{tn}: {e!r}"); continue
+              got = hashlib.sha256(bytes.fromhex(im.get("exe", "") + im.get("vm", ""))).hexdigest()
+              vpin = hashlib.sha256(vk).hexdigest()
+              print(f"{tn}: image {got[:8]} (record {img[:8]}), key pin {vpin[:8]} (record {pin[:8]})")
+              bad += [] if got == img else [f"{tn} is image {got[:8]}, the {name} record is {img[:8]}"]
+              bad += [] if vpin == pin else [f"{tn}'s vk.bin is not the {name} record's pinned key"]
+          for name in ("hazync-verify-x86_64-linux-gnu", "hazync-verify-aarch64", "hazync-verify.wasm"):
+              b = open(name, "rb").read()
+              n = b.count(hx) + b.count(raw)
+              print(f"{name}: core image {idh[:8]} {n}x"); bad += [] if n >= 1 else [f"{name} does not carry the core image"]
+          with zipfile.ZipFile("hazync-engine-x86_64-windows-cuda.zip") as z:
+              n = sum(1 for x in z.namelist() if x.replace("\\", "/").split("/")[-1].lower() == "hzengine.exe")
+          print(f"hazync-engine-x86_64-windows-cuda.zip: {n} hzengine.exe"); bad += [] if n == 1 else ["the Windows zip does not hold exactly one hzengine.exe"]
+          # The installer is compressed, so nothing can be seen in it. windows-installer.yml (build-installer above)
+          # installed it and checked the installed prover is the zip's byte for byte; here, only that it is one.
           b = open("hazync-setup-x86_64-windows.exe", "rb").read()
           ok = b[:2] == b"MZ" and b"Inno Setup" in b
           print(f"hazync-setup-x86_64-windows.exe: {'an Inno Setup installer' if ok else 'NOT an Inno Setup installer'}, {len(b)} bytes")
           bad += [] if ok else ["hazync-setup-x86_64-windows.exe is not an Inno Setup installer"]
           if bad:
-              print("::error::not this tag's image (" + idh[:8] + "): " + "; ".join(bad)); sys.exit(1)
+              print("::error::not this tag's images (core " + idh[:8] + "): " + "; ".join(bad)); sys.exit(1)
           PY
           # THE MANIFEST NAMES WHAT IT IS FOR: the tag, the commit the tag points at, and that image. `sha256sum -c`
           # (and --strict) skips `#` lines, so checking downloads works as before; the signature now also covers the
