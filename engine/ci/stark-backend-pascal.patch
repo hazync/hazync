@@ -21,7 +21,7 @@ index cdfa5bae..5e289796 100644
  // Requires domain_size >= 256 (uses Z-tile shmem kernel).
  // Applies alpha to denominators and fuses tree layers 0 and 1 in shmem.
 diff --git a/crates/cuda-backend/src/cuda/ntt.rs b/crates/cuda-backend/src/cuda/ntt.rs
-index 81c21d5c..1f4e013d 100644
+index 81c21d5c..4e57132e 100644
 --- a/crates/cuda-backend/src/cuda/ntt.rs
 +++ b/crates/cuda-backend/src/cuda/ntt.rs
 @@ -77,6 +77,7 @@ extern "C" {
@@ -32,13 +32,17 @@ index 81c21d5c..1f4e013d 100644
      fn _bit_rev_frac_ext_build_k2(
          inout: *mut std::ffi::c_void,
          real_len: usize,
-@@ -140,6 +141,12 @@ pub unsafe fn bit_rev_frac_ext(
+@@ -140,6 +141,16 @@ pub unsafe fn bit_rev_frac_ext(
      ))
  }
  
 +/// Whether the current device can run `bit_rev_frac_ext_build_k2` (64 KB of dynamic shared memory per block; not on
 +/// Pascal). Hazync patch.
 +pub fn bit_rev_frac_ext_build_k2_supported() -> bool {
++    // HZ_FORCE_UNFUSED_BITREV=1: take the unfused path on any device (to test it on a card that has the 64 KB).
++    if std::env::var("HZ_FORCE_UNFUSED_BITREV").map(|v| v == "1").unwrap_or(false) {
++        return false;
++    }
 +    unsafe { _bit_rev_frac_ext_build_k2_supported() != 0 }
 +}
 +
