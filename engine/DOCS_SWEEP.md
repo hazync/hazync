@@ -105,10 +105,11 @@ The change map, section by section with the engine evidence and what each waits 
 ~/libzync-gpu/paper/ENGINE_CHANGES.md, 27.11.2026). Order: the statement and soundness first (§1.1, §3, §9), the numbers
 last, from the final image.
 
-## Findings from group A (27.11.2026): code the docs had to contradict, not changed here
+## Findings from group A (27.11.2026): code the docs had to contradict (all three FIXED, checked 28.11.2026)
 
-- `scripts/libzync/assume_check.sh` calls `zapp-assume` with no `--image` / `--vk`: it fails on the engine-only checker.
-- `zapps/deposit/src/lib.rs` `DepositBundle::core_receipt`'s doc comment still says "a succinct receipt, bincode, hex";
-  the field carries an engine proof file (`HZE1`) as hex.
-- The engine's whole header chain 0..975,278 is proved (engine/results/zapp_headers, 26.11.2026), but no test fixture
-  holds it, so the header and deposit suites reach DEMO only; a bound deposit bundle could reach OK on it.
+- FIXED: `scripts/libzync/assume_check.sh` takes IMAGE, VK and VK_SHA256 and passes them to `zapp-assume`
+  (`assume_check_200.out` is the engine run).
+- FIXED: `DepositBundle::core_receipt`'s doc comment reads "an engine proof file, HZE1, hex" (the field's name is
+  kept: it is the bundle format).
+- FIXED: the engine's header chain 0..975,278 is a fixture (`zapps/headers/tests/data/engine975278/`); the header suite
+  has OK and wrong-tip cases and the deposit suite reaches OK on the whole chain (40/40).
