@@ -1,4 +1,10 @@
-// Build the guest and embed its ELF + image id.
+// The product guest's PROFILE for the host (CUTOVER C8 step 4a, 28.11.2026): what the engine guest this host writes
+// streams for is built with (libzync/src/profile.rs, the same env vars as the guest's own build and
+// engine/guest/assemble.sh), as constants in OUT_DIR/profile.rs. No guest is built or embedded here any more: the
+// engine builds it (hzengine build) and the image id comes from its key directory (engine_backend). RISC Zero's
+// risc0-build, METHOD_ELF and METHOD_ID are gone with the RISC Zero backend.
+//
+// (Below, the comment block of the RISC Zero era is kept where it still describes this file's rerun rules.)
 //
 // The `rerun-if-changed` lines below are not boilerplate — they are the difference between a stale
 // METHOD_ID and a correct one.
@@ -18,7 +24,7 @@
 // that list is exactly what goes stale — and it would go stale in the direction that fails silently.
 // `scripts/check-guest-inputs.sh` independently asserts that every `#[path]` include is covered here.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 // libzync: what HAZYNC_LIBZYNC means, shared with the guest's own build.rs (one list).
 include!("../../libzync/src/profile.rs");
@@ -58,394 +64,31 @@ fn write_profile(libzync: bool, assumevalid: bool, network: &str, coinlog: bool,
         network)).expect("write profile.rs");
 }
 
-/// Every file the guest pulls in via `#[path]`, resolved the way rustc resolves them: relative to the
-/// directory of the file carrying the attribute.
-fn path_includes(main_rs: &Path) -> Vec<PathBuf> {
-    let src = match std::fs::read_to_string(main_rs) {
-        Ok(s) => s,
-        // Not this build script's job to diagnose a missing guest — the guest build will say so, far
-        // more clearly than a panic in here would.
-        Err(_) => return Vec::new(),
-    };
-    let base = main_rs.parent().unwrap_or(Path::new("."));
-    let mut out = Vec::new();
-    for line in src.lines() {
-        let line = line.trim();
-        // `#[path = "…"]`. Deliberately not a general Rust parser: this is the only form the guest
-        // uses, and check-guest-inputs.sh fails the build if that stops being true.
-        let Some(rest) = line.strip_prefix("#[path") else { continue };
-        let Some(open) = rest.find('"') else { continue };
-        let Some(len) = rest[open + 1..].find('"') else { continue };
-        let rel = &rest[open + 1..open + 1 + len];
-        out.push(base.join(rel));
-    }
-    out
-}
-
 fn main() {
-    // Restores the default this script's own emissions would otherwise switch off.
-    println!("cargo:rerun-if-changed=guest");
     println!("cargo:rerun-if-changed=build.rs");
-
-    // ⭐ EMBED A PREBUILT GUEST INSTEAD OF BUILDING ONE (hazync#615).
-    //
-    // 📏 THE PROBLEM. The guest ELF carries the BUILD MACHINE'S PATHS inside it -- 8 occurrences on
-    // one laptop, all panic and debug strings from dependencies:
-    //
-    //     /home/<user>/.cargo/registry/src/…/risc0-zkvm-3.0.5/src/guest/env
-    //
-    // so the image id is PATH-DEPENDENT, and `reproduce/Dockerfile`'s fixed WORKDIR is what makes it
-    // reproducible. Measured 2026-09-30 from an unmodified tree with every flag unset: a native
-    // build gives fb4d7352…, the container gives 37987b85…. Same source, same flags, different id.
-    //
-    // ⇒ That is why there is exactly ONE supported platform. It is not a toolchain limit: a macOS or
-    // Windows host would embed a non-canonical guest and have every proof rejected (exit 78).
-    //
-    // ⭐ BUT THE GUEST IS PLATFORM-INDEPENDENT -- it is a RISC-V ELF, and the host's OS is irrelevant
-    // to it. So it is built ONCE in the container and every platform's host embeds THOSE bytes. The
-    // ELF never needs committing (70 MB) or publishing: it is a CI artifact passed between jobs.
-    //
-    // ⛔ AND THE ID IS CHECKED, NOT TRUSTED. The build REFUSES unless the id computed from the
-    // supplied ELF equals reproduce/METHOD_ID. That is strictly stronger than the default path,
-    // where a native build silently produces a different id and only CI notices, on one platform.
-    println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_ELF");
-    println!("cargo:rerun-if-env-changed=HAZYNC_LIBZYNC");
-    println!("cargo:rerun-if-env-changed=HAZYNC_NETWORK");
     println!("cargo:rerun-if-changed=../../libzync/src/profile.rs");
+    for v in ["HAZYNC_LIBZYNC", "HAZYNC_NETWORK", "HAZYNC_NO_SCRIPTS", "HAZYNC_COINLOG", "HAZYNC_TRIE", "HAZYNC_UTXOHASH",
+              "HAZYNC_TXLOG", "HAZYNC_TEST_LINEAGE"] {
+        println!("cargo:rerun-if-env-changed={v}");
+    }
     let (libzync, assumevalid) = libzync_profile(std::env::var("HAZYNC_LIBZYNC").ok().as_deref());
-    // The guest skips scripts under the profile's assumevalid OR a bare HAZYNC_NO_SCRIPTS=1 (guest/build.rs):
-    // the recorded profile must say so in both cases, or a scripts-off image reads as a full one (review 2).
-    println!("cargo:rerun-if-env-changed=HAZYNC_NO_SCRIPTS");
+    // The guest skips scripts under the profile's assumevalid OR a bare HAZYNC_NO_SCRIPTS=1: the recorded profile must
+    // say so in both cases, or a scripts-off image reads as a full one (review 2).
     let assumevalid = assumevalid || std::env::var("HAZYNC_NO_SCRIPTS").as_deref() == Ok("1");
     let signet = libzync_signet(std::env::var("HAZYNC_NETWORK").ok().as_deref());
     let regtest = libzync_regtest(std::env::var("HAZYNC_NETWORK").ok().as_deref());
     assert!(!regtest || libzync, "HAZYNC_NETWORK=regtest needs HAZYNC_LIBZYNC");
-    let network = if signet { "signet" } else if regtest { "regtest" } else { "mainnet" };
     assert!(!signet || libzync, "HAZYNC_NETWORK=signet needs HAZYNC_LIBZYNC (the signet check lives in the libzync aggregate)");
-    println!("cargo:rerun-if-env-changed=HAZYNC_GUEST_PIN_DIR");
-    println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
-    println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
-    // TEST VARIANT (guest feature test-lineage): the mainnet coin-log image with lineage/test.rs instead of its published
-    // lineage, for the tests that prove mainnet from genesis. Built from source only: a prebuilt ELF is a published image.
-    println!("cargo:rerun-if-env-changed=HAZYNC_TEST_LINEAGE");
-    let test_lineage = std::env::var("HAZYNC_TEST_LINEAGE").as_deref() == Ok("1");
-    if let Ok(elf_path) = std::env::var("HAZYNC_GUEST_ELF") {
-        assert!(!test_lineage, "HAZYNC_TEST_LINEAGE builds the test variant from source; HAZYNC_GUEST_ELF embeds a published image");
-        // The prebuilt path embeds the pinned canonical guest (reproduce/). A libzync image is embedded
-        // the same way -- sha256 and image id checked, never trusted -- but against pins that name THAT
-        // image: HAZYNC_GUEST_PIN_DIR holds its METHOD_ID and GUEST_ELF_SHA256, and HAZYNC_LIBZYNC /
-        // HAZYNC_NETWORK must say what it is, so the host writes the stream it reads.
-        let pins = std::env::var("HAZYNC_GUEST_PIN_DIR").ok();
-        assert!(!(libzync || signet || assumevalid) || pins.is_some(),
-                "HAZYNC_GUEST_ELF with HAZYNC_LIBZYNC/HAZYNC_NETWORK/HAZYNC_NO_SCRIPTS needs HAZYNC_GUEST_PIN_DIR (the image's pins, \
-                 including its PROFILE): the canonical pins describe a scripts-checked image (review 11-03)");
-        // The pin directory names the image's profile too, so the labels the host trusts (LIBZYNC, NETWORK,
-        // ASSUMEVALID) are tied to the pinned bytes instead of to this shell's variables (review 2).
-        // The product's state is part of the profile: the pins say `coinlog=1 trie=1 utxohash=1` for the product image,
-        // and the build's levers (on by default in the libzync profile, as for a guest built here) must agree, so the
-        // host never writes a stream the pinned guest does not read (no trie receipt for a trie guest, say).
-        println!("cargo:rerun-if-env-changed=HAZYNC_TRIE");
-        println!("cargo:rerun-if-env-changed=HAZYNC_UTXOHASH");
-        let coinlog = lever("HAZYNC_COINLOG");
-        assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
-        assert!(!libzync || coinlog, "a libzync guest needs the coin log (HAZYNC_COINLOG must not be 0)");
-        let (trie, utxohash) = (coinlog && lever("HAZYNC_TRIE"), coinlog && lever("HAZYNC_UTXOHASH"));
-        let txlog = std::env::var("HAZYNC_TXLOG").as_deref() == Ok("1");
-        assert!(!txlog || libzync, "HAZYNC_TXLOG needs HAZYNC_LIBZYNC");
-        if let Some(d) = pins.as_deref() {
-            println!("cargo:rerun-if-changed={d}/PROFILE");
-            let want = format!("libzync={} assumevalid={} network={}{}{}{}{}", libzync as u8, assumevalid as u8, network,
-                               if coinlog { " coinlog=1" } else { "" }, if trie { " trie=1" } else { "" },
-                               if utxohash { " utxohash=1" } else { "" }, if txlog { " txlog=1" } else { "" });
-            let got = std::fs::read_to_string(Path::new(d).join("PROFILE"))
-                .unwrap_or_else(|e| panic!("{d}/PROFILE: {e} (the pin directory must name the image's profile)"));
-            assert_eq!(got.trim(), want, "{d}/PROFILE does not match HAZYNC_LIBZYNC / HAZYNC_NETWORK / HAZYNC_NO_SCRIPTS / the product levers");
-        }
-        assert!(!coinlog || pins.is_some(), "HAZYNC_COINLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
-        assert!(!txlog || pins.is_some(), "HAZYNC_TXLOG with a prebuilt guest needs HAZYNC_GUEST_PIN_DIR");
-        write_profile(libzync, assumevalid, network, coinlog, txlog, false);
-        embed_prebuilt_guest(&elf_path, pins.as_deref());
-        return;
-    }
-
-    let main_rs = Path::new("guest/src/main.rs");
-    for inc in path_includes(main_rs) {
-        // Emitted even if the file is missing: a deleted include must trigger a re-run, and a path
-        // that never resolves is a guest build failure, which is the outcome we want anyway.
-        println!("cargo:rerun-if-changed={}", inc.display());
-    }
-
-    // hazync#139 middle-path experiment (EXPERIMENTAL, opt-in). Unset — the overwhelmingly normal
-    // case — takes the plain embed_methods() path below, byte-for-byte as before, so METHOD_ID is
-    // unmoved. Set to 1 and the guest gains the `bigint2-ecdsa` feature, which compiles
-    // guest/src/bigint2_ecmult.rs and MOVES METHOD_ID. See patches/0005 for the libsecp half.
-    println!("cargo:rerun-if-env-changed=HAZYNC_BIGINT2_ECDSA");
-    // hazync#205 / GHOST_GAINS G1: recover a pubkey's Y through the bigint2 coprocessor instead of
-    // libsecp's software sqrt. Independent of the middle path -- it needs no witness plumbing, so it
-    // can be enabled alone or alongside. See patches/0007 for the libsecp half.
-    println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_ACCEL");
-
-    // Accumulate rather than early-return per flag. The previous shape returned on the FIRST flag it
-    // matched, so setting two silently built with only one -- the same class of silent default that
-    // already cost a measurement day: merging #139 without patch 0005 builds stock libsecp and says
-    // nothing, and #190 without its constant edit repacks nothing and says nothing.
-    let mut features: Vec<String> = Vec::new();
-    if lever("HAZYNC_BIGINT2_ECDSA") {
-        features.push("bigint2-ecdsa".to_string());
-    }
-    if lever("HAZYNC_LIFTX_ACCEL") {
-        features.push("liftx-accel".to_string());
-    }
-    // #136's read_slice fix for the aggregate. Host side is runtime-gated on the SAME variable.
-    println!("cargo:rerun-if-env-changed=HAZYNC_AGG_READSLICE");
-    if lever("HAZYNC_AGG_READSLICE") {
-        features.push("agg-readslice".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_MSM");
-    if lever("HAZYNC_MSM") {
-        features.push("msm".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BENCH");
-    if lever("HAZYNC_FIELD_BENCH") {
-        features.push("field-bench".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_LIFTX_HINT");
-    println!("cargo:rerun-if-env-changed=HAZYNC_FIELD_BIGINT2");
-    if lever("HAZYNC_FIELD_BIGINT2") {
-        features.push("field-bigint2".to_string());
-    }
-    // ⚠ HAZYNC_LIFTX_HINT must hold the SAME value at build time and at run time. The guest only
-    // reads the hint block when built with the feature, so a mismatch desynchronises the input
-    // stream rather than merely losing the optimisation.
-    if lever("HAZYNC_LIFTX_HINT") {
-        features.push("liftx-hint".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_SCALAR_INV_ACCEL");
-    if lever("HAZYNC_SCALAR_INV_ACCEL") {
-        features.push("scalar-inv-accel".to_string());
-    }
-
-    // libzync experiment: batch ECDSA verification. Host side is runtime-gated on the same variable.
-    println!("cargo:rerun-if-env-changed=HAZYNC_BATCH_ECDSA");
-    if lever("HAZYNC_BATCH_ECDSA") {
-        features.push("batch-ecdsa".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_FAST_COMMIT");
-    if lever("HAZYNC_FAST_COMMIT") {
-        features.push("fast-commit".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_SWIFTSYNC");
-    if lever("HAZYNC_SWIFTSYNC") {
-        features.push("swiftsync".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_TX_ONCE");
-    if lever("HAZYNC_TX_ONCE") {
-        features.push("tx-once".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_AGG_LITE");
-    if lever("HAZYNC_AGG_LITE") {
-        features.push("agg-lite".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_TX_CYCLES");
-    if lever("HAZYNC_TX_CYCLES") {
-        features.push("tx-cycles".to_string());
-    }
-    // TEST ONLY (hazync#794): fill every block the C heap frees or recycles with a pattern, so a read of freed or
-    // uninitialised C-heap memory changes a verdict or a journal instead of reading what the bump allocator left there.
-    println!("cargo:rerun-if-env-changed=HAZYNC_HEAP_POISON");
-    if lever("HAZYNC_HEAP_POISON") {
-        assert!(libzync, "HAZYNC_HEAP_POISON needs HAZYNC_LIBZYNC (only the libzync guest recycles C-heap blocks)");
-        features.push("heap-poison".to_string());
-    }
-    if libzync {
-        features.push(LIBZYNC_FEATURE.to_string());
-    }
-    if signet {
-        features.push("signet".to_string());
-    }
-    if regtest {
-        features.push("regtest".to_string());
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_COINLOG");
+    let network = if signet { "signet" } else if regtest { "regtest" } else { "mainnet" };
     let coinlog = lever("HAZYNC_COINLOG");
     assert!(!coinlog || libzync, "HAZYNC_COINLOG needs HAZYNC_LIBZYNC");
-    // design B (the SwiftSync forest + hints file) was removed in E2c: a libzync guest keeps its coins in the coin log
     assert!(!libzync || coinlog, "a libzync guest needs the coin log (HAZYNC_COINLOG must not be 0)");
-    if coinlog {
-        features.push("coinlog".to_string());
+    for env_name in ["HAZYNC_TRIE", "HAZYNC_UTXOHASH"] {
+        assert!(!lever(env_name) || coinlog, "{env_name} needs HAZYNC_COINLOG");
     }
-    // The product's state on top of the coin log: the counting trie and the live-coin hash (both in the libzync profile).
-    for (env_name, feat) in [("HAZYNC_TRIE", "trie"), ("HAZYNC_UTXOHASH", "utxohash")] {
-        println!("cargo:rerun-if-env-changed={env_name}");
-        if lever(env_name) {
-            assert!(coinlog, "{env_name} needs HAZYNC_COINLOG");
-            features.push(feat.to_string());
-        }
-    }
-    println!("cargo:rerun-if-env-changed=HAZYNC_TXLOG");
     let txlog = lever("HAZYNC_TXLOG");
     assert!(!txlog || libzync, "HAZYNC_TXLOG needs HAZYNC_LIBZYNC");
-    if txlog {
-        features.push("txlog".to_string());
-    }
-    if test_lineage {
-        assert!(coinlog && network == "mainnet", "HAZYNC_TEST_LINEAGE is the mainnet coin-log image's test variant");
-        features.push("test-lineage".to_string());
-    }
+    let test_lineage = std::env::var("HAZYNC_TEST_LINEAGE").as_deref() == Ok("1");
+    assert!(!test_lineage || (coinlog && network == "mainnet"), "HAZYNC_TEST_LINEAGE is the mainnet coin-log image's test variant");
     write_profile(libzync, assumevalid, network, coinlog, txlog, test_lineage);
-    if !features.is_empty() {
-        use std::collections::HashMap;
-        // GuestOptions is #[non_exhaustive], so it cannot be built with a struct expression from
-        // outside risc0-build; default-then-assign is the supported shape.
-        let mut guest = risc0_build::GuestOptions::default();
-        guest.features = features;
-        let mut opts = HashMap::new();
-        opts.insert("method", guest);
-        risc0_build::embed_methods_with_options(opts);
-        return;
-    }
-
-    risc0_build::embed_methods();
-}
-
-/// Emit `methods.rs` from an ELF built elsewhere, refusing anything but the canonical guest.
-fn embed_prebuilt_guest(elf_path: &str, pin_dir: Option<&str>) {
-    use std::path::Path;
-
-    println!("cargo:rerun-if-changed={elf_path}");
-    let elf = std::fs::read(elf_path)
-        .unwrap_or_else(|e| panic!("HAZYNC_GUEST_ELF={elf_path}: cannot read it: {e}"));
-    if elf.is_empty() {
-        panic!("HAZYNC_GUEST_ELF={elf_path}: the file is empty");
-    }
-    // ⚠ The pin lives at the repo root, two levels above this crate. Read it rather than hardcoding
-    // the id here: one place to change, and it is the same file CI asserts against.
-    let pin_root = match pin_dir {
-        Some(d) => Path::new(d).to_path_buf(),
-        None => Path::new(env!("CARGO_MANIFEST_DIR")).join("../../reproduce"),
-    };
-    let pin_path = pin_root.join("METHOD_ID");
-    println!("cargo:rerun-if-changed={}", pin_path.display());
-    let pin_src = std::fs::read_to_string(&pin_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", pin_path.display()));
-    let want = pin_src
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.starts_with('#'))
-        .unwrap_or_else(|| panic!("{} has no id line", pin_path.display()));
-
-    // ⛔⛔ THE GUEST IS NOW VERIFIED BY ITS SHA256, NOT BY RECOMPUTING ITS IMAGE ID, AND THAT IS
-    // WHAT MAKES WINDOWS POSSIBLE. `risc0-binfmt` -- the crate that computes an image id -- pulls
-    // in `risc0-zkvm-platform`, whose GUEST-side syscall `sys_alloc_aligned` is an unresolved
-    // external when MSVC's link.exe links this build script. Measured on windows-latest,
-    // run 36824751222:
-    //
-    //     librisc0_zkvm_platform.rlib : error LNK2019: unresolved external symbol sys_alloc_aligned
-    //     build_script_build.exe : fatal error LNK1120: 1 unresolved externals
-    //
-    // A sha256 is a STRICTER pin than an image id, not a weaker one: an id is computed over the
-    // loaded image, so two ELFs differing in debug info could share one, while only one byte
-    // sequence has a given sha256.
-    let sha_path = pin_root.join("GUEST_ELF_SHA256");
-    println!("cargo:rerun-if-changed={}", sha_path.display());
-    let sha_src = std::fs::read_to_string(&sha_path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", sha_path.display()));
-    let want_sha = sha_src
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty() && !l.starts_with('#'))
-        .unwrap_or_else(|| panic!("{} has no hash line", sha_path.display()));
-    let got_sha = sha256_hex(&elf);
-    if got_sha != want_sha {
-        panic!(
-            "HAZYNC_GUEST_ELF={elf_path} is NOT the canonical guest.\n       its sha256 : {got_sha}\n  canonical sha : {want_sha}\n       Build the guest with reproduce/Dockerfile and pass that ELF, or unset\n       HAZYNC_GUEST_ELF to build from source."
-        );
-    }
-
-    // ⚠ AND WHERE THE TOOLING LINKS, THE TWO PINS ARE CHECKED AGAINST EACH OTHER. The id below is
-    // taken FROM the pin rather than derived from the ELF, so a METHOD_ID updated without its
-    // GUEST_ELF_SHA256 would otherwise embed an id the bytes do not have. On every non-MSVC host
-    // this recomputes the id and refuses a mismatch, and `reproducible-image-id` runs it on every
-    // push. ⛔ On MSVC that cross-check is absent and the pin PAIR is trusted; it is verified
-    // continuously elsewhere, and this says so rather than implying otherwise.
-    verify_image_id(&elf, want, elf_path);
-
-    let words = id_words_from_hex(want, &pin_path.display().to_string());
-    let ids = words.iter().map(|w| w.to_string()).collect::<Vec<_>>().join(", ");
-    let abs = std::fs::canonicalize(elf_path)
-        .unwrap_or_else(|e| panic!("cannot resolve {elf_path}: {e}"));
-    let out = Path::new(&std::env::var("OUT_DIR").expect("OUT_DIR")).join("methods.rs");
-    std::fs::write(
-        &out,
-        format!(
-            "pub const METHOD_ELF: &[u8] = include_bytes!({:?});\n\
-             pub const METHOD_PATH: &str = {:?};\n\
-             pub const METHOD_ID: [u32; 8] = [{}];\n",
-            abs, abs.to_string_lossy(), ids
-        ),
-    )
-    .unwrap_or_else(|e| panic!("cannot write {}: {e}", out.display()));
-
-    println!(
-        "cargo:warning=methods: embedded the prebuilt canonical guest from {elf_path} \
-         (sha256 {got_sha}, id {want})"
-    );
-}
-
-/// sha256 as lowercase hex. ⚠ Deliberately `sha2` and not `risc0-binfmt`: it is pure Rust with no
-/// guest-side symbols, so it links on every host including MSVC.
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// A 64-hex image id as risc0's `[u32; 8]`.
-///
-/// ⚠ LITTLE-ENDIAN, and verified against a real recorded pair rather than assumed: this box's
-/// non-canonical guest reports `fb4d7352f9f0...` and the `methods.rs` generated from it holds
-/// `[1383288315, ...]`, and 1383288315 == 0x52734DFB == the bytes `fb 4d 73 52` read little-endian.
-/// Big-endian gives `52734dfb...`, which is the same bytes in the wrong order.
-fn id_words_from_hex(hex: &str, whence: &str) -> [u32; 8] {
-    if hex.len() != 64 || !hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-        panic!("{whence}: {hex:?} is not a 64-character hex image id");
-    }
-    let mut out = [0u32; 8];
-    for (i, w) in out.iter_mut().enumerate() {
-        let mut b = [0u8; 4];
-        for (j, byte) in b.iter_mut().enumerate() {
-            let at = (i * 4 + j) * 2;
-            *byte = u8::from_str_radix(&hex[at..at + 2], 16).expect("hex pair");
-        }
-        *w = u32::from_le_bytes(b);
-    }
-    out
-}
-
-/// Recompute the ELF's image id and refuse a mismatch — where `risc0-binfmt` can be linked.
-#[cfg(not(target_env = "msvc"))]
-fn verify_image_id(elf: &[u8], want: &str, elf_path: &str) {
-    let digest = risc0_binfmt::compute_image_id(elf)
-        .unwrap_or_else(|e| panic!("HAZYNC_GUEST_ELF={elf_path}: not a usable guest ELF: {e}"));
-    let got: String = digest.as_bytes().iter().map(|b| format!("{b:02x}")).collect();
-    if got != want {
-        panic!(
-            "HAZYNC_GUEST_ELF={elf_path}: its sha256 matches the pin but its IMAGE ID does not.\n  \
-             id from the ELF : {got}\n  reproduce/METHOD_ID : {want}\n  \
-             The two pins have drifted — one was updated without the other."
-        );
-    }
-}
-
-/// ⛔ MSVC cannot link `risc0-binfmt` (see embed_prebuilt_guest). The sha256 check still holds the
-/// guest to an exact byte sequence; what is missing is the cross-check that the pinned id belongs
-/// to those bytes, and that runs on every non-MSVC build and in CI.
-#[cfg(target_env = "msvc")]
-fn verify_image_id(_elf: &[u8], want: &str, _elf_path: &str) {
-    println!(
-        "cargo:warning=MSVC host: the guest was verified by sha256 and METHOD_ID {want} was taken \
-         from reproduce/METHOD_ID without being recomputed (risc0-binfmt does not link here). The \
-         pin pair is cross-checked on every non-MSVC build."
-    );
 }
