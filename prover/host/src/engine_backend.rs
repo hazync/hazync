@@ -36,6 +36,24 @@ pub(crate) fn active() -> bool {
     std::env::var("HAZYNC_ENGINE").is_ok()
 }
 
+/// The engine's DEV MODE (HAZYNC_ENGINE_DEV=1), the counterpart of RISC Zero's RISC0_DEV_MODE for test harnesses (the
+/// core-rules rig, CUTOVER C8): every "proof" is an execution, nothing is proved. Allowed only with a METERING image
+/// (a keys dir holding BENCH_NOVERIFY: the guest feature bench-noverify, whose env::verify accepts a child without a
+/// proof), so the guest's own checks all run while its in-guest verification is skipped, and nothing it makes can pass
+/// as a proof: no proof file exists, and a metering image's public values are tagged (engine.rs bench_pvs), so no
+/// reader accepts any proof of it either. A dev "proof" is its journal and a P.proof.json saying it is none.
+pub(crate) fn dev() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| {
+        if std::env::var("HAZYNC_ENGINE_DEV").ok().as_deref() != Some("1") { return false; }
+        let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_DEV=1 needs HAZYNC_ENGINE_KEYS");
+        assert!(Path::new(&keys).join("BENCH_NOVERIFY").exists(),
+                "HAZYNC_ENGINE_DEV=1 runs only a METERING image (a keys dir with BENCH_NOVERIFY, guest feature bench-noverify); {keys} is not one");
+        println!("  engine: DEV MODE (HAZYNC_ENGINE_DEV=1, metering image {keys}): executions only, nothing is proved");
+        true
+    })
+}
+
 fn start(work: &str, gpu: Option<usize>, tag: &str) -> Engine {
     let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
     let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS: the engine's key directory");
@@ -180,6 +198,8 @@ impl Engine {
 
     /// `dry`: a collect run that skips in-guest verification (takes no proofs) and can never commit.
     pub(crate) fn execute_ex(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool, dry: bool) -> Exec {
+        // dev mode: the children are dev "proofs" (journals only); the metering guest's env::verify takes none
+        let children: &[&EngineProof] = if dev() { &[] } else { children };
         let input = self.file(name, "in");
         std::fs::write(&input, stream).unwrap();
         let (log, journal) = (input.with_extension("log"), input.with_extension("journal"));
@@ -234,6 +254,18 @@ impl Engine {
     /// `known`: the journal an execution of this same stream committed; the engine then skips its own execute pass
     /// and checks the proof against it.
     pub(crate) fn prove_known(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool, known: Option<&[u8]>) -> EngineProof {
+        if dev() {
+            // an execution in place of the proof: its journal, and a P.proof.json that says it is none
+            let x = self.execute_ex(name, stream, children, self_id, false);
+            let journal = x.journal.unwrap_or_else(|| panic!("engine dev: {name} ended with exit {:?}, no journal", x.exit));
+            if let Some(k) = known { assert_eq!(k, &journal[..], "engine dev: {name}: the execution's journal is not the known one"); }
+            self.seq += 1;
+            let out = self.work.join(format!("{:05}_{name}", self.seq));
+            std::fs::write(with_ext(&out, "journal"), &journal).unwrap();
+            std::fs::write(with_ext(&out, "proof.json"), "\"HAZYNC_ENGINE_DEV: an execution, not a proof\"\n").unwrap();
+            println!("  engine: {name} EXECUTED (dev mode: no proof)");
+            return EngineProof { path: out, journal };
+        }
         let input = self.file(name, "in");
         std::fs::write(&input, stream).unwrap();
         let out = input.with_extension("");

@@ -46,6 +46,10 @@ pub(crate) fn test_merkle_cmd() {
 /// case runs on hints and the batch check. honest (R = u1*G + u2*Q): must still agree with Core exactly. forged (every
 /// verify claimed VALID with an R that passes the per-signature check): no case Core rejects may pass; a case Core
 /// accepts may fail (a lying host only costs liveness), counted apart.
+/// On the ENGINE (HAZYNC_ENGINE + HAZYNC_ENGINE_KEYS = the core image's keys; CUTOVER C8): every execution runs on
+/// `hzengine serve` instead of RISC Zero's executor, the same input words, the guest's log read from the engine's log
+/// file (the collect run's CVCASE / batch records); the comparison with Core's expectation is the same code. Work files
+/// under HAZYNC_CV_WORK (default ./cv-work).
 pub(crate) fn core_vectors_cmd(args: &[String]) {
     #[derive(Deserialize)]
     struct Case { kind: u32, tx: String, prevouts: String, input: u32, flags: u32, label: String,
@@ -69,9 +73,29 @@ pub(crate) fn core_vectors_cmd(args: &[String]) {
     const UNKNOWN_ERROR: i32 = -2;
     // The guest image, decoded once: each execution from the ELF re-decoded it, ~7 s a run, which was the whole cost of
     // a batch rerun case by case.
-    let image = risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image");
-    // One guest execution of mode 10: (codes, cycles, the guest's log).
+    let engine = crate::engine_backend::active();
+    let work = std::env::var("HAZYNC_CV_WORK").unwrap_or_else(|_| "cv-work".into());
+    let image = if engine { None } else { Some(risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image")) };
+    if engine { println!("core-vectors on the ENGINE: {} with keys {}", std::env::var("HAZYNC_ENGINE").unwrap(), std::env::var("HAZYNC_ENGINE_KEYS").unwrap_or_default()); }
+    // One guest execution of mode 10: (codes, cycles, the guest's log). The engine reports no cycles (0).
     let exec = |chunk: &[Case], mode: u32, hints: &[Vec<u8>]| -> Option<(Vec<i32>, u64, String)> {
+        if engine {
+            use crate::sink::Sink;
+            let mut st = crate::sink::Stream::default();
+            st.write(&10u32);
+            st.write(&(chunk.len() as u32));
+            for (k, c) in chunk.iter().enumerate() {
+                let h = hints.get(k).cloned().unwrap_or_default();
+                st.write(&(c.kind, unhex(&c.tx), unhex(&c.prevouts), c.input, c.flags, mode, h));
+            }
+            let x = crate::engine_backend::with(&work, |e| e.try_execute("cv", &st.0)).ok()?;
+            let j = x.journal?;
+            let w: Vec<u32> = j.chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).collect();
+            let got: Vec<i32> = hazync_journal::serde::from_slice(&w).expect("mode 10 journal");
+            assert_eq!(got.len(), chunk.len());
+            return Some((got, 0, x.log));
+        }
+        let image = image.as_ref().unwrap();
         let mut log = Vec::new();
         let s = {
             let mut b = ExecutorEnv::builder();
