@@ -960,7 +960,7 @@ class RunPod:
                 "env": {"PUBLIC_KEY": ssh_pubkey}}
         return self._req("POST", "/pods", body)
 
-    def _deploy_first(self, name, ssh_pubkey, gpu_types, ports, disk_gb=40):
+    def _deploy_first(self, name, ssh_pubkey, gpu_types, ports, disk_gb=40, gpu_count=1):
         """Walk gpu_types in order: (v2 pod, type) for the first RunPod placed. None when RunPod answered and no
         type had capacity. RunPodError when RunPod refused the request: that is not a capacity miss, and
         treating it as one hid a Cloudflare 403 behind "no GPU capacity" on the first trial.
@@ -979,7 +979,7 @@ class RunPod:
         self.last_misses = misses
         for gt in gpu_types:
             try:
-                p = self.create_pod(name, gt, ssh_pubkey, ports=ports, disk_gb=disk_gb)
+                p = self.create_pod(name, gt, ssh_pubkey, ports=ports, disk_gb=disk_gb, gpu_count=gpu_count)
                 answered = True
             except RunPodError as e:
                 if e.status in REQUEST_REFUSALS or (e.status == 403 and not e.problem):
@@ -995,10 +995,10 @@ class RunPod:
             raise refused
         return None
 
-    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES):
-        """One on-demand 1-GPU pod, trying each GPU type in turn. None when RunPod answered and no type had
-        capacity. RunPodError when RunPod refused the request for every type."""
-        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp",))
+    def deploy(self, name, ssh_pubkey, gpu_types=GPU_TYPES, gpu_count=1, disk_gb=40):
+        """One on-demand pod of `gpu_count` GPUs (1 for the bot), trying each GPU type in turn. None when RunPod
+        answered and no type had capacity. RunPodError when RunPod refused the request for every type."""
+        got = self._deploy_first(name, ssh_pubkey, gpu_types, ("22/tcp",), disk_gb=disk_gb, gpu_count=gpu_count)
         if not got:
             return None
         p, gt = got

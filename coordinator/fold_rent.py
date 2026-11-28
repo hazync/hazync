@@ -80,6 +80,31 @@ def seconds_for_budget(budget_usd, cost_per_hr):
 # is all a sponsorship needs. A CPU-vs-GPU comparison has to fetch the other one itself -- and
 # VERIFY it, because an unverified prover produces proofs the coordinator will reject and we would
 # be measuring the speed of being wrong.
+# ⛔ ON THE ENGINE (sb.ENGINE, HAZYNC_SPONSOR_ENGINE=1) THE PROVER IS hzengine, DRIVEN BY THE CPU PRODUCT HOST. The pod's
+# boot (sponsor_bot BOOT_SH_ENGINE) fetches the CUDA hzengine and the core keys and writes engine.env; the CPU phase of a
+# comparison fetches the CPU hzengine (hazync-engine-x86_64-linux-gnu), VERIFIED against the signed manifest like the
+# RISC Zero CPU host below, and swaps it in for that phase only. The driver host is the same in both phases.
+CPU_FETCH_ENGINE = """
+if [ ! -s hazync-engine-cpu ]; then
+  curl -fsSL -o SHA256SUMS.txt https://github.com/hazync/hazync/releases/download/{rel}/SHA256SUMS.txt
+  curl -fsSL -o hazync-engine-x86_64-linux-gnu https://github.com/hazync/hazync/releases/download/{rel}/hazync-engine-x86_64-linux-gnu
+  grep ' hazync-engine-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c - || {{ echo CPU_SHA_BAD; exit 1; }}
+  chmod +x hazync-engine-x86_64-linux-gnu && ln -sf hazync-engine-x86_64-linux-gnu hazync-engine-cpu
+  echo CPU_SHA_OK
+fi
+"""
+
+
+def engine(flag=None):
+    """Whether this run's pods are engine pods (sponsor_bot's HAZYNC_SPONSOR_ENGINE)."""
+    return sb.ENGINE if flag is None else flag
+
+
+def env_line(engine_=None):
+    """The line that loads the pod's engine settings (HAZYNC_ENGINE, _KEYS, the CUDA 12.9 runtime): empty on RISC Zero."""
+    return ". /workspace/engine.env" if engine(engine_) else ""
+
+
 CPU_FETCH = """
 if [ ! -s hazync-host-cpu ]; then
   curl -fsSL -o SHA256SUMS.txt https://github.com/hazync/hazync/releases/download/{rel}/SHA256SUMS.txt
@@ -91,15 +116,16 @@ fi
 """
 
 
-def fold_phase(identity_tag, seconds, host, label):
-    """One timed folding phase against one prover binary."""
+def fold_phase(identity_tag, seconds, host, label, prefix=""):
+    """One timed folding phase against one prover binary. `prefix`: environment for this phase only (the engine's
+    CPU phase points HAZYNC_ENGINE at the CPU hzengine)."""
     return "\n".join([
         f'echo "PHASE {label} start $(date -u +%FT%TZ)"',
         f"end=$(( $(date +%s) + {int(seconds)} ))",
         "n=0",
         'while [ "$(date +%s)" -lt "$end" ]; do',
         "  n=$((n+1))",
-        f"  HAZYNC_HOME=/root/.hazync-ids/{identity_tag} BUNDLE_DIR=/workspace/bundles "
+        f"  {prefix}HAZYNC_HOME=/root/.hazync-ids/{identity_tag} BUNDLE_DIR=/workspace/bundles "
         f"WITNESS_DIR=/workspace/witnesses HAZYNC_HOST=/workspace/{host} "
         "./hazync-worker fold; rc=$?",
         f'  echo "FOLD {label} $n rc=$rc $(date -u +%FT%TZ)"',
@@ -109,9 +135,18 @@ def fold_phase(identity_tag, seconds, host, label):
     ])
 
 
-def compare_script(identity_tag, seconds_each, release):
+def compare_script(identity_tag, seconds_each, release, engine_=None):
     """⭐ BOTH PROVERS, SAME MACHINE, SAME QUEUE, BACK TO BACK. Comparing a GPU on a rented pod with
     a CPU on someone's laptop would measure the two machines, not the two code paths."""
+    if engine(engine_):
+        return "\n".join([
+            "#!/bin/bash", "cd /workspace", env_line(True),
+            CPU_FETCH_ENGINE.format(rel=release),
+            fold_phase(identity_tag, seconds_each, "hazync-host", "CUDA"),
+            fold_phase(identity_tag, seconds_each, "hazync-host", "CPU",
+                       prefix="HAZYNC_ENGINE=/workspace/hazync-engine-cpu "),
+            "echo ALLDONE",
+        ]) + "\n"
     return "\n".join([
         "#!/bin/bash", "cd /workspace",
         CPU_FETCH.format(rel=release),
@@ -121,7 +156,7 @@ def compare_script(identity_tag, seconds_each, release):
     ]) + "\n"
 
 
-def fold_script(identity_tag, max_seconds):
+def fold_script(identity_tag, max_seconds, engine_=None):
     """The bash the pod runs: fold until the clock runs out, one line per attempt.
 
     ⚠ `hazync-worker fold` asks the coordinator for work and exits; it does not loop. So the loop is
@@ -131,12 +166,13 @@ def fold_script(identity_tag, max_seconds):
     return "\n".join([
         "#!/bin/bash",
         "cd /workspace",
+        env_line(engine_),
         f"end=$(( $(date +%s) + {int(max_seconds)} ))",
         "n=0",
         'while [ "$(date +%s)" -lt "$end" ]; do',
         "  n=$((n+1))",
         f"  HAZYNC_HOME=/root/.hazync-ids/{identity_tag} BUNDLE_DIR=/workspace/bundles "
-        "WITNESS_DIR=/workspace/witnesses HAZYNC_HOST=/workspace/hazync-host-cuda "
+        f"WITNESS_DIR=/workspace/witnesses HAZYNC_HOST={sb.pod_host(engine(engine_))} "
         "./hazync-worker fold; rc=$?",
         '  echo "FOLD $n rc=$rc $(date -u +%FT%TZ)"',
         # ⚠ A coordinator with no claimable fold work answers immediately and forever. Backing off
@@ -245,6 +281,21 @@ def cmd_selftest(a):
     check(summarise(log, "CUDA") == (2, 2), "the CUDA phase is counted alone")
     check(summarise(log, "CPU") == (1, 1), "⚠ and the CPU phase separately, never averaged together")
     check(summarise(log) == (3, 3), "unlabelled still totals both")
+
+    # 7. the engine pods (HAZYNC_SPONSOR_ENGINE=1): the CPU product host drives hzengine, under engine.env
+    es = fold_script("tag", 600, engine_=True)
+    check(". /workspace/engine.env" in es, "an engine fold loads engine.env (HAZYNC_ENGINE, the keys, CUDA 12.9)")
+    check("HAZYNC_HOST=/workspace/hazync-host " in es and "hazync-host-cuda" not in es,
+          "⛔ an engine fold drives the CPU product host, never the RISC Zero CUDA host")
+    check("engine.env" not in fold_script("tag", 600, engine_=False), "a RISC Zero fold is unchanged")
+    ec = compare_script("tag", 300, "v1.0.0", engine_=True)
+    check("hazync-host-cuda" not in ec and "hazync-engine-x86_64-linux-gnu" in ec,
+          "the engine comparison fetches the CPU hzengine, not the RISC Zero CPU host")
+    check("grep ' hazync-engine-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c -" in ec,
+          "⛔ the CPU hzengine is sha256-verified against the manifest before use")
+    check("HAZYNC_ENGINE=/workspace/hazync-engine-cpu " in ec.split("PHASE CPU start")[1]
+          and "HAZYNC_ENGINE=/workspace/hazync-engine-cpu" not in ec.split("PHASE CPU start")[0],
+          "the CPU hzengine is swapped in for the CPU phase only")
 
     print()
     if fails:

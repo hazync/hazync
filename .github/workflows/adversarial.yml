@@ -1339,13 +1339,23 @@ jobs:
       - name: Sponsor bot engine pods POSITIVE CONTROL (the RISC Zero boot on an engine pod — must FAIL)
         run: |
           cd coordinator
-          python3 test_sponsor_engine.py --control
+          if python3 test_sponsor_engine.py --control; then echo "the control passed: the test cannot fail"; exit 1; fi
       - name: Worker on an engine host (test_worker_engine.py)
         run: cd coordinator && python3 test_worker_engine.py
       - name: Worker on an engine host POSITIVE CONTROL (must FAIL)
         run: |
           cd coordinator
           if python3 test_worker_engine.py --control; then echo "the control passed: the test cannot fail"; exit 1; fi
+      # The tip path on the engine (ROADMAP 3.1, coordinator/tip_engine.py): one multi-GPU pod, simulated, proves
+      # bundles in height order (never skipping), checks each proof under the pinned key, harvests before releasing.
+      - name: Engine tip runner on a simulated pod (test_tip_engine.py)
+        run: cd coordinator && python3 test_tip_engine.py
+      - name: Engine tip runner POSITIVE CONTROL (highest-wins, no engine.env, no harvest — must FAIL)
+        run: |
+          cd coordinator
+          if python3 test_tip_engine.py --control; then echo "the control passed: the test cannot fail"; exit 1; fi
+      - name: Fold rental selftest incl. engine pods (fold_rent.py selftest)
+        run: cd coordinator && python3 fold_rent.py selftest
       - name: Sponsorship holds (test_sponsor_holds.py)
         run: cd coordinator && python3 test_sponsor_holds.py
       - name: Sponsorship holds POSITIVE CONTROL (must FAIL)

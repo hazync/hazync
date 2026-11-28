@@ -142,8 +142,9 @@ class SSHRunner:
             return False
         return p.returncode == 0
 
-    def kill_provers(self, card, timeout=PROBE_TIMEOUT_S):
-        """Stop everything proving on this card.
+    def kill_provers(self, card, timeout=PROBE_TIMEOUT_S, engine=False):
+        """Stop everything proving on this card. `engine`: an engine pod (tip_engine.py), whose provers are hzengine
+        and the CPU product host that drives it, not hazync-host-cuda.
 
         ⛔ THE PATTERN MUST NEVER APPEAR IN THE COMMAND LINE, AND A HEREDOC IS NOT ENOUGH. `pgrep -f`
         matches the FULL command line of every process, including the remote shell that is carrying the
@@ -155,11 +156,8 @@ class SSHRunner:
         So the script is carried as BASE64 and decoded on the far side. The argv holds only the encoded
         blob, which matches nothing, and the pattern exists solely inside a file.
         """
-        script = (
-            "for p in $(pgrep -f pod-prove); do kill -9 $p 2>/dev/null; done\n"
-            "for p in $(pgrep -f hazync-host-cuda); do kill -9 $p 2>/dev/null; done\n"
-            "echo KILLED\n"
-        )
+        names = ("pod-prove", "hzengine", "hazync-engine", "hazync-host") if engine else ("pod-prove", "hazync-host-cuda")
+        script = "".join(f"for p in $(pgrep -f {n}); do kill -9 $p 2>/dev/null; done\n" for n in names) + "echo KILLED\n"
         blob = base64.b64encode(script.encode()).decode()
         body = f"echo {blob} | base64 -d > /tmp/hzkill.sh && sh /tmp/hzkill.sh; rm -f /tmp/hzkill.sh"
         out = self.run(card, body, timeout=timeout)
