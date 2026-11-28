@@ -1,0 +1,76 @@
+--- sb/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu	2026-11-28 12:25:17.124247149 +0000
++++ sbfix/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu	2026-11-28 13:06:13.854219516 +0000
+@@ -174,6 +174,49 @@
+     }
+ }
+ 
++// Hazync patch (28.11.2026): the apply_alpha + virtual first-layer branch of frac_build_tree_layer_kernel reads
++// layer[parent_start], layer[parent_start + 1] (parent_start = bit-reversed idx * 2) and writes layer[idx] (and a right
++// leaf) IN PLACE, ordered only by __syncthreads(), which orders one block. Upstream runs it only for <= 1024 leaves
++// (one block); the unfused path taken where the fused bitrev kernel cannot run (Pascal: no 64 KB of shared memory)
++// runs it on millions of leaves across many blocks, where one block can overwrite a slot another has not read yet
++// (the GTX 1080 Ti's NonzeroRootSum). This variant reads every input from a snapshot `src` of the dense layer: the
++// same values the single-block run reads, whatever the block order.
++__global__ void frac_build_tree_layer0_virtual_kernel(
++    FracExt *__restrict__ layer,
++    const FracExt *__restrict__ src,
++    uint32_t half,
++    uint32_t real_len,
++    uint32_t logical_len,
++    FpExt alpha
++) {
++    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
++    if (idx >= half) {
++        return;
++    }
++    const uint32_t parent_active_size = half;
++    const uint32_t parent_start = rev_len(idx, lg_pow2(parent_active_size)) << 1;
++    FracExt lhs_val = FracExt::zero();
++    FracExt rhs_val = FracExt::zero();
++    FracExt rhs_leaf = FracExt::zero();
++    bool has_rhs_leaf = false;
++    if (parent_start < real_len) {
++        lhs_val = src[parent_start];
++    }
++    if (parent_start + 1 < real_len) {
++        rhs_val = src[parent_start + 1];
++        rhs_leaf = rhs_val;
++        has_rhs_leaf = true;
++    }
++    lhs_val.q += alpha;
++    rhs_val.q += alpha;
++    frac_add_inplace(lhs_val, rhs_val);
++    virtual_node_store(layer, idx, parent_active_size, real_len, logical_len, lhs_val);
++    if (has_rhs_leaf) {
++        rhs_leaf.q += alpha;
++        virtual_node_store(layer, idx + half, logical_len, real_len, logical_len, rhs_leaf);
++    }
++}
++
+ // Reconstruct eq weight from sqrt-decomposed buffers.
+ // See docs/cuda-backend/gkr-prover.md § "Eq buffer sqrt decomposition".
+ __device__ __forceinline__ FpExt sqrt_buffer_get(
+@@ -1241,6 +1284,23 @@
+     assert(layer_size % 2 == 0);
+     layer_size /= 2;
+ 
++    // Hazync patch: the racy in-place branch (see frac_build_tree_layer0_virtual_kernel) reads from a snapshot.
++    if (apply_alpha && !revert && real_len < logical_len && (layer_size << 1) == logical_len) {
++        FracExt *src = nullptr;
++        cudaError_t e = cudaMalloc((void **)&src, real_len * sizeof(FracExt));
++        if (e != cudaSuccess) return e;
++        e = cudaMemcpyAsync(src, layer, real_len * sizeof(FracExt), cudaMemcpyDeviceToDevice, stream);
++        if (e == cudaSuccess) {
++            auto [grid, block] = kernel_launch_params(layer_size);
++            frac_build_tree_layer0_virtual_kernel<<<grid, block, 0, stream>>>(
++                layer, src, (uint32_t)layer_size, (uint32_t)real_len, (uint32_t)logical_len, alpha);
++            e = CHECK_KERNEL();
++        }
++        cudaError_t s = cudaStreamSynchronize(stream);
++        cudaFree(src);
++        return e != cudaSuccess ? e : s;
++    }
++
+     return DISPATCH_BOOL_PAIR(
+         launch_frac_build_tree_layer,
+         revert,

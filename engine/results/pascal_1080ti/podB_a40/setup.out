@@ -1,0 +1,9 @@
+NVIDIA A40, 595.112.07, 46068 MiB, 8.6
+debconf: delaying package configuration, since apt-utils is not installed
+[13:06:55] apt ok
+debconf: delaying package configuration, since apt-utils is not installed
+[13:11:54] cuda 12.9 ok
+[13:12:08] bundle unpacked
+2
+[13:15:25] hzengine cuda built in 197 s
+SETUP_OK

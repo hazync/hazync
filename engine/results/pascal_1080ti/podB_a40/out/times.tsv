@@ -1,0 +1,2 @@
+unfused	force=1	rc=1	verify=1	42s	journal=	Error: segment 0: LogupZerocheck(FractionalSumcheck(NonzeroRootSum { p: BinomialExtensionField { value: [740630362, 626652123, 1057179613, 935022321], _phantom: PhantomData<p3_monty_31::monty_31::Mont
+fused	force=0	rc=143	verify=1	83s	journal=	
