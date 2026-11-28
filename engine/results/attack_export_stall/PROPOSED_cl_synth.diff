@@ -1,0 +1,37 @@
+--- a/prover/host/src/lz.rs	2026-11-28 16:31:20.237859498 +0000
++++ b/prover/host/src/lz.rs	2026-11-28 16:31:20.252570533 +0000
+@@ -2547,14 +2547,30 @@
+         let ((h0, c0), (h1, c1)) = (tc[i - 1], tc[i]);
+         k * (c0 + (c1 - c0) * (x - h0) / (h1 - h0))
+     };
+-    let n = cum(h - 1.0) as u64;
++    // The modelled log must hold every coin the block spends: a block that spends more earlier coins than the counts
++    // file models (an attack block on regtest, or HAZYNC_COINLOG_TXCOUNTS of another network) left fewer positions than
++    // spends, and the probe below then never found a free slot (engine-export of mem_k1140: 859 positions, 24,374
++    // spends, an endless loop on one thread). Grow the model to twice the spends in that case, and say so.
++    let modelled = cum(h - 1.0) as u64;
++    let n = modelled.max(2 * spends.len() as u64);
++    if n != modelled { println!("  coinlog SYNTH: the counts model {modelled} coins, fewer than the block's {} spends: log size {n}", spends.len()); }
+     let rnd = |tag: &[u8], i: u64| -> [u8; 32] { sha256_host(&[tag, &i.to_le_bytes()].concat()) };
+-    let mut taken = std::collections::HashSet::new();
++    // Next free position (union-find with path compression): linear probing is quadratic when many spends start in
++    // the same narrow range (24,374 spends from 13 coin heights: 297M probes); this is near-linear and gives distinct
++    // positions the same way (the first free one at or after the drawn one, wrapping).
++    let mut next: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
++    fn free(next: &mut std::collections::HashMap<u64, u64>, p: u64) -> u64 {
++        let mut r = p;
++        while let Some(&q) = next.get(&r) { r = q; }
++        let mut x = p;
++        while let Some(&q) = next.get(&x) { if q == r { break; } next.insert(x, r); x = q; }
++        r
++    }
+     let positions: Vec<u64> = heights.iter().enumerate().map(|(i, &c)| {
+         let (a, b) = (cum(c - 1.0), cum(c).max(cum(c - 1.0) + 1.0));
+         let u = u64::from_le_bytes(rnd(b"rank", i as u64)[..8].try_into().unwrap()) as f64 / u64::MAX as f64;
+-        let mut p = ((a + u * (b - a)) as u64).min(n - 1);
+-        while !taken.insert(p) { p = (p + 1) % n; }
++        let p = free(&mut next, ((a + u * (b - a)) as u64).min(n - 1));
++        next.insert(p, (p + 1) % n);
+         p
+     }).collect();
+     let mut sorted: Vec<(u64, [u8; 32])> = positions.iter().copied().zip(spends.iter().copied()).collect();
