@@ -417,34 +417,6 @@ jobs:
       - name: Aggregate-CPU POSITIVE CONTROL (rank on CPU always — a weak-link card must win)
         run: cd coordinator && python3 test_agg_cpu.py --control
 
-      - name: The CUDA kernels' host flags are MSVC-aware, and the path in use is UNCHANGED (#631)
-        # ⛔ `-Xcompiler` forwards verbatim to nvcc's HOST compiler, which on Windows is MSVC
-        # cl.exe -- it does not speak -Wno-unused-function or -O3. Everything else the build passes
-        # (-diag-suppress, -std=c++17, -Xptxas -O3, -arch=native) is nvcc's own and portable.
-        # ⛔⛔ THE REAL RISK IS LINUX, NOT WINDOWS. This vendored crate compiles the CUDA kernels
-        # behind every proof on the board. A "portability fix" that quietly re-flags the path in
-        # use, chasing a platform nobody has yet proved on, is the actual damage -- so the check
-        # that matters is that the ELSE branch passes EXACTLY the shipped flags, in order.
-        # ⚠ Nothing here compiles a kernel under MSVC: windows-latest has no GPU, so CI could at
-        # most compile and never prove. Source-level guard, and #631 says so.
-        run: cd coordinator && python3 test_nvcc_flags.py
-      - name: nvcc-flags POSITIVE CONTROL (the unconditional GCC flags — must read as not MSVC-aware)
-        run: cd coordinator && python3 test_nvcc_flags.py --control
-
-      - name: The SHARED kernel builder's host flags are MSVC-aware, Linux UNCHANGED (#631)
-        # ⛔⛔ THE LAYER THE PER-CRATE FIX MISSED. risc0_build_kernel::compile_cuda() is the one
-        # function FIVE crates build their CUDA kernels through, and it appended
-        # `-Xcompiler -Wno-missing-braces,-Wno-unused-function` unconditionally. #632 branched
-        # risc0-circuit-rv32im-sys's OWN flags and the Windows build still died here —
-        #     cl : Command line error D8021 : invalid numeric argument '/Wno-missing-braces'
-        # measured in run 37015079476, compiling risc0-sys's supra/{api,ntt}.cu, a crate nobody
-        # had vendored. A flag added by the shared builder cannot be fixed per crate.
-        # ⛔ And the check that matters most is the LINUX one: every proof on the board is compiled
-        # through this function, so the else arm must pass exactly the old flags in the old order.
-        run: cd coordinator && python3 test_kernel_host_flags.py
-      - name: kernel-host-flags POSITIVE CONTROL (upstream's unconditional flag must FAIL the checks)
-        run: cd coordinator && python3 test_kernel_host_flags.py --control
-
       - name: Aggregate rotation samples CPUs without trading reachability (#567)
         # ⛔⛔ #567 could not be answered by "one fleet run" and never could have been: the aggregate
         # is elected ONCE, above the per-block loop, so every block of a run executes on the SAME
@@ -1578,12 +1550,6 @@ jobs:
         run: python3 scripts/test_release_gpu_gate.py
       - name: GPU gate lifecycle POSITIVE CONTROL (pods no longer terminated — must FAIL)
         run: python3 scripts/test_release_gpu_gate.py --control
-      - name: A vendored header change rebuilds every -sys crate compiled against it, even on a warm target
-        # The root cause of the v0.26.1 crash: vendored sppark's build.rs watched nothing, so a warm target linked
-        # two layouts of stream_t. Real cargo, no nvcc.
-        run: ./scripts/test-build-rerun.sh
-      - name: Header-watch POSITIVE CONTROL (both fixes cut out — must FAIL)
-        run: ./scripts/test-build-rerun.sh --control
       - name: Every Linux release binary runs on glibc 2.34, the hosts' floor (v0.23.0-v0.27.0 verifiers needed 2.39)
         run: ./scripts/test-glibc-floor.sh
       - name: glibc floor POSITIVE CONTROL (version comparison cut out — must FAIL)
@@ -2094,22 +2060,6 @@ jobs:
           grep -q '^import server' coordinator/seam_fuzz.py || { echo "::error::seam_fuzz no longer imports server — server.py has lost its compile coverage"; exit 1; }
           grep -q '^import server' coordinator/parse_fuzz.py || { echo "::error::parse_fuzz no longer imports server — server.py has lost its compile coverage"; exit 1; }
 
-      - name: A prebuilt guest can be embedded, and ONLY the canonical one (hazync#615)
-        # 📏 The guest ELF carries the BUILD MACHINE'S PATHS inside it -- 8 occurrences on one laptop,
-        # all panic/debug strings from dependencies -- so the image id is PATH-DEPENDENT and
-        # reproduce/Dockerfile's fixed WORKDIR is what makes it reproducible. Measured 2026-09-30 from
-        # an unmodified tree with every flag unset: native gives fb4d7352…, the container 37987b85….
-        # ⇒ That, not any toolchain limit, is why there is one supported platform: a native macOS or
-        # Windows host would embed a non-canonical guest and have every proof rejected (exit 78).
-        # ⭐ The guest is platform-INDEPENDENT, so it is built once in the container and every
-        # platform embeds THOSE bytes -- a CI artifact, never a committed or published 70 MB file.
-        # ⛔ The control removes the id comparison and must let a wrong guest through, which is what
-        # the check exists to stop: shipping a program that is not the one proofs attest to.
-        run: ./prover/test-prebuilt-guest.sh
-      - name: Prebuilt-guest POSITIVE CONTROL (id check removed — a wrong guest must be accepted)
-        run: ./prover/test-prebuilt-guest.sh --control
-      - name: Prove-path segment guards (risc0 segment-boundary bug can't recur silently)
-        run: ./prover/check_seg_guards.sh
       - name: Utreexo hash construction agrees across host, guest Rust and guest C++
         # Three implementations of the same hash. A drift means the host builds proofs the guest
         # cannot verify — and only for SOME blocks, because the domain tag only matters once a leaf

@@ -23,7 +23,7 @@ not have, a new directory there, or a module named like a stdlib module is a sou
 
 The heavy set is worked out from the code, not listed by hand where it can be derived:
   * every crate the prover workspace reaches by a Cargo `path =` dependency, transitively (libzync, coinbase-smt,
-    accumulator, swiftsync-verify, zapps/headers, zapps/hints and vendor/* today): their files are image inputs,
+    accumulator, swiftsync-verify, zapps/headers, zapps/hints today; vendor/* until CUTOVER C8): their files are image inputs,
     except files of a NESTED package that is not itself in that set (zapps/hints/cli, …/wasm, …/ffi);
   * every file those crates pull in by a literal relative path: include_str!, include_bytes!, include! and
     #[path = "…"]. Wherever such a target lives (even under a light directory) it is an image input;
@@ -453,8 +453,9 @@ def selftest(tree, control):
     if not control and (c.classify("zapps/headers/src/lib.rs"), c.classify("zapps/headers/src/Cargo.toml")) != ("image", "image"):
         bad.append("zapps/headers/src: lib.rs or a new Cargo.toml there is not an image change")
     if not control:
-        # round-2 MEDIUM-1: include targets of the prover's OWN crates count (prover/host includes reproduce/METHOD_ID)
-        if "reproduce/METHOD_ID" not in c.includes:
+        # round-2 MEDIUM-1: include targets of the prover's OWN crates count. prover/host included reproduce/METHOD_ID
+        # until CUTOVER C8; since then its include outside prover/ is engine/guest/Cargo.toml.in (lz.rs, the OOM pin)
+        if "engine/guest/Cargo.toml.in" not in c.includes:
             bad.append("include targets of the prover's own crates are not scanned")
         # round-2 MEDIUM-2a: every job that needs `changes` or libzync-hosts is one references() is seeded from
         wf = tree.read(WORKFLOW) or ""
