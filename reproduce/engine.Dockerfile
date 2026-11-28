@@ -28,20 +28,24 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CARGO_HOME=/root/.cargo \
     RUSTUP_HOME=/root/.rustup \
     PATH=/root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-RUN S=/etc/apt/sources.list.d/ubuntu.sources \
+# A transient mirror error (snapshot.ubuntu.com once gave a 503 on the build box, 27.11.2026) retries rather than
+# failing the build: apt and every curl download retry 5 times. Retries change no fetched byte (each file is pinned by
+# the snapshot date or a SHA-256 check).
+RUN printf 'Acquire::Retries "5";\n' > /etc/apt/apt.conf.d/80-retries \
+ && S=/etc/apt/sources.list.d/ubuntu.sources \
  && printf 'Types: deb\nURIs: http://archive.ubuntu.com/ubuntu/\nSuites: noble\nComponents: main\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' > $S \
  && apt-get update && apt-get install -y --no-install-recommends ca-certificates \
  && printf 'Types: deb\nURIs: https://snapshot.ubuntu.com/ubuntu/%s/\nSuites: noble noble-updates noble-security\nComponents: main universe\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' "$APT_SNAPSHOT" > $S \
  && apt-get update \
  && apt-get install -y --no-install-recommends gcc g++ libc6-dev make pkg-config git python3 curl xz-utils patch \
  && rm -rf /var/lib/apt/lists/* \
- && curl -sSfo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init" \
+ && curl --retry 5 --retry-all-errors -sSfo /tmp/rustup-init "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/x86_64-unknown-linux-gnu/rustup-init" \
  && echo "$RUSTUP_SHA256  /tmp/rustup-init" | sha256sum -c - \
  && chmod +x /tmp/rustup-init \
  && /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain "$HOST_TOOLCHAIN" \
  && rm /tmp/rustup-init \
  && rustup toolchain install --profile minimal --component rust-src "$GUEST_TOOLCHAIN" \
- && curl -sSfLo /tmp/cpp.tar.xz "$CPP_URL" \
+ && curl --retry 5 --retry-all-errors -sSfLo /tmp/cpp.tar.xz "$CPP_URL" \
  && echo "$CPP_SHA256  /tmp/cpp.tar.xz" | sha256sum -c - \
  && mkdir -p /root/.risc0 && tar -xJf /tmp/cpp.tar.xz -C /root/.risc0 && mv /root/.risc0/riscv32im-linux-x86_64 /root/.risc0/cpp \
  && rm /tmp/cpp.tar.xz
