@@ -48,9 +48,9 @@ case "$1" in
     { echo "HZE1 gpus=$HAZYNC_ENGINE_GPUS h=$h"; cat "leaf_$h.bin"; } > "$HAZYNC_BRIDGE_OUT/range_$h.bin"; exit 0;;
   verify-any)
     f=$2; h=$3
-    if [ -n "$HAZYNC_ENGINE_VK" ]; then
-      [ "$(sha256sum < "$HAZYNC_ENGINE_VK" | cut -c1-64)" = "$HAZYNC_ENGINE_VK_PIN" ] || { echo "not the pinned key"; exit 5; }
-    elif [ -z "$HAZYNC_ENGINE" ]; then echo "no engine key"; exit 5; fi
+    # review R3-6 #4: like the real host on an engine board, no proof is checked without the pinned key
+    [ -n "$HAZYNC_ENGINE_VK" ] && [ -n "$HAZYNC_ENGINE_VK_PIN" ] || { echo "REJECT no HAZYNC_ENGINE_VK / _PIN"; exit 5; }
+    [ "$(sha256sum < "$HAZYNC_ENGINE_VK" | cut -c1-64)" = "$HAZYNC_ENGINE_VK_PIN" ] || { echo "not the pinned key"; exit 5; }
     grep -q "^HZE1 gpus=[0-9]* h=$h$" "$f" && echo "RANGE-OK lo=$h hi=$h fake" || { echo "bad proof"; exit 6; };;
   *) exit 2;;
 esac
@@ -63,12 +63,19 @@ def write_exec(path, body):
     os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
 
 
+POD_KEY = b"the release key"
+POD_PIN = hashlib.sha256(POD_KEY).hexdigest()
+
+
 def make_pod(root):
-    """A simulated pod's /workspace: the fake host, engine.env as the boot writes it, a keys dir."""
+    """A simulated pod's /workspace: the fake host, engine.env as the boot writes it (with the pinned key), a keys dir."""
     os.makedirs(os.path.join(root, "keys-core"), exist_ok=True)
+    with open(os.path.join(root, "keys-core", "vk.bin"), "wb") as f:
+        f.write(POD_KEY)
     write_exec(os.path.join(root, "hazync-host"), FAKE_HOST)
     with open(os.path.join(root, "engine.env"), "w") as f:
-        f.write(f"export HAZYNC_ENGINE={root}/hzengine HAZYNC_ENGINE_KEYS={root}/keys-core\n")
+        f.write(f"export HAZYNC_ENGINE={root}/hzengine HAZYNC_ENGINE_KEYS={root}/keys-core\n"
+                f"export HAZYNC_ENGINE_VK={root}/keys-core/vk.bin HAZYNC_ENGINE_VK_PIN={POD_PIN}\n")
 
 
 class FakePod:
@@ -82,6 +89,7 @@ class FakeRunner:
     it would kill real processes on this machine."""
     def __init__(self, root, events, boot_hook=None):
         self.root, self.events, self.boot_hook, self.ssh_pubkey = root, events, boot_hook, "ssh-ed25519 AAAA test"
+        self.vk_pin = POD_PIN                 # what SshRunner.prepare() pins from the verified release
         self.killed = []
 
     def _opts(self):
@@ -203,6 +211,30 @@ def run_checks():
               "every GPU of the pod is used (HAZYNC_ENGINE_GPUS = the pod's count)")
         check(tip_engine.parse_tipdone("TIPDONE 102 rc=0 verify=0 ok=1 prove_ms=1 verify_ms=1", 101) is None,
               "another block's TIPDONE is not this one's")
+
+        # review R3-6 #4: a pod whose engine.env carries no pinned key never passes a block (the old boot wrote none)
+        podn = os.path.join(tmp, "pod_nokey")
+        make_pod(podn)
+        with open(os.path.join(podn, "engine.env"), "w") as f:
+            f.write(f"export HAZYNC_ENGINE={podn}/hzengine HAZYNC_ENGINE_KEYS={podn}/keys-core\n")
+        with open(os.path.join(podn, "leaf_101.bin"), "wb") as f:
+            f.write(b"bundle101\n")
+        with open(os.path.join(podn, "tip-101.sh"), "w") as f:
+            f.write(tip_engine.block_script(101, 4, podn))
+        rn = subprocess.run(["bash", os.path.join(podn, "tip-101.sh")], capture_output=True, text=True, timeout=60)
+        dn = tip_engine.parse_tipdone(rn.stdout, 101)
+        check(dn is not None and not dn["ok"] and dn["verify"] != 0,
+              "⛔ without HAZYNC_ENGINE_VK / _PIN on the pod the per-block check refuses (no unpinned fallback)")
+        # and a runner whose pinned release key is not the local pin rents nothing
+        rr = FakeRunner(pod, [])
+        rr.vk_pin = "00" * 32
+        try:
+            tip_engine.live_run(args(os.path.join(tmp, "nob")), FakeApi([]), rr, os.path.join(tmp, "run_pin"),
+                                os.path.join(tmp, "vk.bin"), POD_PIN, clock=lambda: 0.0, sleep=lambda s: None,
+                                workdir=pod)
+            check(False, "⛔ a release key that is not HAZYNC_ENGINE_VK_PIN rents nothing")
+        except SystemExit as e:
+            check("nothing was rented" in str(e), "⛔ a release key that is not HAZYNC_ENGINE_VK_PIN rents nothing")
 
         # 3. the kill script
         ks = tip_engine.kill_script(True)

@@ -341,23 +341,46 @@ jobs:
           # exactly one hzengine.exe. What each zAPP verifier embeds is fixed at the freeze: checked then (PENDING).
           REC=../tagtree/reproduce/engine-release.tsv
           [ -s "$REC" ] || { echo "::error::the tag has no reproduce/engine-release.tsv: no engine image is published at this tag"; exit 1; }
+          DUP=$(awk '$1 !~ /^#/ && NF {print $1}' "$REC" | sort | uniq -d | head -1)
+          [ -z "$DUP" ] || { echo "::error::engine-release.tsv names '$DUP' twice"; exit 1; }
           ID=$(awk '$1=="core" && $2=="mainnet" {print $3}' "$REC")
           [[ "$ID" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no core mainnet record in the tag's reproduce/engine-release.tsv"; exit 1; }
           python3 - "$REC" <<'PY'
-          import hashlib, json, sys, tarfile, zipfile
-          recs = {}
+          import glob, hashlib, json, re, sys, tarfile, zipfile
+          # review R3-6 #3 (28.11.2026): the records are read strictly (one line per name, four fields, hex) and the KEY
+          # TARBALLS drive the check, not the records: every hazync-keys-*.tar.gz on the release must have exactly one
+          # record and every record its tarball, so no key tarball is signed unchecked. A tarball's members are read by
+          # their exact names: only the seven key files, each once, regular files, no path (no ./, .., /, links), so
+          # what is checked here is what a user's `tar -x` writes.
+          KEYFILES = {"sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.json", "image.json", "vk.bin"}
+          recs, bad = {}, []
           for line in open(sys.argv[1]):
               p = line.split()
-              if p and not p[0].startswith("#"):
-                  recs[p[0]] = (p[2], p[3])
+              if not p or p[0].startswith("#"):
+                  continue
+              if len(p) != 4 or not re.fullmatch(r"[0-9a-f]{64}", p[2]) or not re.fullmatch(r"[0-9a-f]{64}", p[3]):
+                  print(f"::error::a malformed record in engine-release.tsv: {line.strip()!r}"); sys.exit(1)
+              if p[0] in recs:
+                  print(f"::error::engine-release.tsv names {p[0]!r} twice"); sys.exit(1)
+              recs[p[0]] = (p[2], p[3])
           idh = recs["core"][0]
           raw, hx = bytes.fromhex(idh), idh.encode()
-          bad = []
+          tars = {t[len("hazync-keys-"):-len(".tar.gz")]: t for t in sorted(glob.glob("hazync-keys-*.tar.gz"))}
+          bad += [f"{t} has no record in engine-release.tsv" for n, t in tars.items() if n not in recs]
+          bad += [f"the {n} record has no hazync-keys-{n}.tar.gz on the release" for n in recs if n not in tars]
           for name, (img, pin) in sorted(recs.items()):
-              tn = f"hazync-keys-{name}.tar.gz"
+              tn = tars.get(name)
+              if tn is None:
+                  continue
               try:
-                  with tarfile.open(tn) as t:
-                      files = {m.name.lstrip("./"): m for m in t.getmembers() if m.isfile()}
+                  with tarfile.open(tn, "r:gz") as t:
+                      ms = t.getmembers()
+                      names = [m.name for m in ms]
+                      odd = [m.name for m in ms if not m.isreg() or m.name not in KEYFILES]
+                      if odd or len(names) != len(set(names)) or set(names) != KEYFILES:
+                          bad.append(f"{tn}: members must be exactly the key files, each once, plain names (odd: "
+                                     f"{odd[:3]}, {len(names)} members)"); continue
+                      files = {m.name: m for m in ms}
                       vk = t.extractfile(files["vk.bin"]).read()
                       im = json.loads(t.extractfile(files["image.json"]).read())
               except (OSError, KeyError, ValueError, tarfile.TarError) as e:

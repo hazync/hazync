@@ -154,6 +154,11 @@ jobs:
           fi
           fi
           if gh release download "$tag" -R hazync/hazync -p 'SHA256SUMS.txt' 2>/dev/null; then
+            # review R3-6 #8 (28.11.2026): the manifest counts only when it is SIGNED by the maintainer key pinned in
+            # tools/win-gui/appupdate.py (SECURITY.md) and names this tag; a manifest with no good signature is refused.
+            gh release download "$tag" -R hazync/hazync -p 'SHA256SUMS.txt.asc' \
+              || { echo "::error::$tag has a SHA256SUMS.txt but no SHA256SUMS.txt.asc"; exit 1; }
+            python ../tools/win-gui/verify_manifest.py "$tag" SHA256SUMS.txt SHA256SUMS.txt.asc || exit 1
             for f in $files; do
               want=$(awk -v f="$f" '$2==f || $2=="*"f {print $1}' SHA256SUMS.txt)
               got=$(sha256sum "$f" | cut -d' ' -f1)

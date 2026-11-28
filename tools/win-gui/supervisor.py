@@ -100,6 +100,9 @@ ENGINE_KEY_FILES = ("sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.
 # (engine/reviews/round2, 27.11.2026); the Stage 4 freeze writes the published one into reproduce/engine-release.tsv
 # and this constant must follow it (the board's own answer, board_image, always wins over it).
 CANONICAL_ENGINE_IMAGE_ID = "e3729469cd8222cce0c60b881b8ce3feb12c895209630bf7ca0cc988a25d4024"
+# The core image's key pin (SHA-256 of keys\vk.bin), from the same record (reproduce/engine-release.tsv). EMPTY until
+# the Stage 4 freeze publishes it; then a key folder whose vk.bin is not this key is refused (review R3-6 #9).
+CANONICAL_ENGINE_VK_PIN = ""
 
 
 def engine_sidecar(host_path, base_env=None):
@@ -608,13 +611,34 @@ def _check_engine_host(host, info, side, board_id, board_why):
     ok, why, fatal = check_engine(side)
     if not ok:
         return CheckResult("host binary", False, why, fatal=fatal)
-    rc, out = _run([str(host), "method-id"], env=engine_env(host), timeout=120)
-    m = HEX64.search(out or "") if rc == 0 else None
-    if not m:
+    # review R3-6 #9 (28.11.2026): image.json is only a label; the key is vk.bin. Ask the host for the image the KEY
+    # itself commits to (HAZYNC_ENGINE_VK + _PIN: the host decodes vk.bin and derives the id, engine_backend.rs
+    # board_key), require image.json to name the same image, and, once the release publishes it, the key to be the
+    # published one. The id compared with the board below is the key's.
+    vk_path = Path(side["keys"]) / "vk.bin"
+    try:
+        pin = hashlib.sha256(vk_path.read_bytes()).hexdigest()
+    except OSError as e:
+        return CheckResult("host binary", False, f"cannot read {vk_path}: {e}", fatal=True)
+    if CANONICAL_ENGINE_VK_PIN and pin != CANONICAL_ENGINE_VK_PIN:
         return CheckResult("host binary", False,
-                           f"`method-id` with the engine prover exited {rc} and printed no image id: "
-                           f"{(out or '').strip()[:160]}", fatal=True)
-    got = m.group(0)
+                           f"the engine key in {side['keys']} ({pin[:16]}…) is not this release's published key "
+                           f"({CANONICAL_ENGINE_VK_PIN[:16]}…): reinstall Hazync to get the matching keys "
+                           "(https://github.com/hazync/hazync/releases/latest)", fatal=True)
+    ids = []
+    for extra in ({}, {"HAZYNC_ENGINE_VK": str(vk_path), "HAZYNC_ENGINE_VK_PIN": pin}):
+        rc, out = _run([str(host), "method-id"], env=dict(engine_env(host), **extra), timeout=120)
+        m = HEX64.search(out or "") if rc == 0 else None
+        if not m:
+            return CheckResult("host binary", False,
+                               f"`method-id` with the engine prover exited {rc} and printed no image id: "
+                               f"{(out or '').strip()[:160]}", fatal=True)
+        ids.append(m.group(0))
+    if ids[0] != ids[1]:
+        return CheckResult("host binary", False,
+                           f"the engine keys in {side['keys']} disagree: image.json names {ids[0][:16]}…, the key "
+                           f"(vk.bin) is image {ids[1][:16]}…. Reinstall Hazync to get one release's keys.", fatal=True)
+    got = ids[1]
     want = board_id or CANONICAL_ENGINE_IMAGE_ID
     if got != want:
         whose = "the board checks proofs against" if board_id else "this app was built for"

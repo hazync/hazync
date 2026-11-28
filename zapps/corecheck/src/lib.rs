@@ -52,6 +52,13 @@ fn network_image(network: &str) -> Option<&'static Image> {
 }
 
 /// A hash in display order (as `getblockhash` prints it), from internal byte order.
+/// How many distinct images / (image, key) pairs one process keeps (review R3-5 L4, 28.11.2026). Each is leaked once
+/// (Image's with_* helpers return `&'static`), so an unbounded cache fed caller-chosen ids or keys grows without limit:
+/// a key is ~96 KB. Past the cap a NEW image or key is refused (an error, so a verdict FAILs), never leaked; one
+/// already cached still answers. A verifier uses one image and one key per network, so the cap is far above real use.
+pub const MAX_CACHED_IMAGES: usize = 64;
+pub const MAX_CACHED_KEYS: usize = 16;
+
 fn display_hex(h: &[u8; 32]) -> String {
     h.iter().rev().map(|b| format!("{b:02x}")).collect()
 }
@@ -69,11 +76,16 @@ pub fn image_for(network: &str, image_hex: &str, coinlog: bool, product: bool) -
     static CACHE: OnceLock<Mutex<HashMap<(String, String, bool, bool), &'static Image>>> = OnceLock::new();
     let key = (network.to_string(), image_hex.trim().to_lowercase(), coinlog, product);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(i) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(i) = c.get(&key) {
         return Ok(i);
     }
+    if c.len() >= MAX_CACHED_IMAGES {
+        return Err(format!("this process has already resolved {MAX_CACHED_IMAGES} distinct images: refusing another \
+                            (each is kept for the life of the process)"));
+    }
     let i = image_for_uncached(network, image_hex, coinlog, product)?;
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(key, i);
+    c.insert(key, i);
     Ok(i)
 }
 
@@ -110,7 +122,16 @@ pub fn with_key(image: &'static Image, vk: &[u8], pin: &[u8; 32]) -> Result<&'st
     let key = (image as *const Image as usize, got);
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(*c.entry(key).or_insert_with(|| image.with_engine_key_unchecked(vk.to_vec())))
+    if let Some(i) = c.get(&key) {
+        return Ok(i);
+    }
+    if c.len() >= MAX_CACHED_KEYS {
+        return Err(format!("this process has already taken {MAX_CACHED_KEYS} distinct (image, key) pairs: refusing \
+                            another (each key is kept for the life of the process)"));
+    }
+    let i = image.with_engine_key_unchecked(vk.to_vec());
+    c.insert(key, i);
+    Ok(i)
 }
 
 /// A core proof (or .sspf bundle) verified by the core verifier, and its tip compared with `expect` ("<height>:<hash>",

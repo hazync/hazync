@@ -27,8 +27,10 @@ spent ten days blaming "nobody ran it". Evidence before teardown, always.
 """
 import argparse
 import os
+import re
 import sys
 import secrets
+import subprocess
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -84,15 +86,33 @@ def seconds_for_budget(budget_usd, cost_per_hr):
 # boot (sponsor_bot BOOT_SH_ENGINE) fetches the CUDA hzengine and the core keys and writes engine.env; the CPU phase of a
 # comparison fetches the CPU hzengine (hazync-engine-x86_64-linux-gnu), VERIFIED against the signed manifest like the
 # RISC Zero CPU host below, and swaps it in for that phase only. The driver host is the same in both phases.
-CPU_FETCH_ENGINE = """
-if [ ! -s hazync-engine-cpu ]; then
-  curl -fsSL -o SHA256SUMS.txt https://github.com/hazync/hazync/releases/download/{rel}/SHA256SUMS.txt
-  curl -fsSL -o hazync-engine-x86_64-linux-gnu https://github.com/hazync/hazync/releases/download/{rel}/hazync-engine-x86_64-linux-gnu
-  grep ' hazync-engine-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c - || {{ echo CPU_SHA_BAD; exit 1; }}
-  chmod +x hazync-engine-x86_64-linux-gnu && ln -sf hazync-engine-x86_64-linux-gnu hazync-engine-cpu
-  echo CPU_SHA_OK
-fi
+# Review R3-6 #2 (28.11.2026): the expected SHA-256 comes from the CONTROLLER, out of the release manifest whose signature
+# sponsor_bot verified locally (SshRunner.manifest_sha), not from a SHA256SUMS.txt fetched on the pod (unsigned there).
+# A file that does not match is fetched again (3 tries); still wrong, the script stops before anything downloaded runs.
+CPU_FETCH_VERIFIED = """
+fetch_cpu() {{
+  local f=$1 w=$2 _
+  for _ in 1 2 3; do
+    [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+    rm -f "$f" "$f.tmp"
+    curl -fsSL -o "$f.tmp" "https://github.com/hazync/hazync/releases/download/{rel}/$f" && mv "$f.tmp" "$f"
+  done
+  [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+  echo CPU_SHA_BAD; exit 1
+}}
+fetch_cpu {name} {sha}
+chmod +x {name} && ln -sf {name} {link}
+echo CPU_SHA_OK
 """
+
+
+def cpu_fetch(release, name, link, sha):
+    """The pod's fetch of one release binary, checked against `sha` (from the locally verified manifest)."""
+    if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+        raise ValueError(f"{name}: no SHA-256 from the verified manifest; refusing to fetch it unchecked")
+    return CPU_FETCH_VERIFIED.format(rel=release, name=name, link=link, sha=sha)
+
+
 
 
 def engine(flag=None):
@@ -105,15 +125,6 @@ def env_line(engine_=None):
     return ". /workspace/engine.env" if engine(engine_) else ""
 
 
-CPU_FETCH = """
-if [ ! -s hazync-host-cpu ]; then
-  curl -fsSL -o SHA256SUMS.txt https://github.com/hazync/hazync/releases/download/{rel}/SHA256SUMS.txt
-  curl -fsSL -o hazync-host-x86_64-linux-gnu https://github.com/hazync/hazync/releases/download/{rel}/hazync-host-x86_64-linux-gnu
-  grep ' hazync-host-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c - || {{ echo CPU_SHA_BAD; exit 1; }}
-  chmod +x hazync-host-x86_64-linux-gnu && ln -sf hazync-host-x86_64-linux-gnu hazync-host-cpu
-  echo CPU_SHA_OK
-fi
-"""
 
 
 def fold_phase(identity_tag, seconds, host, label, prefix=""):
@@ -135,13 +146,14 @@ def fold_phase(identity_tag, seconds, host, label, prefix=""):
     ])
 
 
-def compare_script(identity_tag, seconds_each, release, engine_=None):
+def compare_script(identity_tag, seconds_each, release, cpu_sha, engine_=None):
     """⭐ BOTH PROVERS, SAME MACHINE, SAME QUEUE, BACK TO BACK. Comparing a GPU on a rented pod with
-    a CPU on someone's laptop would measure the two machines, not the two code paths."""
+    a CPU on someone's laptop would measure the two machines, not the two code paths.
+    `cpu_sha`: the CPU binary's SHA-256 from the locally verified manifest (runner.manifest_sha)."""
     if engine(engine_):
         return "\n".join([
             "#!/bin/bash", "cd /workspace", env_line(True),
-            CPU_FETCH_ENGINE.format(rel=release),
+            cpu_fetch(release, "hazync-engine-x86_64-linux-gnu", "hazync-engine-cpu", cpu_sha),
             fold_phase(identity_tag, seconds_each, "hazync-host", "CUDA"),
             fold_phase(identity_tag, seconds_each, "hazync-host", "CPU",
                        prefix="HAZYNC_ENGINE=/workspace/hazync-engine-cpu "),
@@ -149,7 +161,7 @@ def compare_script(identity_tag, seconds_each, release, engine_=None):
         ]) + "\n"
     return "\n".join([
         "#!/bin/bash", "cd /workspace",
-        CPU_FETCH.format(rel=release),
+        cpu_fetch(release, "hazync-host-x86_64-linux-gnu", "hazync-host-cpu", cpu_sha),
         fold_phase(identity_tag, seconds_each, "hazync-host-cuda", "CUDA"),
         fold_phase(identity_tag, seconds_each, "hazync-host-cpu", "CPU"),
         "echo ALLDONE",
@@ -273,9 +285,45 @@ def cmd_selftest(a):
     check((n, ok) == (0, 0), "⚠ a run that folded nothing reports zero, not success")
 
     # 6. the comparison runs BOTH provers, verifies the one it fetches, and keeps the phases apart
-    cs = compare_script("tag", 300, "v0.22.1")
+    SHA = "ab" * 32
+    cs = compare_script("tag", 300, "v0.22.1", SHA)
     check("hazync-host-cuda" in cs and "hazync-host-cpu" in cs, "the comparison runs both provers")
-    check("sha256sum -c -" in cs, "⛔ the CPU binary it fetches is sha256-verified before use")
+    check(f"fetch_cpu hazync-host-x86_64-linux-gnu {SHA}" in cs and "SHA256SUMS.txt" not in cs,
+          "⛔ the CPU binary is checked against the controller's verified sha, never a manifest fetched on the pod (R3-6 #2)")
+    check(cs.index("fetch_cpu hazync-host") < cs.index("chmod +x hazync-host-x86_64-linux-gnu") < cs.index("PHASE CUDA"),
+          "⛔ and it is verified before it is made executable or run")
+    try:
+        compare_script("tag", 300, "v0.22.1", None)
+        check(False, "⛔ no verified sha: no comparison script")
+    except ValueError:
+        check(True, "⛔ no verified sha: no comparison script")
+    # run the fetch on a fake pod: a tampered binary is refetched, still wrong it stops; it never runs
+    import tempfile as _tf
+    d = _tf.mkdtemp(prefix="fold_fetch_")
+    rel = os.path.join(d, "rel")
+    os.makedirs(rel)
+    good = b"#!/bin/bash\necho RAN > ran\n"
+    import hashlib as _hl
+    want = _hl.sha256(good).hexdigest()
+    os.makedirs(os.path.join(d, "bin"))
+    with open(os.path.join(d, "bin", "curl"), "w") as f:
+        f.write(f'#!/bin/bash\nout=""; url=""\nwhile [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift 2 ;; -*) shift ;; '
+                f'*) url=$1; shift ;; esac; done\ncp "{rel}/$(basename "$url")" "$out"\n')
+    os.chmod(os.path.join(d, "bin", "curl"), 0o755)
+
+    def run_fetch(served):
+        w = _tf.mkdtemp(prefix="pod_", dir=d)
+        with open(os.path.join(rel, "hazync-host-x86_64-linux-gnu"), "wb") as f:
+            f.write(served)
+        r = subprocess.run(["bash", "-c", cpu_fetch("v1", "hazync-host-x86_64-linux-gnu", "hazync-host-cpu", want)
+                            + "./hazync-host-cpu\n"], cwd=w, capture_output=True, text=True,
+                           env=dict(os.environ, PATH=os.path.join(d, "bin") + ":" + os.environ["PATH"]), timeout=60)
+        return r, os.path.exists(os.path.join(w, "ran"))
+    r, ran = run_fetch(good)
+    check(r.returncode == 0 and "CPU_SHA_OK" in r.stdout and ran, "the CPU binary that matches is fetched and runs")
+    r, ran = run_fetch(good + b"# tampered\n")
+    check(r.returncode != 0 and "CPU_SHA_BAD" in r.stdout and not ran,
+          "⛔ a CPU binary that differs from the verified manifest stops the script and is NEVER run")
     check(cs.index("PHASE CUDA start") < cs.index("PHASE CPU start"), "CUDA phase runs first, then CPU")
     log = "FOLD CUDA 1 rc=0 a\nFOLD CUDA 2 rc=0 b\nFOLD CPU 1 rc=0 c\nALLDONE"
     check(summarise(log, "CUDA") == (2, 2), "the CUDA phase is counted alone")
@@ -288,11 +336,11 @@ def cmd_selftest(a):
     check("HAZYNC_HOST=/workspace/hazync-host " in es and "hazync-host-cuda" not in es,
           "⛔ an engine fold drives the CPU product host, never the RISC Zero CUDA host")
     check("engine.env" not in fold_script("tag", 600, engine_=False), "a RISC Zero fold is unchanged")
-    ec = compare_script("tag", 300, "v1.0.0", engine_=True)
+    ec = compare_script("tag", 300, "v1.0.0", SHA, engine_=True)
     check("hazync-host-cuda" not in ec and "hazync-engine-x86_64-linux-gnu" in ec,
           "the engine comparison fetches the CPU hzengine, not the RISC Zero CPU host")
-    check("grep ' hazync-engine-x86_64-linux-gnu$' SHA256SUMS.txt | sha256sum -c -" in ec,
-          "⛔ the CPU hzengine is sha256-verified against the manifest before use")
+    check(f"fetch_cpu hazync-engine-x86_64-linux-gnu {SHA}" in ec and "SHA256SUMS.txt" not in ec,
+          "⛔ the CPU hzengine is checked against the controller's verified sha before use (R3-6 #2)")
     check("HAZYNC_ENGINE=/workspace/hazync-engine-cpu " in ec.split("PHASE CPU start")[1]
           and "HAZYNC_ENGINE=/workspace/hazync-engine-cpu" not in ec.split("PHASE CPU start")[0],
           "the CPU hzengine is swapped in for the CPU phase only")
@@ -403,8 +451,9 @@ def main(argv=None):
             # ⚠ The clock is split between the two phases, so --minutes still bounds the whole run.
             each = budget_s // 2
             print(f"  comparing: {each // 60} min CUDA then {each // 60} min CPU on this one pod")
+            cpu_name = "hazync-engine-x86_64-linux-gnu" if engine() else "hazync-host-x86_64-linux-gnu"
             start_fold(runner, pod, a.identity, budget_s,
-                       compare_script(a.identity, each, runner.release or "v0.22.1"))
+                       compare_script(a.identity, each, runner.release, runner.manifest_sha(cpu_name)))
         else:
             start_fold(runner, pod, a.identity, budget_s)
         started = time.time()

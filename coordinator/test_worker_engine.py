@@ -117,6 +117,49 @@ for i, (name, msg, fatal) in enumerate((
     else:
         check(code != hz.EX_CONFIG, f"an ordinary block failure does not stop the box (exit {str(code)[:40]})")
 
+# 5. review R3-6 #4 (28.11.2026): run-workers.sh on an engine box needs the release's key pin; its smoke's verify-any runs
+#    under HAZYNC_ENGINE_VK + _PIN, never an unpinned key directory. Refused before anything is started.
+import hashlib  # noqa: E402
+import shutil  # noqa: E402
+import subprocess  # noqa: E402
+rw = tempfile.mkdtemp(prefix="hz_eng_rw_")
+shutil.copy(os.path.join(HERE, "run-workers.sh"), rw)
+shutil.copy(os.path.join(HERE, "hazync"), rw)
+keys = os.path.join(rw, "keys")
+os.makedirs(keys)
+for n in ("sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.json", "vk.bin"):
+    with open(os.path.join(keys, n), "w") as f:
+        f.write(n + "\n")
+eng = os.path.join(rw, "hzengine")
+host = os.path.join(rw, "host")
+for p_, body in ((eng, "#!/bin/bash\n"), (host, "#!/bin/bash\n[ \"$1\" = method-id ] && echo \"METHOD_ID " + "e3" * 32 + "\"\nexit 0\n")):
+    with open(p_, "w") as f:
+        f.write(body)
+    os.chmod(p_, os.stat(p_).st_mode | stat.S_IEXEC)
+good_pin = hashlib.sha256(b"vk.bin\n").hexdigest()
+base_env = dict(os.environ, HAZYNC_HOST=host, HAZYNC_ENGINE=eng, HAZYNC_ENGINE_KEYS=keys, COORD_URL="http://127.0.0.1:9",
+                LOG_DIR=os.path.join(rw, "logs"), SKIP_GPU_SMOKE="1")
+base_env.pop("HAZYNC_ENGINE_VK", None)
+base_env.pop("HAZYNC_ENGINE_VK_PIN", None)
+
+
+def rw_run(**extra):
+    r = subprocess.run(["bash", os.path.join(rw, "run-workers.sh"), "1"], env=dict(base_env, **extra),
+                       capture_output=True, text=True, timeout=120)
+    subprocess.run(["bash", os.path.join(rw, "run-workers.sh"), "1", "--stop"], env=dict(base_env, **extra),
+                   capture_output=True, text=True, timeout=60)
+    return r
+
+
+r = rw_run()
+check(r.returncode != 0 and "HAZYNC_ENGINE_VK_PIN" in r.stderr and "engine          :" not in r.stdout,
+      "run-workers: an engine box with no key pin is refused before anything starts (R3-6 #4)")
+r = rw_run(HAZYNC_ENGINE_VK_PIN="00" * 32)
+check(r.returncode != 0 and "is not the pinned key" in r.stderr, "run-workers: a pin that is not the key file's is refused")
+r = rw_run(HAZYNC_ENGINE_VK_PIN=good_pin)
+check("engine          :" in r.stdout and "key pin " + good_pin[:16] in r.stdout,
+      "run-workers: with the release's pin the engine box passes the pre-flight")
+
 print()
 if FAILS:
     print(f"FAILED: {len(FAILS)} check(s)")

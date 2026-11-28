@@ -1214,11 +1214,24 @@ W=/workspace; mkdir -p $W /root/.hazync; cd $W || exit 1
 nvidia-smi --query-gpu=name --format=csv,noheader | grep -q GeForce && for d in /usr/local/cuda*/compat; do [ -d "$d" ] && mv "$d" "${d}.disabled"; done
 ldconfig 2>/dev/null
 python3 -c "import cryptography" 2>/dev/null || pip install -q cryptography >/dev/null 2>&1
-for f in hazync-worker hazync-run-workers.sh hazync-host-x86_64-linux-gnu-cuda; do
-  for t in 1 2 3; do [ -s $f ] && break; curl -fsSL -o $f.tmp https://github.com/hazync/hazync/releases/download/@REL@/$f && mv $f.tmp $f; done
-done
+# Review R3-6 #1 (28.11.2026): every file is checked against want.txt (the lines of the release manifest whose
+# signature sponsor_bot verified locally) BEFORE anything downloaded is executed. A file that does not match is
+# fetched again (up to 3 times); still wrong, the boot stops here, non-zero, and nothing downloaded has run.
+fetch_verified() {
+  local f=$1 w _
+  w=$(awk -v f="$f" '{n=$2; sub(/^\*/, "", n)} n == f {print $1; exit}' want.txt)
+  [ ${#w} = 64 ] || { echo "SHA_BAD $f is not in want.txt"; exit 3; }
+  for _ in 1 2 3; do
+    [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+    rm -f "$f" "$f.tmp"
+    curl -fsSL -o "$f.tmp" "https://github.com/hazync/hazync/releases/download/@REL@/$f" && mv "$f.tmp" "$f"
+  done
+  [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+  echo "SHA_BAD $f"; exit 3
+}
+for f in @FILES@; do fetch_verified "$f"; done
+echo SHA_OK
 chmod +x hazync-worker hazync-run-workers.sh hazync-host-x86_64-linux-gnu-cuda
-sha256sum -c --quiet want.txt && echo SHA_OK || echo SHA_BAD
 ln -sf hazync-host-x86_64-linux-gnu-cuda hazync-host-cuda
 # #261: a card can pass boot with no usable CUDA device. A real, tiny GPU prove must succeed first.
 @SMOKE@
@@ -1238,18 +1251,37 @@ W=/workspace; mkdir -p $W /root/.hazync; cd $W || exit 1
 nvidia-smi --query-gpu=name --format=csv,noheader | grep -q GeForce && for d in /usr/local/cuda*/compat; do [ -d "$d" ] && mv "$d" "${d}.disabled"; done
 ldconfig 2>/dev/null
 python3 -c "import cryptography" 2>/dev/null || pip install -q cryptography >/dev/null 2>&1
-for f in @FILES@; do
-  for t in 1 2 3; do [ -s $f ] && break; curl -fsSL -o $f.tmp https://github.com/hazync/hazync/releases/download/@REL@/$f && mv $f.tmp $f; done
-done
+# Review R3-6 #1 (28.11.2026): every file is checked against want.txt (the lines of the release manifest whose
+# signature sponsor_bot verified locally) BEFORE anything downloaded is executed. A file that does not match is
+# fetched again (up to 3 times); still wrong, the boot stops here, non-zero, and nothing downloaded has run.
+fetch_verified() {
+  local f=$1 w _
+  w=$(awk -v f="$f" '{n=$2; sub(/^\*/, "", n)} n == f {print $1; exit}' want.txt)
+  [ ${#w} = 64 ] || { echo "SHA_BAD $f is not in want.txt"; exit 3; }
+  for _ in 1 2 3; do
+    [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+    rm -f "$f" "$f.tmp"
+    curl -fsSL -o "$f.tmp" "https://github.com/hazync/hazync/releases/download/@REL@/$f" && mv "$f.tmp" "$f"
+  done
+  [ -s "$f" ] && [ "$(sha256sum "$f" | cut -c1-64)" = "$w" ] && return 0
+  echo "SHA_BAD $f"; exit 3
+}
+for f in @FILES@; do fetch_verified "$f"; done
+echo SHA_OK
 chmod +x hazync-worker hazync-run-workers.sh hazync-host-x86_64-linux-gnu hazync-engine-x86_64-linux-gnu-cuda
-sha256sum -c --quiet want.txt && echo SHA_OK || echo SHA_BAD
-rm -rf keys-core && mkdir keys-core && tar -xzf hazync-keys-core.tar.gz -C keys-core && echo KEYS_OK || echo KEYS_BAD
+# the key file must be the one the controller pinned (review R3-6 #4: verify-any checks proofs under it)
+rm -rf keys-core && mkdir keys-core && tar -xzf hazync-keys-core.tar.gz -C keys-core || { echo "KEYS_BAD the key tarball does not unpack"; exit 4; }
+[ "$(sha256sum keys-core/vk.bin 2>/dev/null | cut -c1-64)" = "@VK_PIN@" ] || { echo "KEYS_BAD keys-core/vk.bin is not the pinned key"; exit 4; }
+echo KEYS_OK
 CL=/usr/local/cuda-12.9/targets/x86_64-linux/lib
 [ -e $CL/libcudart.so.12 ] || { apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1 || { apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1; }; }
 # no NVIDIA repository on the image (engine/scripts/pod/setup.sh installs its keyring first for the same reason)
 [ -e $CL/libcudart.so.12 ] || { curl -fsSL -o cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb && dpkg -i cuda-keyring.deb >/dev/null 2>&1 && apt-get update -qq >/dev/null 2>&1 && apt-get install -y -qq cuda-cudart-12-9 >/dev/null 2>&1; }
-[ -e $CL/libcudart.so.12 ] && echo CUDART_OK || echo CUDART_BAD
-printf 'export HAZYNC_ENGINE=%s HAZYNC_ENGINE_KEYS=%s\nexport LD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n' "$W/hazync-engine-x86_64-linux-gnu-cuda" "$W/keys-core" "$CL" > engine.env
+[ -e $CL/libcudart.so.12 ] || { echo CUDART_BAD; exit 5; }
+echo CUDART_OK
+# HAZYNC_ENGINE_VK / _PIN: every verify-any on this pod (the smoke, tip_engine's per-block check) checks proofs under the
+# pinned key (engine_backend.rs board_key); never an unpinned key directory (review R3-6 #4)
+printf 'export HAZYNC_ENGINE=%s HAZYNC_ENGINE_KEYS=%s\nexport HAZYNC_ENGINE_VK=%s HAZYNC_ENGINE_VK_PIN=%s\nexport LD_LIBRARY_PATH=%s${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\n' "$W/hazync-engine-x86_64-linux-gnu-cuda" "$W/keys-core" "$W/keys-core/vk.bin" "@VK_PIN@" "$CL" > engine.env
 . ./engine.env
 ln -sf hazync-host-x86_64-linux-gnu hazync-host
 @SMOKE@
@@ -1282,15 +1314,32 @@ def pod_host(engine=None):
     return "/workspace/hazync-host" if (ENGINE if engine is None else engine) else "/workspace/hazync-host-cuda"
 
 
-def boot_script(tag, libzync=None, engine=None):
-    """The pod's boot script for release `tag`, with the GPU smoke for this board."""
+def boot_script(tag, libzync=None, engine=None, vk_pin=None):
+    """The pod's boot script for release `tag`, with the GPU smoke for this board. An engine boot needs `vk_pin`, the
+    SHA-256 of the core key file taken from the locally verified release (SshRunner.engine_key_pin): the pod refuses a
+    key file that is not it, and every verify-any there runs under it."""
     lz = LIBZYNC if libzync is None else libzync
     if ENGINE if engine is None else engine:
+        if not (isinstance(vk_pin, str) and re.fullmatch(r"[0-9a-f]{64}", vk_pin)):
+            raise ValueError("an engine boot needs the core key's pin (64 hex digits) from the verified release")
         # the engine board is a libzync board: the smoke proves block 1's leaf bundle through the CPU host + hzengine
         smoke = SMOKE_LIBZYNC.replace("hazync-host-cuda", "hazync-host")
         return (BOOT_SH_ENGINE.replace("@REL@", tag).replace("@FILES@", " ".join(release_files(True)))
-                .replace("@SMOKE@", smoke))
-    return BOOT_SH.replace("@REL@", tag).replace("@SMOKE@", SMOKE_LIBZYNC if lz else SMOKE_CORE)
+                .replace("@VK_PIN@", vk_pin).replace("@SMOKE@", smoke))
+    return (BOOT_SH.replace("@REL@", tag).replace("@FILES@", " ".join(release_files(False)))
+            .replace("@SMOKE@", SMOKE_LIBZYNC if lz else SMOKE_CORE))
+
+
+BOOT_MARKERS = ("SHA_OK", "GPU_OK")
+BOOT_MARKERS_ENGINE = ("SHA_OK", "KEYS_OK", "CUDART_OK", "GPU_OK")
+
+
+def boot_accepted(out, method_id, engine=None):
+    """Whether a boot's output passes: every marker and `MID=<the board's id>` as WHOLE LINES (review R3-6 #1: a substring
+    test let any text containing the words pass). The guard that matters is the boot's own: nothing unverified runs."""
+    lines = {line.strip() for line in (out or "").splitlines()}
+    need = BOOT_MARKERS_ENGINE if (ENGINE if engine is None else engine) else BOOT_MARKERS
+    return bool(method_id) and all(n in lines for n in need) and f"MID={method_id}" in lines
 
 
 def boot_files(dir_, libzync=None):
@@ -1375,6 +1424,7 @@ class SshRunner:
             workdir = tempfile.mkdtemp(prefix="run-", dir=os.path.join(bot_home, "work"))
         self.dir = workdir
         self.method_id = None
+        self.vk_pin = None                # the engine core key's pin (prepare(), from the verified release)
         self.ssh_pubkey = None
 
     @classmethod
@@ -1450,9 +1500,44 @@ class SshRunner:
                 raise SystemExit(f"sponsor_bot: no leaf_1.bin in HAZYNC_BRIDGE_OUT ({BRIDGE_DIR or 'unset'}) for the "
                                  "pods' GPU smoke; nothing was started")
             shutil.copyfile(src, os.path.join(self.dir, "leaf_1.bin"))
+        self.vk_pin = self.engine_key_pin(tag) if ENGINE else None
         with open(os.path.join(self.dir, "boot.sh"), "w") as f:
-            f.write(boot_script(tag))
+            f.write(boot_script(tag, vk_pin=self.vk_pin))
         return self
+
+    def manifest_sha(self, name):
+        """The SHA-256 the locally VERIFIED manifest gives `name` (call after verify_manifest()), or None."""
+        with open(os.path.join(self.dir, "SHA256SUMS.txt")) as f:
+            for line in f:
+                parts = line.split()
+                if len(parts) == 2 and parts[1].lstrip("*") == name and re.fullmatch(r"[0-9a-f]{64}", parts[0]):
+                    return parts[0]
+        return None
+
+    def engine_key_pin(self, tag, name="hazync-keys-core.tar.gz"):
+        """The core key file's pin, from the release itself (review R3-6 #4): the key tarball is downloaded HERE, checked
+        against the locally verified manifest, and its vk.bin (one regular member, by that exact name) hashed. An
+        operator pin (SPONSOR_BOT_ENGINE_VK_PIN) must agree. Pods then refuse any other key file and verify under it."""
+        import tarfile
+        want = self.manifest_sha(name)
+        if not want:
+            raise SystemExit(f"sponsor_bot: the {tag} manifest does not list {name}; nothing was started")
+        path = os.path.join(self.dir, name)
+        url = f"https://github.com/hazync/hazync/releases/download/{tag}/{name}"
+        http_retry(lambda: urllib.request.urlretrieve(url, path), f"download {name}")
+        with open(path, "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != want:
+                raise SystemExit(f"sponsor_bot: {name} does not match the signed manifest; nothing was started")
+        with tarfile.open(path, "r:gz") as tf:
+            vk = [m for m in tf.getmembers() if m.name == "vk.bin"]
+            if len(vk) != 1 or not vk[0].isreg():
+                raise SystemExit(f"sponsor_bot: {name} has no single regular vk.bin; nothing was started")
+            pin = hashlib.sha256(tf.extractfile(vk[0]).read()).hexdigest()
+        op = (os.environ.get("SPONSOR_BOT_ENGINE_VK_PIN") or "").strip().lower()
+        if op and op != pin:
+            raise SystemExit(f"sponsor_bot: the release's core key is {pin[:16]}..., SPONSOR_BOT_ENGINE_VK_PIN says "
+                             f"{op[:16]}...; nothing was started")
+        return pin
 
     def verify_manifest(self):
         """gpg --verify with the keyring in SPONSOR_BOT_HOME (GNUPGHOME), not the user's."""
@@ -1495,9 +1580,8 @@ class SshRunner:
                     detail = "ssh or scp failed"
                 else:
                     out = self._ssh(pod, "bash /workspace/boot.sh", 1200 if LIBZYNC else 900).stdout
-                    need = ("SHA_OK", "GPU_OK") + (("KEYS_OK", "CUDART_OK") if ENGINE else ())
-                    if all(n in out for n in need) and f"MID={self.method_id}" in out:
-                        return True, " ".join(need) + " MID ok"
+                    if boot_accepted(out, self.method_id):
+                        return True, " ".join(BOOT_MARKERS_ENGINE if ENGINE else BOOT_MARKERS) + " MID ok"
                     detail = " ".join(out.split())[-200:] or "boot printed nothing"
             except subprocess.TimeoutExpired:
                 detail = "boot timed out"

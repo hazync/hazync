@@ -19,6 +19,8 @@
 # Env:
 #   HAZYNC_HOST   path to the prover binary            (required)
 #   HAZYNC_ENGINE, HAZYNC_ENGINE_KEYS  the OpenVM prover (hzengine) and its image's key directory: the engine board
+#   HAZYNC_ENGINE_VK_PIN  the release's published core key pin (required with HAZYNC_ENGINE); HAZYNC_ENGINE_VK the key
+#                 file (default \$HAZYNC_ENGINE_KEYS/vk.bin)
 #   COORD_URL     coordinator base URL                 (default https://api.hazync.org)
 #   HAZYNC_BASE   Core/secp source root                (default $HOME/hazync-build)
 #   LOG_DIR       per-worker logs                      (default $HOME/hazync-workers)
@@ -179,8 +181,15 @@ if [ -n "${HAZYNC_ENGINE:-}" ]; then
     for f in sdk.pk agg.vk openvm.toml guest.vmexe baseline.json; do
         [ -s "$HAZYNC_ENGINE_KEYS/$f" ] || { echo "HAZYNC_ENGINE_KEYS ($HAZYNC_ENGINE_KEYS) has no $f: unpack the release's hazync-keys-core.tar.gz there" >&2; exit 1; }
     done
-    export HAZYNC_ENGINE HAZYNC_ENGINE_KEYS
-    echo "engine          : $HAZYNC_ENGINE (keys $HAZYNC_ENGINE_KEYS)"
+    # review R3-6 #4: the GPU smoke's verify-any checks the proof under the PINNED key (engine_backend.rs board_key); there
+    # is no unpinned fallback. The key file defaults to the unpacked tarball's vk.bin; the pin is the release's published
+    # one (the core record in its notes / reproduce/engine-release.tsv) and must be given.
+    HAZYNC_ENGINE_VK="${HAZYNC_ENGINE_VK:-$HAZYNC_ENGINE_KEYS/vk.bin}"
+    [ -s "$HAZYNC_ENGINE_VK" ] || { echo "HAZYNC_ENGINE_VK ($HAZYNC_ENGINE_VK) is missing: unpack the release's hazync-keys-core.tar.gz" >&2; exit 1; }
+    [[ "${HAZYNC_ENGINE_VK_PIN:-}" =~ ^[0-9a-f]{64}$ ]] || { echo "set HAZYNC_ENGINE_VK_PIN to the release's published core key pin (64 hex digits): proofs are checked under it" >&2; exit 1; }
+    [ "$(sha256sum "$HAZYNC_ENGINE_VK" | cut -c1-64)" = "$HAZYNC_ENGINE_VK_PIN" ] || { echo "HAZYNC_ENGINE_VK ($HAZYNC_ENGINE_VK) is not the pinned key (its SHA-256 is not HAZYNC_ENGINE_VK_PIN)" >&2; exit 1; }
+    export HAZYNC_ENGINE HAZYNC_ENGINE_KEYS HAZYNC_ENGINE_VK HAZYNC_ENGINE_VK_PIN
+    echo "engine          : $HAZYNC_ENGINE (keys $HAZYNC_ENGINE_KEYS, key pin ${HAZYNC_ENGINE_VK_PIN:0:16}...)"
 fi
 [ -x "$CLI" ] || { echo "contributor CLI not found next to this script: $CLI" >&2; exit 1; }
 export HAZYNC_BASE="${HAZYNC_BASE:-$HOME/hazync-build}"

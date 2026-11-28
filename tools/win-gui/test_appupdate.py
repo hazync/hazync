@@ -325,6 +325,30 @@ def main():
 
     print("── the signature is what refuses a forged release (review L9) ──")
     evil = b"MZ evil"
+    print("── the installer build's manifest check (review R3-6 #8) ──")
+    sk8, pk8 = test_key()
+    m8 = f"# hazync v0.27.0 commit {'0' * 40} image {'1' * 64}\nabc  hazync-worker\n".encode()
+    ok, why = appupdate.check_manifest("v0.27.0", m8, sign(sk8, pk8, m8), key_packet=pk8)
+    check(ok, f"a manifest signed by the pinned key and naming the tag passes: {why}")
+    ok, why = appupdate.check_manifest("v0.27.1", m8, sign(sk8, pk8, m8), key_packet=pk8)
+    check(not ok, f"a good signature over another tag's manifest is refused: {why}")
+    sk9, pk9 = test_key()
+    ok, why = appupdate.check_manifest("v0.27.0", m8, sign(sk9, pk9, m8), key_packet=pk8)
+    check(not ok, f"⛔ a manifest signed by any other key is refused: {why}")
+    ok, why = appupdate.check_manifest("v0.27.0", m8, "not a signature", key_packet=pk8)
+    check(not ok, f"⛔ a manifest with no signature is refused: {why}")
+    import subprocess as _sp
+    import tempfile as _tf
+    d8 = _tf.mkdtemp(prefix="vm8_")
+    open(os.path.join(d8, "m"), "wb").write(REAL_MANIFEST)
+    open(os.path.join(d8, "a"), "w").write(REAL_ASC)
+    cli = os.path.join(os.path.dirname(os.path.abspath(__file__)), "verify_manifest.py")
+    r = _sp.run([sys.executable, cli, "v0.26.1", os.path.join(d8, "m"), os.path.join(d8, "a")], capture_output=True, text=True)
+    check(r.returncode == 0, f"verify_manifest.py passes the real v0.26.1 manifest and signature ({r.stdout.strip()[-60:]})")
+    open(os.path.join(d8, "a"), "w").write(REAL_ASC.replace("qdE2LtU9", "qdE2LtU8"))
+    r = _sp.run([sys.executable, cli, "v0.26.1", os.path.join(d8, "m"), os.path.join(d8, "a")], capture_output=True, text=True)
+    check(r.returncode == 1, "⛔ verify_manifest.py refuses a changed signature (exit 1)")
+
     m = f"# hazync v0.27.0 x\n{hashlib.sha256(evil).hexdigest()}  {appupdate.INSTALLER}\n".encode()
     verify = (lambda *a, **k: (True, "stubbed")) if CONTROL else None
     ok, why = appupdate.check_download("v0.27.0", m, "not a signature", evil, verify=verify)

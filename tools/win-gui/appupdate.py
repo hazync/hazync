@@ -288,6 +288,17 @@ def manifest_tag(manifest_text):
     return m.group(1) if m else ""
 
 
+def check_manifest(tag, manifest, asc, key_packet=MAINTAINER_KEY_PACKET, now=None):
+    """(ok, why): `manifest` (bytes) is signed by the pinned key (`asc`, armored text or bytes) AND its signed first line
+    names `tag`. What windows-installer.yml checks before it trusts a release's hashes (review R3-6 #8, 28.11.2026)."""
+    ok, why = verify_signature(manifest, asc.decode("ascii", "replace") if isinstance(asc, bytes) else asc,
+                               key_packet=key_packet, now=now)
+    if not ok:
+        return False, why
+    named = manifest_tag(manifest.decode("utf-8", "replace"))
+    return (True, why) if named == tag else (False, f"the signed manifest is for {named or 'no tag'}, not {tag}")
+
+
 def check_download(tag, manifest, asc, installer, key_packet=MAINTAINER_KEY_PACKET, verify=None):
     """(ok, why) for three downloaded byte strings: signature, then the tag line, then the installer's hash."""
     ok, why = (verify or verify_signature)(manifest, asc.decode("ascii", "replace") if isinstance(asc, bytes) else asc,

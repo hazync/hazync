@@ -47,7 +47,13 @@ ENGINE_ID = hashlib.sha256(bytes.fromhex(EXE) + bytes.fromhex(VM)).hexdigest()
 FAKE_HOST = f'''#!{sys.executable}
 import hashlib, json, os, sys
 if sys.argv[1:] == ["method-id"]:
-    if os.environ.get("HAZYNC_ENGINE"):
+    if os.environ.get("HAZYNC_ENGINE_VK"):     # the real host: the id the KEY commits to, under its pin (board_key)
+        vk = open(os.environ["HAZYNC_ENGINE_VK"], "rb").read()
+        if hashlib.sha256(vk).hexdigest() != os.environ.get("HAZYNC_ENGINE_VK_PIN"):
+            print("HAZYNC_ENGINE_VK is not the pinned key", file=sys.stderr); sys.exit(1)
+        v = json.loads(vk)                     # (the fake key "encodes" its exe / vm as JSON)
+        print("METHOD_ID " + hashlib.sha256(bytes.fromhex(v["exe"]) + bytes.fromhex(v["vm"])).hexdigest())
+    elif os.environ.get("HAZYNC_ENGINE"):
         keys = os.environ["HAZYNC_ENGINE_KEYS"]
         try:
             v = json.load(open(os.path.join(keys, "image.json")))
@@ -66,7 +72,7 @@ def executable(p, text):
     p.chmod(p.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
-def layout(root, engine=True, keys=True, drop=None, exe=EXE, vm=VM):
+def layout(root, engine=True, keys=True, drop=None, exe=EXE, vm=VM, key_exe=None):
     d = root / "prover"
     d.mkdir(parents=True)
     host = d / "host"
@@ -79,7 +85,8 @@ def layout(root, engine=True, keys=True, drop=None, exe=EXE, vm=VM):
         for f in supervisor.ENGINE_KEY_FILES:
             if f == drop:
                 continue
-            (k / f).write_text(json.dumps({"exe": exe, "vm": vm}) if f == "image.json" else "x")
+            (k / f).write_text(json.dumps({"exe": exe, "vm": vm}) if f == "image.json"
+                               else json.dumps({"exe": key_exe or exe, "vm": vm}) if f == "vk.bin" else "x")
     return host
 
 
@@ -131,6 +138,21 @@ def main():
         r = supervisor.check_host_binary(str(h2))
         check(r.ok, f"passes against this app's engine image: {r.detail[:80]}")
         supervisor.CANONICAL_ENGINE_IMAGE_ID = saved
+
+        print("the key, not image.json, is the image (review R3-6 #9)")
+        h5 = layout(t / "mixed", key_exe="55" * 32)
+        r = supervisor.check_host_binary(str(h5), board_id=ENGINE_ID)
+        check(not r.ok and r.fatal and "disagree" in r.detail,
+              f"⛔ image.json naming the board's image over another image's key is fatal: {r.detail[:90]}")
+        saved_pin = supervisor.CANONICAL_ENGINE_VK_PIN
+        supervisor.CANONICAL_ENGINE_VK_PIN = "00" * 32
+        r = supervisor.check_host_binary(str(h1), board_id=ENGINE_ID)
+        check(not r.ok and r.fatal and "published key" in r.detail,
+              f"⛔ a key that is not the release's published pin is fatal: {r.detail[:90]}")
+        supervisor.CANONICAL_ENGINE_VK_PIN = hashlib.sha256((h1.parent / "keys" / "vk.bin").read_bytes()).hexdigest()
+        r = supervisor.check_host_binary(str(h1), board_id=ENGINE_ID)
+        check(r.ok, f"the published key passes: {r.detail[:70]}")
+        supervisor.CANONICAL_ENGINE_VK_PIN = saved_pin
 
         print("what is missing is named, and fatal")
         h3 = layout(t / "nokey", drop="agg.vk")

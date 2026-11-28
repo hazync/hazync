@@ -81,8 +81,16 @@ for n in names:
         records[name] = (hashlib.sha256(bytes.fromhex(exe + vm)).hexdigest(), hashlib.sha256(vk).hexdigest())
         if mode == "bad-keys" and name == "headers":
             vk = os.urandom(256)                       # a key that is not the record's pinned one
+        members = [("vk.bin", vk), ("image.json", json.dumps({"exe": exe, "vm": vm}).encode())] + \
+            [(fn, fn.encode()) for fn in ("sdk.pk", "agg.vk", "openvm.toml", "guest.vmexe", "baseline.json")]
+        if name == "headers" and mode == "dotslash":   # R3-6 #3: names the old check normalised with lstrip("./")
+            members = [("./" + fn, data) for fn, data in members]
+        if name == "headers" and mode == "dup-member":  # a second vk.bin: `tar -x` keeps the LAST one
+            members.append(("vk.bin", os.urandom(256)))
+        if name == "headers" and mode == "dotdot":
+            members.append(("../vk.bin", os.urandom(256)))
         with tarfile.open(os.path.join(d, n), "w:gz") as t:
-            for fn, data in (("vk.bin", vk), ("image.json", json.dumps({"exe": exe, "vm": vm}).encode()), ("sdk.pk", b"pk")):
+            for fn, data in members:
                 ti = tarfile.TarInfo(fn); ti.size = len(data); t.addfile(ti, io.BytesIO(data))
 idh = records["core"][0]
 raw, hx = bytes.fromhex(idh), idh.encode()
@@ -104,7 +112,11 @@ if mode != "no-records":
     with open(rec, "w") as f:
         f.write("# name network image pin\n")
         for name, (img, pin) in sorted(records.items()):
+            if mode == "missing-record" and name == "headers":
+                continue                               # R3-6 #3: a key tarball on the release with no record
             f.write(f"{name} {'signet' if name.endswith('-signet') else 'mainnet'} {img} {pin}\n")
+        if mode == "dup-record":                       # a second core line: the old dict kept the LAST
+            f.write(f"core mainnet {os.urandom(32).hex()} {os.urandom(32).hex()}\n")
 PY
     git -C "$WS/tagtree" init -q && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t add -A \
         && git -C "$WS/tagtree" -c user.name=t -c user.email=t@t commit -qm tag
@@ -133,6 +145,17 @@ workspace norec no-records; write
 check "$([ $? != 0 ] && grep -q "no engine image is published at this tag" "$WS/write.log" && echo 1)" "a tag with no reproduce/engine-release.tsv is refused"
 workspace notinst not-installer; write
 check "$([ $? != 0 ] && grep -q "is not an Inno Setup installer" "$WS/write.log" && echo 1)" "a Windows installer that is not an installer is refused"
+# review R3-6 #3 (28.11.2026)
+workspace norecord missing-record; write
+check "$([ $? != 0 ] && grep -q "hazync-keys-headers.tar.gz has no record" "$WS/write.log" && echo 1)" "a key tarball with no record is refused (it was signed unchecked)"
+workspace duprec dup-record; write
+check "$([ $? != 0 ] && grep -q "names 'core' twice" "$WS/write.log" && echo 1)" "a record name given twice is refused (the last one silently won)"
+workspace dotslash dotslash; write
+check "$([ $? != 0 ] && grep -q "hazync-keys-headers.tar.gz: members must be exactly the key files" "$WS/write.log" && echo 1)" "tar members named ./vk.bin are refused (no name normalising)"
+workspace dupmem dup-member; write
+check "$([ $? != 0 ] && grep -q "hazync-keys-headers.tar.gz: members must be exactly the key files" "$WS/write.log" && echo 1)" "a tarball with two vk.bin members is refused (tar -x keeps the last)"
+workspace dotdot dotdot; write
+check "$([ $? != 0 ] && grep -q "hazync-keys-headers.tar.gz: members must be exactly the key files" "$WS/write.log" && echo 1)" "a tarball member ../vk.bin is refused"
 
 # 3. re-signs: the good release's assets AND its tag's records (each workspace makes fresh ones)
 goodtag() { cp "$GOOD"/dist/* "$WS/dist/"; cp "$GOOD"/SHA256SUMS.txt "$GOOD"/SHA256SUMS.txt.asc "$WS/prev/"

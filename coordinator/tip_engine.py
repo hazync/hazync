@@ -347,6 +347,11 @@ def main(argv=None):
 def live_run(a, api, runner, rundir, vk, pin, clock=time.time, sleep=time.sleep, workdir="/workspace"):
     """Rent, boot, prove, harvest, release. Everything after the rental is inside the try, and the finally harvests
     before it releases. Injected api / runner / clock / sleep: test_tip_engine drives this with fakes."""
+    # review R3-6 #4: the pod checks every proof under the key the runner pinned from the verified release (engine.env);
+    # the local check runs under HAZYNC_ENGINE_VK / _PIN. They must be the same key, or the two checks disagree.
+    if getattr(runner, "vk_pin", None) != pin:
+        raise SystemExit(f"tip_engine: the release's core key ({str(getattr(runner, 'vk_pin', None))[:16]}...) is not "
+                         f"HAZYNC_ENGINE_VK_PIN ({pin[:16]}...): nothing was rented")
     install_signal_teardown()
     prefix = run_prefix()
     with open(os.path.join(rundir, "run_prefix.txt"), "w") as fh:
