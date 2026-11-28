@@ -51,3 +51,33 @@ memory argument and program buses (assumed from the v2.0.0 audit); the speculati
 the block after the tip (R3-6); the engine assembly (edits.py, coinlog_ovm.py) against the RISC Zero guest source
 (R3-3, R3-5); the C++ helpers read only at call sites (hz_tx_rules_c, hz_indicated_height, is_bip30_unspendable, the
 caches).
+
+## Status: operator-side fixes (28.11.2026)
+
+Each with a test that fails on the code before the fix (6a10ef78) and passes after; the controls still fail.
+
+| # | state |
+|---|---|
+| R3-6 #1 | FIXED (sponsor_bot.py, both boots; tip_engine boots through it): every downloaded file is checked against want.txt (built only after the manifest's signature verified locally, as before) BEFORE anything runs; a mismatch is fetched again (3 tries), then the boot exits 3 with nothing downloaded run; the controller matches SHA_OK / KEYS_OK / CUDART_OK / GPU_OK / MID=<id> as whole lines (boot_accepted). test_sponsor_engine.py: a tampered host never runs and stops the boot; a stale bad file is refetched; markers inside other text are refused; on the old code 13 checks fail |
+| R3-6 #2 | FIXED (fold_rent.py, both CPU fetches): the expected sha comes from the controller's verified manifest (SshRunner.manifest_sha), no SHA256SUMS.txt fetched on the pod; refetch, then stop before the binary runs; no sha, no script. fold_rent selftest runs the fetch on a fake pod: a tampered binary is never run |
+| R3-6 #3 | FIXED (release-sign.yml): records read strictly (four fields, hex, a name once, also checked before the core id is read); the key tarballs drive the check (every hazync-keys-*.tar.gz needs exactly one record, every record its tarball); members must be exactly the seven key files, each once, regular, plain names. test-release-sign.sh: 5 new cases (no record, a name twice, ./ names, a second vk.bin, ../vk.bin), all refused; the old workflow fails all 5; the control still fails |
+| R3-6 #4 | FIXED: the engine boot pins the core key from the release itself (SshRunner.engine_key_pin: the key tarball checked against the verified manifest, its single vk.bin hashed; an operator SPONSOR_BOT_ENGINE_VK_PIN must agree); the pod refuses another vk.bin (KEYS_BAD, exit 4) and engine.env carries HAZYNC_ENGINE_VK + _PIN, so the smoke and tip_engine's per-block check run under the pinned key; tip_engine refuses to rent when the runner's pin is not HAZYNC_ENGINE_VK_PIN; run-workers.sh requires HAZYNC_ENGINE_VK_PIN (the key file defaults to $HAZYNC_ENGINE_KEYS/vk.bin) and checks it. No unpinned fallback anywhere; the fake hosts in test_sponsor_engine.py and test_tip_engine.py refuse without both (the tip test's fake host had the unpinned fallback that hid this) |
+| R3-6 #8 | FIXED (windows-installer.yml): with a manifest on the release, SHA256SUMS.txt.asc must be there and verify under the maintainer key pinned in tools/win-gui/appupdate.py (new verify_manifest.py / appupdate.check_manifest: the signature AND the signed tag line) before any hash is trusted; test_appupdate.py adds 6 checks (incl. the real v0.26.1 manifest passing and a changed byte refused). The first signing (no manifest yet) is unchanged |
+| R3-6 #9 | FIXED (tools/win-gui/supervisor.py): the image the app compares is the one the KEY commits to (host method-id under HAZYNC_ENGINE_VK + _PIN), and image.json must name the same image (else fatal); CANONICAL_ENGINE_VK_PIN (empty until the Stage 4 freeze) then refuses any other key. test_engine.py: a mixed key folder and a wrong published pin are fatal |
+| R3-5 L4 | FIXED (zapps/corecheck): both caches bounded (64 images, 16 (image, key) pairs); past the cap a new entry is an error (a FAIL), never leaked; cached entries still answer; the pin is still checked first. tests/cache_bound.rs. ⚠ This changes corecheck's code, so the wasm modules built on it (assume, deposit, liveness, statement, zeroconf) change bytes: re-pin once, with the round-3 reader fixes |
+
+Also fixed on the way: test_sponsor_engine.py's control exited 0 when it failed as it must, which CI's control step
+(`if ... --control; then exit 1`) would have turned red; it now exits non-zero on any failure, like the others.
+
+## Status: guest-side fixes (28.11.2026, 5cb6724e; fixes_guest.md)
+
+| # | state |
+|---|---|
+| R3-2 L-1 | FIXED (main.rs chunk loop): a transaction over 4,000,000 bytes is refused right after its length is read, before its bytes are read or any of Core's code sees them (log `core-reject: bad-blk-length`, then the run stops: no proof). The only caller of ChunkCtx::record; its own guard kept, its comment now true. The zeroconf guest reads no tx bytes itself (it verifies a core chunk proof) |
+| R3-3 L5 (comment) | FIXED: agg_lite.rs's header says the coins are bound by the coin log |
+| R3-1 #1 | FIXED: the INVARIANTS block in msm_ovm.rs, the div site in batch_ecdsa_ovm.rs, engine/guest/README.md. msm-test: against RustCrypto's k256 (an independent implementation), 710 cases, all equal; a counting copy (build.rs, markers asserted unique) shows all 10 guarded branches reached. Controls: equal-x test removed fails; a = -p test removed fails on the comparison |
+| R3-2 I-6 | CONFIRMED, no change: the engine guest's default features include libzync, so c_heap::startup_check() runs (main.rs:2404); it links OpenVM's default bump allocator (openvm features ["std"] only, not heap-embedded-alloc); a reusing-allocator build (keys-hz5) was refused by this check (engine/results/profile_chunk) |
+
+New core image: **755f5c5af4688606ac17e516161d870077ef40fdfe39f104c79f253845119c77** (exe 0ee7ff3e..., vm 00e00077...
+unchanged, vmexe c0301de5...), the same from reproduce/engine-ids.sh (laptop container) and the box's canonical layout.
+Honest chunks on it: 27 of 27 byte-identical to the previous image's and to RISC Zero's (r3_run_chunks.out).
