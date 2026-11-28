@@ -4,6 +4,10 @@
 # write [patch] entries in engine/host/.cargo/config.toml for its workspace crates (openvm-cuda-common declares `links`,
 # so a mix of patched and git copies would not resolve). Used by .github/workflows/engine-windows.yml.
 #   stark-backend-*.patch: vpmm_shim.cu's C++20 designated initializers as member assignments.
+#   stark-backend-pascal.patch (28.11.2026, Xesktop GTX 1080 Ti): the fused bitrev + tree kernel (gkr.cu) needs 64 KB of
+#     shared memory per block, which Pascal lacks (cudaErrorInvalidValue in LogupZerocheck): use it only when the device
+#     offers it, else the unfused path (the same tree layers); and VPMM's 8 TB address reservation, refused by the
+#     driver there ("out of memory" before any work), is halved until accepted (>= 16 GiB).
 #   openvm-*.patch: C99 compound literals as std::array temporaries (rv32im mul/mulh/divrem, bigint); GCC's
 #     -Wno-maybe-uninitialized passed only when the target is not MSVC (crates/vm, crates/recursion build.rs).
 #     histogram.cuh: below sm_70 (Pascal, e.g. the GTX 1050 Ti) each thread adds its own count, where sm_70+ uses

@@ -1,0 +1,102 @@
+diff --git a/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu b/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu
+index cdfa5bae..5e289796 100644
+--- a/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu
++++ b/crates/cuda-backend/cuda/src/logup_zerocheck/gkr.cu
+@@ -1889,6 +1889,17 @@ void bit_rev_frac_build_k2_kernel(
+     // to prevent register spills when Z_COUNT > WARP_SIZE. Z_COUNT=8 is always <= 32.
+ }
+ 
++// Whether this device can give the fused kernel below its 64 KB of dynamic shared memory per block. Pascal (sm_6x)
++// allows 48 KB per block at most, so cudaFuncSetAttribute refuses there (cudaErrorInvalidValue): the caller then
++// takes the unfused path (separate bitrev + layer 0), which computes the same tree layers (Hazync patch).
++extern "C" int _bit_rev_frac_ext_build_k2_supported()
++{
++    int device = 0, optin = 0;
++    if (cudaGetDevice(&device) != cudaSuccess) return 0;
++    if (cudaDeviceGetAttribute(&optin, cudaDevAttrMaxSharedMemoryPerBlockOptin, device) != cudaSuccess) return 0;
++    return (size_t)optin >= (size_t)256 * 8 * sizeof(FracExt) ? 1 : 0;
++}
++
+ // Fused bitrev + K=2 tree build for a single FracExt buffer.
+ // Requires domain_size >= 256 (uses Z-tile shmem kernel).
+ // Applies alpha to denominators and fuses tree layers 0 and 1 in shmem.
+diff --git a/crates/cuda-backend/src/cuda/ntt.rs b/crates/cuda-backend/src/cuda/ntt.rs
+index 81c21d5c..1f4e013d 100644
+--- a/crates/cuda-backend/src/cuda/ntt.rs
++++ b/crates/cuda-backend/src/cuda/ntt.rs
+@@ -77,6 +77,7 @@ extern "C" {
+     /// Fused bitrev + K=2 tree build for a single frac_fpext_t buffer.
+     /// Applies alpha to denominators and fuses tree layers 0 and 1 in shmem.
+     /// Requires domain_size >= 256.
++    fn _bit_rev_frac_ext_build_k2_supported() -> i32;
+     fn _bit_rev_frac_ext_build_k2(
+         inout: *mut std::ffi::c_void,
+         real_len: usize,
+@@ -140,6 +141,12 @@ pub unsafe fn bit_rev_frac_ext(
+     ))
+ }
+ 
++/// Whether the current device can run `bit_rev_frac_ext_build_k2` (64 KB of dynamic shared memory per block; not on
++/// Pascal). Hazync patch.
++pub fn bit_rev_frac_ext_build_k2_supported() -> bool {
++    unsafe { _bit_rev_frac_ext_build_k2_supported() != 0 }
++}
++
+ pub unsafe fn bit_rev_frac_ext_build_k2(
+     inout: &DeviceBuffer<(EF, EF)>,
+     real_len: usize,
+diff --git a/crates/cuda-backend/src/logup_zerocheck/fractional.rs b/crates/cuda-backend/src/logup_zerocheck/fractional.rs
+index 7fe2d007..14b0c506 100644
+--- a/crates/cuda-backend/src/logup_zerocheck/fractional.rs
++++ b/crates/cuda-backend/src/logup_zerocheck/fractional.rs
+@@ -703,7 +703,9 @@ where
+     // For large N (> 1024), fuse bitrev + tree layers 0 and 1 into a single kernel pass,
+     // eliminating ~1.5N global memory reads. For small N, fall back to separate operations.
+     let virtual_input = real_len < total_leaves;
+-    let start_layer_i = if total_leaves > 1024 {
++    // Hazync patch: the fused kernel needs 64 KB of shared memory per block, which Pascal lacks; the unfused path
++    // below computes the same layers.
++    let start_layer_i = if total_leaves > 1024 && crate::cuda::ntt::bit_rev_frac_ext_build_k2_supported() {
+         unsafe {
+             // SAFETY: Frac<EF> has exact same memory layout and alignment as (EF, EF).
+             let buf = transmute::<&DeviceBuffer<Frac<EF>>, &DeviceBuffer<(EF, EF)>>(&layer);
+diff --git a/crates/cuda-common/src/memory_manager/vm_pool.rs b/crates/cuda-common/src/memory_manager/vm_pool.rs
+index 5c330a45..55134adf 100644
+--- a/crates/cuda-common/src/memory_manager/vm_pool.rs
++++ b/crates/cuda-common/src/memory_manager/vm_pool.rs
+@@ -184,15 +184,32 @@ impl VirtualMemoryPool {
+                     };
+ 
+                     // Validate va_size
+-                    let va_size = config.va_size;
++                    let mut va_size = config.va_size;
+                     assert!(
+                         va_size > 0 && va_size.is_multiple_of(page_size),
+                         "VPMM_VA_SIZE must be > 0 and multiple of page size ({})",
+                         page_size
+                     );
+ 
+-                    // Reserve initial VA chunk
+-                    let va_base = vpmm_reserve(va_size, page_size).unwrap();
++                    // Reserve initial VA chunk. Hazync patch: some drivers refuse the 8 TB default (Windows WDDM on a
++                    // GTX 1080 Ti: "out of memory" before any work); halve the span while the driver refuses, down to
++                    // 16 GiB, and keep the size that worked for later chunks. Only the reserved address span changes.
++                    const MIN_VA: usize = 16 << 30;
++                    let va_base = loop {
++                        match vpmm_reserve(va_size, page_size) {
++                            Ok(base) => break base,
++                            Err(e) if va_size / 2 >= MIN_VA && (va_size / 2).is_multiple_of(page_size) => {
++                                tracing::warn!(
++                                    "VPMM: reserving {} refused ({:?}); trying {}",
++                                    ByteSize::b(va_size as u64),
++                                    e,
++                                    ByteSize::b((va_size / 2) as u64)
++                                );
++                                va_size /= 2;
++                            }
++                            Err(e) => panic!("VPMM: could not reserve virtual address space: {:?}", e),
++                        }
++                    };
+                     tracing::debug!(
+                         "VPMM: Reserved virtual address space {} with page size {}",
+                         ByteSize::b(va_size as u64),
