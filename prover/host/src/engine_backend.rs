@@ -294,7 +294,7 @@ pub(crate) static TRIE: Mutex<Option<EngineProof>> = Mutex::new(None);
 pub(crate) fn decode_state(j: &[u8]) -> crate::ChainState {
     assert!(j.len() % 4 == 0, "engine: journal is not whole words");
     let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-    risc0_zkvm::serde::from_slice(&w).expect("engine: ChainState")
+    hazync_journal::serde::from_slice(&w).expect("engine: ChainState")
 }
 
 /// The engine image id as the guest commits it (ChainState.self_id): sha256(exe || vm) of `<keys>/image.json`'s

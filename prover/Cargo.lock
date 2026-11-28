@@ -2405,6 +2405,7 @@ dependencies = [
  "bytemuck",
  "hazync-coinbase-smt",
  "hazync-engine-verify",
+ "hazync-journal",
  "hazync-utreexo",
  "libzync",
  "methods",
@@ -6938,6 +6939,7 @@ name = "zyncapp-host"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "hazync-journal",
  "libzync",
  "risc0-zkvm",
  "rustreexo",

@@ -25,3 +25,5 @@ zapp-hints = { path = "../../../zapps/hints" }
 libzync = { path = "../../../libzync", default-features = false, features = ["hints", "utreexo"] }
 # the utreexo tip step runs natively before proving (#[path] methods/utreexo-tip/src/step.rs): Floresta's accumulator code
 rustreexo = "=0.7.0"
+# The guests' word encoding (RISC Zero's serde format, byte-identical: engine/journal/compat), with no zkVM crate.
+hazync-journal = { path = "../../../engine/journal" }

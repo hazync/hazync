@@ -408,7 +408,7 @@ fn main() {
                 // input, as the other zAPP hosts take one)
                 _ => (if a[1].ends_with(".json") { load_core(&a[1], true).1 } else { jread(&a[1]) }, jread(&a[2])),
             };
-            let cs: ChainState = risc0_zkvm::serde::from_slice(&jwords(&tip_j)).unwrap_or_else(|e| die(&format!("tip journal: {e}")));
+            let cs: ChainState = hazync_journal::serde::from_slice(&jwords(&tip_j)).unwrap_or_else(|e| die(&format!("tip journal: {e}")));
             let idx: u32 = a[3].parse().unwrap_or_else(|_| die("record index?"));
             let raw: Vec<(u64, Vec<String>)> = serde_json::from_slice(&std::fs::read(&a[4]).unwrap_or_else(|e| die(&e.to_string())))
                 .unwrap_or_else(|e| die(&format!("paths.json: {e}")));
@@ -587,7 +587,7 @@ fn hints_prove(a: &[String]) {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
         let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
             .unwrap_or_else(|e| die(&format!("{}: {e}", a[3])));
-        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let j: Vec<u8> = hazync_journal::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         (cs, j, None)
     } else {
         let r: Receipt = bincode::deserialize(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
@@ -618,7 +618,7 @@ fn hints_prove(a: &[String]) {
             "format" => format = 3,
             _ => {}
         }
-        journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        journal = hazync_journal::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         println!("HINTS_TAMPER {}: the core journal / statement input changed", tc.as_deref().unwrap());
     }
     let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
@@ -741,7 +741,7 @@ fn utreexo_prove(a: &[String]) {
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
         let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
             .unwrap_or_else(|e| die(&format!("{}: {e}", a[3])));
-        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let j: Vec<u8> = hazync_journal::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         (cs, j, None)
     } else {
         let r: Receipt = bincode::deserialize(&std::fs::read(&a[3]).unwrap_or_else(|e| die(&e.to_string())))
@@ -831,7 +831,7 @@ fn utreexo_prove(a: &[String]) {
             _ => {}
         }
         if receipt.is_some() { die("a journal tamper case needs a state JSON"); }
-        journal = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        journal = hazync_journal::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         println!("UTREEXO_TAMPER {c}: the core journal / run chain input changed");
     }
     let core_id_in: [u32; 8] = if tc.as_deref() == Some("core_id") { let mut c = cs.self_id; c[0] ^= 1; c } else { cs.self_id };
@@ -910,7 +910,7 @@ fn utreexo_prove(a: &[String]) {
             println!("UTREEXO_PROVED run={} blocks={lo}..{hi} -> {p} in {:.1} s ({} bytes)", i + 1, t1.elapsed().as_secs_f64(), std::fs::metadata(&p).unwrap().len());
             (r.journal.bytes.clone(), Some(r))
         };
-        let z: UtreexoStatement = risc0_zkvm::serde::from_slice(&jb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>())
+        let z: UtreexoStatement = hazync_journal::serde::from_slice(&jb.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>())
             .unwrap_or_else(|e| die(&format!("journal: {e}")));
         if !last {
             let want: [u8; 32] = { use sha2::Digest; sha2::Sha256::digest(&states[i]).into() };
@@ -943,7 +943,7 @@ struct TipStatement {
 }
 
 /// A value as the guest's env::read sees it: RISC Zero's serde words.
-fn sw<T: Serialize + ?Sized>(v: &T) -> Vec<u32> { risc0_zkvm::serde::to_vec(v).unwrap() }
+fn sw<T: Serialize + ?Sized>(v: &T) -> Vec<u32> { hazync_journal::serde::to_vec(v).unwrap() }
 
 fn jwords(b: &[u8]) -> Vec<u32> { b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect() }
 
@@ -953,7 +953,7 @@ fn load_core(path: &str, execute: bool) -> (ChainStateJ, Vec<u8>, Option<Receipt
         if !execute { die("a state JSON is not a proof: give the core receipt, or --execute"); }
         let cs: ChainStateJ = serde_json::from_slice(&std::fs::read(path).unwrap_or_else(|e| die(&e.to_string())))
             .unwrap_or_else(|e| die(&format!("{path}: {e}")));
-        let j: Vec<u8> = risc0_zkvm::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let j: Vec<u8> = hazync_journal::serde::to_vec(&cs).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect();
         (cs, j, None)
     } else {
         let r: Receipt = bincode::deserialize(&std::fs::read(path).unwrap_or_else(|e| die(&e.to_string())))
@@ -1016,11 +1016,11 @@ fn utreexo_tip_prove(a: &[String]) {
     let pw = jwords(&pj);
     let kind = *pw.first().unwrap_or_else(|| die("the previous journal is empty"));
     let (prev_kind, prev_id, p_height, p_hash, p_leaves, p_roots) = if kind == libzync::utreexo_roots::KIND_UTREEXO {
-        let z: UtreexoStatement = risc0_zkvm::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("base journal: {e}")));
+        let z: UtreexoStatement = hazync_journal::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("base journal: {e}")));
         if z.done != 1 { die("the previous receipt is not a base's final run"); }
         (1u32, base_id, z.height, z.block_hash, z.leaves, z.roots)
     } else if kind == step::KIND_UTREEXO_TIP {
-        let z: TipStatement = risc0_zkvm::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("step journal: {e}")));
+        let z: TipStatement = hazync_journal::serde::from_slice(&pw).unwrap_or_else(|e| die(&format!("step journal: {e}")));
         if z.base_id != base_id { die(&format!("the previous step is from base image {}, not {}", id_hex(&z.base_id), id_hex(&base_id))); }
         (2u32, self_id, z.height, z.block_hash, z.leaves, z.roots)
     } else {
@@ -1198,7 +1198,7 @@ fn utreexo_tip_prove(a: &[String]) {
         println!("UTREEXO_TIP_PROVED blocks={}..{stop} -> {out} in {:.1} s ({} bytes)", p_height + 1, t1.elapsed().as_secs_f64(), std::fs::metadata(out).unwrap().len());
         r.journal.bytes.clone()
     };
-    let z: TipStatement = risc0_zkvm::serde::from_slice(&jwords(&jb)).unwrap_or_else(|e| die(&format!("journal: {e}")));
+    let z: TipStatement = hazync_journal::serde::from_slice(&jwords(&jb)).unwrap_or_else(|e| die(&format!("journal: {e}")));
     if z.roots != n_roots || z.leaves != n_leaves || z.block_hash != n_last || z.height != stop || z.from != p_height {
         die("the guest's statement is not the native replay's");
     }

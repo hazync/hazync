@@ -493,7 +493,7 @@ fn link_digest(s: &ChainState) -> [u8; 32] {
 }
 
 fn state_journal_bytes(s: &ChainState) -> Vec<u8> {
-    risc0_zkvm::serde::to_vec(s).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect()
+    hazync_journal::serde::to_vec(s).unwrap().iter().flat_map(|w| w.to_le_bytes()).collect()
 }
 
 fn work_u128(w: &[u8; 32]) -> u128 {

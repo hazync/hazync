@@ -191,7 +191,7 @@ fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, chec
     ev::verify_full_bytes(&key, &pin, proof, journal, &id).map_err(|e| engine_refusal(e, journal, &id))?;
     if journal.len() % 4 != 0 { return Err("journal is not whole words".into()); }
     let w: Vec<u32> = journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-    let st: ChainState = risc0_zkvm::serde::from_slice(&w).map_err(|e| format!("journal is not a ChainState: {e}"))?;
+    let st: ChainState = hazync_journal::serde::from_slice(&w).map_err(|e| format!("journal is not a ChainState: {e}"))?;
     let image: [u32; 8] = core::array::from_fn(|i| u32::from_le_bytes(id[4 * i..4 * i + 4].try_into().unwrap()));
     if st.kind != KIND_CHAIN { return Err(format!("journal kind {:#x} is not a chain state", st.kind)); }
     if st.self_id != image { return Err("the state's self_id is not the image that verified it".into()); }
@@ -218,7 +218,7 @@ fn engine_refusal(e: hazync_engine_verify::Refusal, journal: &[u8], id: &[u8; 32
     }
     let image: [u32; 8] = core::array::from_fn(|i| u32::from_le_bytes(id[4 * i..4 * i + 4].try_into().unwrap()));
     let other = (journal.len() % 4 == 0).then(|| journal.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect::<Vec<u32>>())
-        .and_then(|w| risc0_zkvm::serde::from_slice::<ChainState, u32>(&w).ok())
+        .and_then(|w| hazync_journal::serde::from_slice::<ChainState, u32>(&w).ok())
         .filter(|st| st.kind == KIND_CHAIN && st.self_id != image);
     match other {
         Some(st) => format!("proved by image {} (its journal says so), not this coordinator's engine image {} (METHOD_ID MISMATCH: another guest build): {e}",
@@ -386,9 +386,9 @@ mod engine_board_tests {
         // journal's own self_id; built here from the real one with self_id changed (it does not verify either way)
         let (pr, jr) = hazync_engine_verify::unpack(&proof()).map(|(a, b)| (a.to_vec(), b.to_vec())).unwrap();
         let w: Vec<u32> = jr.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-        let mut st: crate::ChainState = risc0_zkvm::serde::from_slice(&w).unwrap();
+        let mut st: crate::ChainState = hazync_journal::serde::from_slice(&w).unwrap();
         st.self_id[0] ^= 1;
-        let j2: Vec<u8> = risc0_zkvm::serde::to_vec(&st).unwrap().iter().flat_map(|x| x.to_le_bytes()).collect();
+        let j2: Vec<u8> = hazync_journal::serde::to_vec(&st).unwrap().iter().flat_map(|x| x.to_le_bytes()).collect();
         let e = verify_any_engine(&hazync_engine_verify::pack(&pr, &j2), key(D), Some(1), false).unwrap_err();
         assert!(e.contains("METHOD_ID MISMATCH: another guest build") && e.contains("proved by image"), "another build: {e}");
         // claimed starts the state cannot have: past its height, zero, and one whose state before it is unknown here
