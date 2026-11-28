@@ -171,7 +171,7 @@ pub(crate) fn write_forest_mark(state_json: &str) {
 /// Block `height`'s leaf: with its undo hash when the image proving it has the commitment (every block of an image
 /// with an empty lineage but 0; below a pre-undo predecessor's first_height, that image's 0x02 leaf).
 pub(crate) fn block_leaf_host(tip_hash: &[u8; 32], height: u32, state: &[u8; 32], undo: &[u8; 32]) -> ([u8; 32], bool) {
-    let with = crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), height);
+    let with = crate::handover_pin::leaf_has_undo(&crate::own_image(), crate::pinned_lineage(), height);
     let l = if with { Sha256::digest(crate::handover_pin::block_leaf_undo_preimage(tip_hash, height, state, undo)).into() }
             else { Sha256::digest(crate::handover_pin::block_leaf_preimage(tip_hash, height, state)).into() };
     (l, with)
@@ -451,7 +451,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
     // are untrusted starting points; a leaf's guest checks every witness against them either way.
     // Stamped BY ERA (docs/HANDOVER.md §5): the image that proves block prev.height under this image's lineage, which
     // is this image unless a handover is pinned above it.
-    if cont && prev.height >= 1 && crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), prev.height) {
+    if cont && prev.height >= 1 && crate::handover_pin::leaf_has_undo(&crate::own_image(), crate::pinned_lineage(), prev.height) {
         let mark = std::fs::read_to_string(forest_mark_path(anchor_path)).unwrap_or_default();
         assert!(mark == FOREST_MARK, "{anchor_path}: no forest marker ({}): its block forest may be from a prep run made before the \
                 undo-data commitment, which this host cannot continue. Carry the run over with libzync-reforest first \
@@ -464,7 +464,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         crate::stamp(&mut prev);
         if was != (prev.self_id, prev.lineage, prev.profile) {
             println!("  prep: the anchor was saved under another image or era; re-stamped (image {}, lineage {})",
-                     crate::hex(&risc0_zkvm::sha::Digest::from(prev.self_id).as_bytes().try_into().unwrap_or([0u8; 32])), crate::hex(&prev.lineage));
+                     crate::lz::hex_id(&prev.self_id), crate::hex(&prev.lineage));
         }
     }
     let check = std::env::var("HAZYNC_PREP_CHECK").ok();
@@ -608,7 +608,7 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
             crate::lz::hist_append(out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends, undo });
         }
         if h == lo { st.anchor_id = anchor_id; }
-        // the image proving block h, and the lineage at h (identity with an empty lineage: METHOD_ID, zero)
+        // the image proving block h, and the lineage at h (with an empty lineage: this host's own image, zero)
         crate::stamp(&mut st);
         // atomic and synced at a save point (its state_<h>.json is the anchor a restart takes; round 9); between them
         // atomic by a rename but not synced per block (two fsyncs per block across a mainnet prep cost; round 10):
@@ -711,7 +711,7 @@ fn consume_env() -> bool { std::env::var("HAZYNC_PREP_CONSUME").as_deref() == Ok
 /// and the reorg rewind (rewind.rs), which ends with a save point at the fork.
 pub(crate) fn save_stores(out: &str, h: u32, smt: &Smt) {
     // right after the state, before the stores: every save point the runner takes as complete has them
-    if crate::handover_pin::leaf_has_undo(&crate::METHOD_ID, crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
+    if crate::handover_pin::leaf_has_undo(&crate::own_image(), crate::pinned_lineage(), h) { write_forest_mark(&format!("{out}/state_{h}.json")); }
     crate::lz::write_atomic(&crate::tracked::flags_mark_path(&format!("{out}/state_{h}.json")), crate::tracked::FLAGS_MARK.as_bytes());
     crate::lz::write_atomic(&format!("{out}/state_{h}.smt"), &smt_to_bytes(smt));
     crate::lz::cl_save(&format!("{out}/state_{h}.coinlog"), h);

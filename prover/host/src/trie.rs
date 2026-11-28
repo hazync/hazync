@@ -10,7 +10,6 @@
 use libzync::coinlog::W;
 use libzync::trie_store::TrieStore;
 use libzync::ttree::Key;
-use risc0_zkvm::ExecutorEnv;
 use crate::ChainState;
 use crate::lz::hx_bytes;
 
@@ -45,7 +44,6 @@ pub(crate) fn trie_parse(text: &str) -> (Marks, Inserts) {
 pub(crate) fn trie_env(b: &mut impl crate::sink::Sink, wit: &[u32], marks: &Marks, ins: &Inserts) {
     let perm = trie_perm(marks, ins);
     let (mw, iw) = list_words(marks, ins);
-    b.segment_limit_po2(crate::seg_po2());
     b.write(&17u32);
     b.write_slice(&[wit.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32]);
     b.write_slice(wit);
@@ -78,7 +76,7 @@ fn write_lists(b: &mut impl crate::sink::Sink, mw: &[u32], iw: &[u32], perm: &[u
 
 /// A split trie update (guest modes 19 + 20): the witness cut at depth `k` of the top trie. Returns each part's input
 /// stream with the journal its proof will carry (computed here by the guest's own code, libzync::ttree), and the
-/// combine's input stream, which carries this host's METHOD_ID as its image id at bytes 4..36 (the engine puts its own
+/// combine's input stream, which carries this host's image id at bytes 4..36 (engine_backend::image_id; the engine puts its own
 /// there, as for an aggregate). None when the cut yields no part (a trie with no node at depth k on any update's path).
 #[allow(clippy::type_complexity)]
 pub(crate) fn trie_split(wit: &[u32], marks: &Marks, ins: &Inserts, k: u32)
@@ -107,7 +105,7 @@ pub(crate) fn trie_split(wit: &[u32], marks: &Marks, ins: &Inserts, k: u32)
     let (mw, iw) = list_words(marks, ins);
     let mut st = Stream::default();
     st.write(&20u32);
-    st.write(&methods::METHOD_ID);
+    st.write(&crate::engine_backend::image_id());
     st.write_slice(&[cw.len() as u32, marks.len() as u32, ins.len() as u32, perm.len() as u32, parts.len() as u32]);
     st.write_slice(&cw);
     write_lists(&mut st, &mw, &iw, &perm);
@@ -127,23 +125,6 @@ pub(crate) fn trie_witness(h: u32, marks: &Marks, ins: &Inserts, prev: &ChainSta
     let st = g.as_ref().expect("trie store not initialised");
     assert_eq!(libzync::coinlog::h_of(&st.root()), prev.trie_root, "block {h}: the trie store is not at the previous state's trie root");
     st.witness(marks, ins)
-}
-
-/// PROVE one block's trie update from a given witness (a leaf proof takes it from prep's leaf bundle, no store).
-pub(crate) fn trie_prove_wit(h: u32, wit: &[u32], marks: &Marks, ins: &Inserts, prev: &ChainState, opts: &risc0_zkvm::ProverOpts) -> risc0_zkvm::Receipt {
-    let mut b = ExecutorEnv::builder();
-    trie_env(&mut b, wit, marks, ins);
-    { use crate::seg_po2; b.segment_limit_po2(seg_po2()); } // trie_env sets it too; restated for check_seg_guards.sh
-    let info = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), methods::METHOD_ELF, opts)
-        .unwrap_or_else(|e| panic!("block {h}: trie update proof (mode 17) failed: {e}"));
-    crate::lz::lz_stats("trie", h, &info.stats);
-    let r = info.receipt;
-    r.verify(methods::METHOD_ID).expect("trie receipt verifies");
-    let j = trie_journal_words(&r.journal.bytes);
-    assert!(j[0] == libzync::ttree::KIND_TRIE && j[1..9] == libzync::coinlog::w_of(&prev.trie_root)[..],
-            "block {h}: the trie receipt is not from the previous trie root");
-    println!("  block {h}: trie update proved: {} marks, {} inserts, witness {} words", marks.len(), ins.len(), wit.len());
-    r
 }
 
 /// After the block's aggregate is proved: apply its update list to the store; the new root must be the committed one.

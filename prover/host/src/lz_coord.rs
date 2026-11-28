@@ -19,7 +19,6 @@
 //! anchor_id. The coordinator only verifies (decision_coordinator_serves_never_computes): a digest is a hash.
 
 use crate::{hex, link_digest, ChainState, KIND_CHAIN};
-use methods::METHOD_ID;
 
 fn bridge_dir() -> String {
     std::env::var("HAZYNC_BRIDGE_OUT").unwrap_or_else(|_| "/root/bridge_bundles".into())
@@ -60,23 +59,16 @@ pub(crate) fn prove_bridge_cmd(h: u32) {
     std::env::set_var("HAZYNC_LEAF_BUNDLE", &p);
     let out = format!("lz_leaf_{h}");
     crate::lz::lz_prove_range_cmd(h, h, &out, "leaf", &out);
-    if crate::engine_backend::active() {
-        // the engine's leaf (block_<h>.ovm, a pair) as the board's one file: HZE1, checked by verify-core (STAGE3 3.2)
-        let src = std::path::PathBuf::from(format!("{out}/block_{h}.ovm"));
-        crate::engine_backend::with(&out, |e| e.pack(&src, std::path::Path::new(&format!("range_{h}.bin"))));
-        let _ = std::fs::remove_dir_all(&out);
-        println!("leaf engine proof for block {h} -> range_{h}.bin");
-        return;
-    }
-    let r = std::fs::read(format!("{out}/block_{h}.rcpt")).unwrap();
-    crate::lz::write_atomic(&format!("range_{h}.bin"), &r);
+    // the engine's leaf (block_<h>.ovm, a pair) as the board's one file: HZE1, checked by verify-core (STAGE3 3.2)
+    let src = std::path::PathBuf::from(format!("{out}/block_{h}.ovm"));
+    crate::engine_backend::with(&out, |e| e.pack(&src, std::path::Path::new(&format!("range_{h}.bin"))));
     let _ = std::fs::remove_dir_all(&out);
-    println!("leaf receipt for block {h} -> range_{h}.bin");
+    println!("leaf engine proof for block {h} -> range_{h}.bin");
 }
 
-/// `verify-any <rcpt> [<lo>] [--check-end]` on a libzync host: verifies the receipt against this image and prints the
-/// coordinator's RANGE-OK line. Without `<lo>` the range is reported as starting at hi (a leaf), which is checked the
-/// same way. `--check-end` (the board passes it) also requires the END state to be the board's own (see below) and
+/// `verify-any <proof> [<lo>] [--check-end]` on a libzync host: verifies the engine proof (HZE1) under the board's key
+/// (HAZYNC_ENGINE_VK + HAZYNC_ENGINE_VK_PIN) and prints the coordinator's RANGE-OK line. Without `<lo>` the range is
+/// reported as starting at hi (a leaf), which is checked the same way. `--check-end` (the board passes it) also requires the END state to be the board's own (see below) and
 /// adds `end=board` to the line; the board refuses a line without it, so an older host that ignores the flag fails
 /// closed. A contributor's self-test has no board states and does not pass it.
 pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>, check_end: bool) {
@@ -87,61 +79,18 @@ pub(crate) fn verify_any_cmd(path: &str, lo: Option<u32>, check_end: bool) {
 }
 
 fn verify_any(path: &str, lo: Option<u32>, check_end: bool) -> Result<(), String> {
-    // An engine board (HAZYNC_ENGINE_VK set) takes engine proof files only; a RISC Zero board refuses them below (the
-    // receipt decoder), as another build's (MISMATCH).
+    // The board takes engine proof files only, under its pinned key. A host with no key verifies nothing: a refusal
+    // naming the configuration, never a verdict (RISC Zero receipts, the board's before CUTOVER C8, are v0.27.1's).
     let raw = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-    if let Some(key) = crate::engine_backend::board_key() {
-        return verify_any_engine(&raw, key?, lo, check_end);
+    match crate::engine_backend::board_key() {
+        Some(key) => verify_any_engine(&raw, key?, lo, check_end),
+        None => Err("this host has no engine key to verify with (set HAZYNC_ENGINE_VK and HAZYNC_ENGINE_VK_PIN: a coordinator \
+                     configuration error); a RISC Zero receipt is checked with v0.27.1's verifier".into()),
     }
-    if hazync_engine_verify::is_engine_proof(&raw) {
-        return Err("an engine (OpenVM) proof file, but this coordinator verifies RISC Zero receipts (METHOD_ID MISMATCH: set HAZYNC_ENGINE_VK and HAZYNC_ENGINE_VK_PIN for an engine board)".into());
-    }
-    let r = crate::verify::read_receipt(path)?;
-    // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in this process's environment: refuse both, as
-    // libzync-verify does, so a stray dev-mode variable on the board can never let a hand-written state in.
-    // The one exception is a test opt-in that takes TWO switches (RISC0_DEV_MODE and HAZYNC_TEST_FAKE_RECEIPTS=1); the
-    // RANGE-OK line then says `fake=1`, which the board refuses unless it runs with COORD_ALLOW_MOCK (testing only).
-    let test_fake = crate::verify::dev_mode_env() && std::env::var("HAZYNC_TEST_FAKE_RECEIPTS").as_deref() == Ok("1");
-    let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
-    if test_fake {
-        eprintln!("WARNING: HAZYNC_TEST_FAKE_RECEIPTS=1 under RISC0_DEV_MODE: fake receipts are accepted (testing only)");
-    } else {
-        if fake { return Err("a dev-mode FakeReceipt is not a proof".into()); }
-        if crate::verify::dev_mode_env() { return Err("RISC0_DEV_MODE is set in the verifier's environment: refusing to verify".into()); }
-    }
-    // MISMATCH: the coordinator reads it as a different guest build (the common contributor mistake), not a forgery
-    // Which image proved it (docs/HANDOVER.md §6): this one, for the blocks from its last handover up, or a predecessor
-    // pinned in its lineage, for the blocks below where that predecessor handed over (its own RISC Zero's check, or the
-    // vendored one for an older RISC Zero). Anything else stays MISMATCH: the worker reads that word as another build.
-    let st: ChainState = crate::verify::decode_journal(&r.journal).map_err(|e| format!("journal is not a ChainState: {e}"))?;
-    let lineage = crate::pinned_lineage();
-    let own = r.verify(METHOD_ID);
-    let (image, want_lineage, era_lo, era_hi) = match own {
-        Ok(()) => (METHOD_ID, crate::lineage_of(lineage), lineage.last().map_or(1, |e| e.first_height), u32::MAX),
-        Err(e) => {
-            let k = lineage.iter().position(|p| p.image == st.self_id && crate::verify_pred_receipt(&r, p).is_ok())
-                .ok_or_else(|| format!("does not verify against this coordinator's libzync image (METHOD_ID MISMATCH or invalid proof): {e}"))?;
-            let p = &lineage[k];
-            (p.image, crate::lineage_of(&lineage[..k]), if k == 0 { 1 } else { lineage[k - 1].first_height }, p.first_height - 1)
-        }
-    };
-    if st.kind != KIND_CHAIN { return Err(format!("journal kind {:#x} is not a chain state", st.kind)); }
-    if st.self_id != image { return Err("the state's self_id is not the image that verified it".into()); }
-    if st.lineage != want_lineage {
-        return Err(format!("lineage {} is not image {}'s ({}): a spliced or forged history", hex(&st.lineage), hex_id(&image), hex(&want_lineage)));
-    }
-    if st.height < era_lo || st.height > era_hi {
-        return Err(format!("image {} proves blocks {era_lo}..={era_hi} under this coordinator's lineage, not {} (MISMATCH: an image past its handover)",
-                           hex_id(&image), st.height));
-    }
-    if st.profile != crate::lz::expected_profile() {
-        return Err(format!("profile {:#x}, this coordinator's image commits {:#x}", st.profile, crate::lz::expected_profile()));
-    }
-    range_ok(&st, &image, lo, check_end, era_lo, fake || test_fake)
 }
 
-/// The checks the board needs beyond the proof itself, shared by both provers' files, and the RANGE-OK line: the claimed
-/// start, the anchor (the state before lo), the end (the board's own state at hi, `--check-end`), the era.
+/// The checks the board needs beyond the proof itself, and the RANGE-OK line: the claimed start, the anchor (the state
+/// before lo), the end (the board's own state at hi, `--check-end`), the era.
 fn range_ok(st: &ChainState, image: &[u32; 8], lo: Option<u32>, check_end: bool, era_lo: u32, fake: bool) -> Result<(), String> {
     let lo = lo.unwrap_or(st.height);
     if lo == 0 || lo > st.height { return Err(format!("claimed start {lo} for a state at {}", st.height)); }
@@ -178,7 +127,7 @@ fn range_ok(st: &ChainState, image: &[u32; 8], lo: Option<u32>, check_end: bool,
 
 /// verify-any for an engine board: the HZE1 file verified as every reader verifies it (verify-core, under the pinned
 /// key; the image is the one the key names), the journal a ChainState of that image with no lineage (an engine chain
-/// from genesis), this board's profile, then the same range checks as a RISC Zero receipt.
+/// from genesis), this board's profile, then the range checks (`range_ok`).
 fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, check_end: bool) -> Result<(), String> {
     use hazync_engine_verify as ev;
     if !ev::is_engine_proof(raw) {
@@ -208,8 +157,8 @@ fn verify_any_engine(raw: &[u8], key: (Vec<u8>, [u8; 32]), lo: Option<u32>, chec
 /// a proof another guest build made (the common contributor mistake, which the worker reports as a build problem),
 /// a forged, tampered or corrupt one as an invalid proof, and the board's own key as its configuration. Another build
 /// is told apart by the proof's journal, read WITHOUT trusting it: a chain state naming another image. The verdict does
-/// not depend on it (the proof is refused either way), only the reason; the RISC Zero path sorts by its receipt's
-/// claimed image the same way. Found by the Gate 3 dry run (engine/results/board_dryrun): every failed engine proof
+/// not depend on it (the proof is refused either way), only the reason (the RISC Zero board sorted by its receipt's
+/// claimed image the same way). Found by the Gate 3 dry run (engine/results/board_dryrun): every failed engine proof
 /// said "MISMATCH or invalid proof", so a tampered proof was reported as another build.
 fn engine_refusal(e: hazync_engine_verify::Refusal, journal: &[u8], id: &[u8; 32]) -> String {
     use hazync_engine_verify::Refusal;
@@ -229,118 +178,6 @@ fn engine_refusal(e: hazync_engine_verify::Refusal, journal: &[u8], id: &[u8; 32
 
 fn hex_id(w: &[u32; 8]) -> String {
     w.iter().flat_map(|x| x.to_le_bytes()).map(|b| format!("{b:02x}")).collect()
-}
-
-/// `libzync-handover <pred receipt> <leaf_H.bin> <out>`: block H, the first block this image proves, as the handover
-/// step on the predecessor's genesis-anchored receipt ending at H-1 (the board's spine). The bundle's witnesses were
-/// cut against S(H-1); that state must be exactly the receipt's journal, so the guest checks them against what the
-/// predecessor proved. Writes the [1..H] receipt to <out>.
-pub(crate) fn handover_cmd(pred: &str, bundle: &str, out: &str) {
-    let last = crate::pinned_lineage().last().expect("libzync-handover: this image pins no predecessor");
-    let h = last.first_height;
-    let b = crate::prep::leaf_read(bundle);
-    assert!(b.prev.height + 1 == h, "{bundle} is the bundle for block {}, the handover is at {h}", b.prev.height + 1);
-    std::env::set_var("HAZYNC_LEAF_BUNDLE", bundle);
-    std::env::set_var("HAZYNC_HANDOVER_RECEIPT", pred);
-    let dir = format!("lz_handover_{h}");
-    crate::lz::lz_prove_range_cmd(h, h, &dir, "handover", &dir);
-    let r = std::fs::read(format!("{dir}/block_{h}.rcpt")).unwrap();
-    crate::lz::write_atomic(out, &r);
-    let _ = std::fs::remove_dir_all(&dir);
-    println!("HANDOVER-OK block {h}: receipt of blocks 1..={h} under image {} -> {out}", crate::method_id_hex());
-}
-
-#[cfg(test)]
-mod strict_decode_tests {
-    //! verify-any reads a contributor's upload: the fuzz round 11-17 receipts (tests/data/risc0_vectors, from the old swiftsync-verify/vectors) must be REFUSED
-    //! with an error, not verified (trailing byte) and not abort the process (unreduced word, ragged journal).
-    use super::verify_any;
-    const V: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/risc0_vectors/");
-
-    fn refused(file: &str) -> String {
-        verify_any(&format!("{V}{file}"), Some(1), false).expect_err(file)
-    }
-
-    #[test]
-    fn the_real_receipt_decodes_control() {
-        // The unmodified proof gets past the strict decoder: whatever this image's lineage makes of it, any refusal is
-        // a later check's, never the decoder's.
-        if let Err(e) = verify_any(&format!("{V}mainnet_1_200_8888d59c.rcpt"), Some(1), false) {
-            assert!(!e.contains("not a receipt") && !e.contains("malformed") && !e.contains("journal is not"), "{e}");
-        }
-        let raw = std::fs::read(format!("{V}mainnet_1_200_8888d59c.rcpt")).unwrap();
-        crate::verify::decode_receipt(&raw).expect("the real receipt decodes strictly");
-    }
-
-    #[test]
-    fn a_trailing_byte_is_refused() {
-        let e = refused("mainnet_1_200_8888d59c_trailing_byte.rcpt");
-        assert!(e.contains("not a receipt"), "{e}");
-    }
-
-    #[test]
-    fn an_unreduced_control_inclusion_word_is_refused_not_an_abort() {
-        let e = refused("mainnet_1_200_8888d59c_ctrl_unreduced.rcpt");
-        assert!(e.contains("malformed receipt: control inclusion proof digest"), "{e}");
-    }
-
-    #[test]
-    fn a_journal_of_partial_words_is_refused_not_an_abort() {
-        let e = refused("mainnet_1_200_8888d59c_journal_not_words.rcpt");
-        assert!(e.contains("not whole words"), "{e}");
-    }
-
-    /// The real receipt with one word of its succinct proof changed by `edit`, re-encoded: decode_receipt's verdict.
-    fn with_edit(edit: impl Fn(&mut risc0_zkvm::SuccinctReceipt<risc0_zkvm::ReceiptClaim>)) -> Result<risc0_zkvm::Receipt, String> {
-        let mut r: risc0_zkvm::Receipt = bincode::deserialize(&std::fs::read(format!("{V}mainnet_1_200_8888d59c.rcpt")).unwrap()).unwrap();
-        let risc0_zkvm::InnerReceipt::Succinct(s) = &mut r.inner else { panic!("not succinct") };
-        edit(s);
-        crate::verify::decode_receipt(&bincode::serialize(&r).unwrap())
-    }
-
-    #[test]
-    fn an_unreduced_control_id_word_is_refused() {
-        let e = with_edit(|s| s.control_id.as_mut_words()[3] = crate::verify::BABYBEAR_P).unwrap_err();
-        assert!(e.contains("malformed receipt: control_id word 3"), "{e}");
-        // control: the largest field element is accepted
-        with_edit(|s| s.control_id.as_mut_words()[3] = crate::verify::BABYBEAR_P - 1).expect("P - 1 is a field element");
-    }
-
-    #[test]
-    fn an_unreduced_seal_word_is_refused() {
-        let e = with_edit(|s| { let n = s.seal.len(); s.seal[n - 1] = u32::MAX }).unwrap_err();
-        assert!(e.contains("malformed receipt: seal word"), "{e}");
-    }
-
-    #[test]
-    fn the_risc0_3_0_5_receipt_still_decodes_for_the_handover() {
-        // A predecessor proved on risc0 3.0.5 (verified by the vendored xver circuit): the strict decoder must not
-        // refuse it, or a cross-version handover could not read its predecessor's receipt.
-        let raw = std::fs::read(format!("{V}mainnet_1_200_863c9ce3_risc0_305.rcpt")).unwrap();
-        let r = crate::verify::decode_receipt(&raw).expect("the 3.0.5 receipt decodes strictly");
-        assert!(matches!(r.inner, risc0_zkvm::InnerReceipt::Succinct(_)));
-    }
-
-    #[test]
-    fn a_job_pair_with_bytes_after_it_is_refused() {
-        let p = crate::seg::pack_pair(b"left", b"right!");
-        assert_eq!(crate::seg::unpack_pair(&p), Some((&b"left"[..], &b"right!"[..])));
-        let mut t = p.clone();
-        t.push(0);
-        assert_eq!(crate::seg::unpack_pair(&t), None);
-        assert_eq!(crate::seg::unpack_pair(&p[..p.len() - 1]), None);
-    }
-
-    // Segment (seg.rs's worker wire) goes through the same decode_exact as the succinct receipts tested here and in
-    // seg.rs; risc0's Segment has crate-private fields and the test build has no guest ELF to execute, so no Segment
-    // value can be built in a host unit test.
-
-    #[test]
-    fn a_composite_receipt_is_refused_before_decoding() {
-        let mut deep = vec![0u8; 4];
-        deep.extend(std::iter::repeat(0u8).take(1 << 16));
-        assert!(crate::verify::decode_receipt(&deep).unwrap_err().contains("composite"));
-    }
 }
 
 #[cfg(test)]
@@ -400,19 +237,20 @@ mod engine_board_tests {
         // --check-end with no board state at 200: refused (unknown means refused)
         let e = verify_any_engine(&proof(), key(D), Some(1), true).unwrap_err();
         assert!(e.contains("no state at block 200"), "check-end: {e}");
-        // a RISC Zero receipt handed to an engine board
-        let r = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/data/risc0_vectors/mainnet_1_200_8888d59c.rcpt")).unwrap();
+        // a file that is not HZE1 (a RISC Zero receipt starts with bincode's InnerReceipt tag: 1 = succinct)
+        let mut r = vec![1u8, 0, 0, 0];
+        r.extend_from_slice(&proof()[4..1000]);
         let e = verify_any_engine(&r, key(D), Some(1), false).unwrap_err();
-        assert!(e.contains("not an engine proof file"), "receipt on an engine board: {e}");
+        assert!(e.contains("not an engine proof file"), "not HZE1 on an engine board: {e}");
         // a truncated file
         let e = verify_any_engine(&proof()[..100], key(D), Some(1), false).unwrap_err();
         assert!(e.contains("not an engine proof file") || e.contains("forged, tampered or corrupt"), "truncated: {e}");
     }
 
     #[test]
-    fn a_risc0_board_refuses_an_engine_file() {
-        if std::env::var("HAZYNC_ENGINE_VK").is_ok() { return; } // this test is about a board WITHOUT the engine key
+    fn a_host_without_the_board_key_verifies_nothing() {
+        if std::env::var("HAZYNC_ENGINE_VK").is_ok() { return; } // this test is about a host WITHOUT the engine key
         let e = verify_any(&format!("{D}proof.hze"), Some(1), false).unwrap_err();
-        assert!(e.contains("engine (OpenVM) proof file") && e.contains("MISMATCH"), "{e}");
+        assert!(e.contains("no engine key") && e.contains("configuration error") && !e.contains("MISMATCH"), "{e}");
     }
 }

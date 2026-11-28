@@ -1,19 +1,16 @@
-//! libzync: the libzync commands (agg-exec-fake, agg-chunks, libzync-hints, libzync-prove-range,
-//! libzync-verify, libzync-snark-wrap), the aggregate's env writing and hint block, the in-process
-//! executor, and the coin-log / trie synthesis (cl_synth_around, cl_synth).
+//! libzync: the libzync commands (engine-export, libzync-hints, libzync-prove-range, libzync-join, libzync-verify), the
+//! aggregate's stream and hint block, and the coin-log / trie synthesis (cl_synth_around, cl_synth). Every guest run is
+//! on the OpenVM engine (engine_backend); RISC Zero's executor and prover went with CUTOVER C8 step 4.
 
 use bitcoin::Transaction;
 use bitcoin::consensus::deserialize;
 use bitcoin::hashes::Hash as _;
 use hazync_coinbase_smt::Smt;
-use methods::{METHOD_ELF, METHOD_ID};
-use risc0_zkvm::{ExecutorEnv, ProverOpts, default_executor, default_prover};
 use crate::{BlockWitness, CHAIN_STATE_VERSION, ChainState, KIND_CHAIN, PackedHashes, WireStump, arr,
     build_full, demo_block_forest, genesis_anchor, genesis_params, header_hash, hex, hx, lineage_of,
-    normalize_host, pinned_lineage, prove_session_resilient, read_block_json, rev, seg_po2, sha256_host,
-    smt_advance_ex, state_journal_bytes, work_u128};
-use crate::chunks::{chunk_block_hash, chunk_bounds, read_chunk_receipts, write_chunk_inputs};
-use crate::verify::{MAX_FUTURE_BLOCK_TIME, dev_mode_env, time_ok, verifier_clock};
+    normalize_host, pinned_lineage, read_block_json, rev, sha256_host, smt_advance_ex, state_journal_bytes};
+use crate::chunks::{chunk_block_hash, chunk_bounds, write_chunk_inputs};
+use crate::verify::{MAX_FUTURE_BLOCK_TIME, time_ok, verifier_clock};
 
 /// libzync: the per-block hint bundle at $HAZYNC_LZ_HINTS, if there is one for THIS block. None means
 /// collect mode (the guest logs what it needs). A bundle for another block is refused, not applied.
@@ -45,35 +42,12 @@ pub(crate) fn libzync_verify_fail_hook() {
 /// An image id as `method-id` prints it (the LE bytes of the words).
 pub(crate) fn hex_id(id: &[u32; 8]) -> String { hex(&id.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>()) }
 
-/// `libzync-snark-wrap <receipt> <out>`: compress a libzync chain receipt (succinct STARK, ~227 KB) to Groth16 (a
-/// few hundred bytes of seal), for shipping to light clients. Refuses a receipt that is not a real proof of this
-/// image's ChainState, and refuses to write a wrap whose journal is not byte-identical to the input's: a wrap that
-/// changed the statement would be a forgery vector. Needs the risc0 Groth16 prover (x86, lots of RAM): run on a
-/// proving box, not a laptop. Verify the result with `swiftsync-verify`, which accepts either receipt kind.
-pub(crate) fn libzync_snark_wrap_cmd(bin: &str, out: &str) {
-    use std::time::Instant;
-    let r = crate::verify::read_receipt(bin).unwrap_or_else(|e| panic!("{e}"));
-    assert!(!matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_)), "refusing to wrap a dev-mode FakeReceipt");
-    r.verify(METHOD_ID).expect("the receipt does not verify against this image");
-    let cs: ChainState = crate::verify::decode_journal(&r.journal).expect("the journal is not a ChainState");
-    assert!(cs.kind == KIND_CHAIN && cs.self_id == METHOD_ID, "not a ChainState committed by this image");
-    let before = bincode::serialize(&r).map(|v| v.len()).unwrap_or(0);
-    println!("=== libzync Groth16 wrap: height {} (STARK -> Groth16), input {before} bytes ===", cs.height);
-    let t = Instant::now();
-    let snark = default_prover().compress(&ProverOpts::groth16(), &r).expect("groth16 compress");
-    snark.verify(METHOD_ID).expect("the wrapped receipt does not verify");
-    assert_eq!(snark.journal.bytes, r.journal.bytes, "the wrapped journal differs from the input's -- refusing to write it");
-    let bytes = bincode::serialize(&snark).unwrap();
-    std::fs::write(out, &bytes).unwrap_or_else(|e| panic!("{out}: {e}"));
-    println!("LIBZYNC_SNARK_WRAPPED: {out}, {} bytes ({:.0}x smaller), {:.1} s", bytes.len(),
-             before as f64 / bytes.len().max(1) as f64, t.elapsed().as_secs_f64());
-}
-
-/// `libzync-verify <receipt> [anchor.json]`: everything a user checks before trusting a Hazync chain proof. Exit 0
+/// `libzync-verify <proof> [anchor.json]`: everything a user checks before trusting a Hazync chain proof. Exit 0
 /// only if every check passes (2 = DEMO: a valid chain not shown to be the network's).
 ///
-///  1. the receipt verifies against THIS host's METHOD_ID (the libzync image for the network), and the
-///     journal is a ChainState whose self_id is that id (so every recursion step ran the same guest);
+///  1. the engine proof (P.proof.json + P.journal) verifies under THIS host's engine keys (HAZYNC_ENGINE_KEYS: the
+///     image for the network), and the journal is a ChainState whose self_id is that image (so every recursion step
+///     ran the same guest);
 ///  2. anchor_id is the digest of the network's GENESIS anchor -- otherwise the chain started from a
 ///     state the prover asserted, and nothing below means anything (the base step is not verified);
 ///  3. the profile is this image's, the block forest has one leaf per block, and the fields of features the image
@@ -156,49 +130,21 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
         println!("  [{}] {what}", if ok { "ok" } else { "FAIL" });
         if !ok { fails += 1; }
     };
-    // HAZYNC_ENGINE: `receipt` is an engine proof (P.proof.json + P.journal). The proof itself is checked by the engine
-    // (STARK against its keys, public values = sha256(journal), the recorded image); everything after is the same
-    // ChainState check, with self_id = the engine's image id.
-    let (cs, my_id): (ChainState, [u32; 8]) = if crate::engine_backend::active() {
+    // `receipt` is an engine proof (P.proof.json + P.journal). The proof itself is checked by the engine (STARK against
+    // its keys, public values = sha256(journal), the recorded image); everything after is the ChainState check, with
+    // self_id = the engine's image id. (A RISC Zero receipt is checked with v0.27.1's verifier, its last release.)
+    crate::engine_backend::require();
+    let (cs, my_id): (ChainState, [u32; 8]) = {
         let bin = std::env::var("HAZYNC_ENGINE").unwrap();
-        let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS");
+        let keys = std::env::var("HAZYNC_ENGINE_KEYS").unwrap();
         let o = std::process::Command::new(&bin).args(["verify", "--dir", &keys, "--proof", receipt]).output()
             .unwrap_or_else(|e| panic!("HAZYNC_ENGINE={bin}: {e}"));
         check(o.status.success(), &format!("engine proof verifies (STARK vs {keys}/agg.vk + baseline, public values = sha256(journal), recorded image){}",
             if o.status.success() { String::new() } else { format!(": {}", String::from_utf8_lossy(&o.stderr).lines().last().unwrap_or("")) }));
         let j = std::fs::read(format!("{receipt}.journal")).unwrap_or_else(|e| panic!("{receipt}.journal: {e}"));
         (crate::engine_backend::decode_state(&j), crate::engine_backend::image_id_words(&keys))
-    } else {
-    let raw = std::fs::read(receipt).unwrap_or_else(|e| panic!("{receipt:?}: {e}"));
-    // Refuse a composite receipt BEFORE decoding it (it nests without bound: a hostile one overflows the stack; cold
-    // review 11-06). bincode's first u32 is the InnerReceipt variant: 1 succinct, 2 Groth16.
-    match raw.get(..4).map(|b| u32::from_le_bytes(b.try_into().unwrap())) {
-        Some(1) | Some(2) => {}
-        Some(3) => {} // a FakeReceipt: decoded, then refused below with its own message
-        k => { println!("  [FAIL] the receipt file is a single succinct or Groth16 proof (kind tag {k:?})"); println!("LIBZYNC_VERIFY_FAIL"); std::process::exit(1); }
-    }
-    let r = match crate::verify::decode_receipt(&raw) { Ok(r) => r, Err(e) => {
-        println!("  [FAIL] the receipt file decodes as one receipt: {}", e.escape_debug());
-        println!("LIBZYNC_VERIFY_FAIL: {}", e.escape_debug());
-        std::process::exit(1)
-    } };
-    // A FakeReceipt "verifies" whenever RISC0_DEV_MODE is set in the verifier's environment (review 2), so
-    // refuse both: a dev-mode receipt is never a proof, whatever this shell has exported.
-    let fake = matches!(r.inner, risc0_zkvm::InnerReceipt::Fake(_));
-    let dev = dev_mode_env();
-    check(!fake, "receipt is a real proof (not a dev-mode FakeReceipt)");
-    check(!dev, "RISC0_DEV_MODE is not set in this verifier's environment");
-    let v = r.verify(METHOD_ID);
-    check(v.is_ok(), &format!("receipt verifies against METHOD_ID {} ({} guest, {}, {})", hex_id(&METHOD_ID),
-        "libzync", methods::NETWORK,
-        if methods::LIBZYNC_ASSUMEVALID { "ASSUMEVALID: scripts and signatures NOT checked" } else { "scripts checked" }));
-    let cs: ChainState = match crate::verify::decode_journal(&r.journal) { Ok(c) => c, Err(e) => {
-        println!("  [FAIL] journal is not a ChainState: {}", format!("{e}").escape_debug());
-        println!("LIBZYNC_VERIFY_FAIL: the journal does not decode as a ChainState");
-        std::process::exit(1)
-    } };
-    (cs, METHOD_ID)
     };
+
     // A later version only appends fields (HANDOVER.md §2): this reader checks the prefix it knows.
     check(cs.kind == KIND_CHAIN && cs.version >= CHAIN_STATE_VERSION && cs.self_id == my_id,
           &format!("journal is a ChainState v{} committed by this image (kind, version, self_id)", cs.version));
@@ -301,57 +247,6 @@ pub(crate) fn libzync_verify_cmd(receipt: &str, anchor: Option<&str>, expect: Op
     }
 }
 
-// `agg-chunks`: read all chunk receipt files, aggregate into the block/chain proof.
-// Progress for a long prove (hazync#145). `agg-chunks` printed its header and then nothing at all
-// for 35+ minutes, so a working fold and a hung one looked identical from the outside. That is not a
-// cosmetic complaint: hazync#147 wedged twice, for 76 minutes and 3h38m, and what eventually gave it
-// away was `nvidia-smi` showing 0% with the process alive -- not any output from the prover.
-//
-// The per-segment progress now comes from `prove_session_resilient`, which drives the segment loop
-// itself (#237) rather than observing `prove_session` through a `SessionEvents` hook. Same lines,
-// same cadence, and every segment additionally goes through the #119 retry.
-// HAZYNC_AGG_EXECUTE=1 — execute mode 5 WITHOUT proving, and report its cycles.
-//
-// Settles which half of the aggregate is expensive. In execute mode `env::verify` merely RECORDS an
-// assumption; RESOLVING it is recursion, and that cost lands in PROVING. So this cycle count is the
-// block-validation work alone, and the gap between it and the measured prove wall-clock is what the
-// sixteen assumption resolutions cost.
-//
-// It matters because the two pull in opposite directions: more chunks parallelise proving better
-// and, if resolution dominates, make the aggregate worse. HAZYNC_CHUNKS has been treated as free.
-// Host-side only; needs no GPU and does not move METHOD_ID.
-//
-// A FUNCTION RATHER THAN AN INLINE BLOCK, because check_seg_guards.sh requires a prove call within
-// 25 lines of its segment_limit_po2 guard, and inline this pushed the aggregate's prove to 38 lines
-// away. The guard was present and the check was right to complain: distance is what makes it
-// readable at a glance that a prove path sets its segment size.
-pub(crate) fn report_agg_execute_only(mut b: risc0_zkvm::ExecutorEnvBuilder) {
-    use std::time::Instant;
-    let t_x = Instant::now();
-    let session = default_executor().execute(b.build().unwrap(), METHOD_ELF)
-        .unwrap_or_else(|e| panic!("{}", guest_failure("aggregate (mode 5) execution", &e)));
-    require_committed(session.exit_code, "aggregate (mode 5) execution");
-    let cycles = session.cycles();
-    println!("=== AGGREGATE, EXECUTE ONLY (no proving) ===");
-    println!("  block validation cycles  {cycles}");
-    // What the prover pays for: every segment padded to its power of two (user cycles + paging + padding).
-    println!("  block validation padded  {} ({} segments)", session.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), session.segments.len());
-    // Same-contents check across builds: the journal embeds the image's own id, so compare dumps byte by byte and
-    // expect differences only there (E2a).
-    if let Ok(path) = std::env::var("HAZYNC_JOURNAL_DUMP") { std::fs::write(&path, &session.journal.bytes).expect("HAZYNC_JOURNAL_DUMP"); }
-    {
-        use sha2::Digest;
-        println!("  journal sha256           {}", hex(&sha2::Sha256::digest(&session.journal.bytes)));
-    }
-    println!("  segments at po2 {}        ~{}", seg_po2(), cycles.div_ceil(1u64 << seg_po2()));
-    println!("  executed in              {:.1}s", t_x.elapsed().as_secs_f64());
-    println!();
-    println!("  Scale: chunk 9 is 948,436,992 cycles and proved in ~915 s on a B200, so this much");
-    println!("  block-validation work is roughly {:.0} s of segment proving. Whatever the FULL",
-             cycles as f64 / 948_436_992.0 * 915.0);
-    println!("  aggregate cost beyond that (measured: >3,300 s) is the assumption resolutions.");
-}
-
 pub(crate) fn write_aggregate_env(
     b: &mut impl crate::sink::Sink,
     receipts: &[impl crate::engine_backend::Proven],
@@ -362,11 +257,13 @@ pub(crate) fn write_aggregate_env(
 }
 
 /// `step` is the guest's is_base. 1: a base step on `anchor`. 0: `anchor` is the PREVIOUS block's committed chain
-/// state, whose receipt the caller has added as an assumption -- the guest verifies it recursively instead of trusting
-/// it. 2: the same, with a receipt of the predecessor image (a handover).
-/// `prev_journal`: for steps 0 and 2, the previous receipt's journal BYTES, sent as they are. Re-encoding the decoded
+/// state, whose proof the caller passes to the engine as a child -- the guest verifies it recursively instead of
+/// trusting it. 2: the same, with a proof of the predecessor image (a handover).
+/// `prev_journal`: for steps 0 and 2, the previous proof's journal BYTES, sent as they are. Re-encoding the decoded
 /// state through this host's struct only round-trips while the layouts match, which is exactly what can change at a
-/// handover (review 11-03), and the guest's env::verify needs the receipt's own bytes.
+/// handover (review 11-03), and the guest's env::verify needs the proof's own bytes.
+/// Bytes 4..36 are this host's image id (engine_backend::image_id); the engine puts its own there when it runs the
+/// stream (`self_id`), so the two agree for any host set up for the image it proves.
 pub(crate) fn write_aggregate_env_ex(
     b: &mut impl crate::sink::Sink,
     receipts: &[impl crate::engine_backend::Proven],
@@ -375,10 +272,8 @@ pub(crate) fn write_aggregate_env_ex(
     w: &BlockWitness,
     step: u32,
 ) {
-    b.segment_limit_po2(seg_po2());
-    for r in receipts { if let Some(a) = r.assumption() { b.add_assumption(a); } }
     b.write(&5u32);
-    b.write(&METHOD_ID);
+    b.write(&crate::engine_backend::image_id());
     b.write(&(receipts.len() as u32));
     // #136's fix for the AGGREGATE (`agg-readslice`, part of the libzync profile): a length prefix then a
     // 4-byte-padded slice, exactly as write_chunk_inputs does.
@@ -402,124 +297,22 @@ pub(crate) fn write_aggregate_env_ex(
     b.write(&raw_base);
 }
 
-/// libzync: `agg-exec-fake` — the mode-5 aggregate in EXECUTE mode on a laptop, with no chunk proving.
-///
-/// Each chunk is executed (not proved) and its claim wrapped in a FakeReceipt. In execute mode
-/// `env::verify` only matches the assumption's claim; it never checks a seal, so this measures
-/// exactly the block-validation work `HAZYNC_AGG_EXECUTE` measures from real receipts. With
-/// RISC0_PPROF_OUT set, the LAST profile written is the aggregate's. Batch-ECDSA hints apply to the
-/// chunk executions exactly as in chunk-profile.
-pub(crate) fn agg_exec_fake() {
-    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
-    let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-    let mut receipts = Vec::with_capacity(bounds.len());
-    for (i, &(lo, hi)) in bounds.iter().enumerate() {
-        let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2());
-        b.write(&4u32).unwrap();
-        b.write(&w.height).unwrap();
-        b.write(&chunk_block_hash(&w.header)).unwrap();
-        write_chunk_inputs(&mut b, &w, lo, hi);
-        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
-            .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
-        require_committed(s.exit_code, &format!("chunk {i} execution"));
-        let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
-        println!("  chunk {i:>3} [{lo}..{hi}) executed: {} cycles", s.cycles());
-        println!("  chunk {i:>3} padded {} ({} segments)", s.segments.iter().map(|g| 1u64 << g.po2).sum::<u64>(), s.segments.len());
-        receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
-    }
-    // Negative control (test-only): HAZYNC_LITE_DROP_CHUNK=i omits chunk i; coverage must fail.
-    if let Some(i) = std::env::var("HAZYNC_LITE_DROP_CHUNK").ok().and_then(|v| v.parse::<usize>().ok()) {
-        receipts.remove(i);
-        println!("  agg-lite NEGATIVE CONTROL: chunk {i} dropped");
-    }
-    libzync_agg_prep(&mut w);
-    let mut anchor = anchor;
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
-    let mut b = ExecutorEnv::builder();
-    write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut b, &w);
-    report_agg_execute_only(b);
-}
-
-/// `engine-export <dir>`: agg-exec-fake's block, written out for the OpenVM engine (engine/): every chunk's input
-/// stream (chunk_NN.in), the trie update's (trie.in) and the aggregate's (agg.in), each exactly the bytes RISC Zero's
-/// guest reads, with RISC Zero's journal for each (*.r0journal) to compare against and this image's id (method_id).
-/// The aggregate stream carries this image's METHOD_ID at bytes 4..36; the engine puts its own image there.
+/// `engine-export <dir>`: one block (HAZYNC_BLOCK) written out for the engine's own tools (`hzengine prove-block`,
+/// the cost and negative-test scripts), every execution on the ENGINE (HAZYNC_ENGINE + HAZYNC_ENGINE_KEYS): every
+/// chunk's input stream (chunk_NN.in) and the journal its execution committed (chunk_NN.r0journal: the name kept from
+/// the RISC Zero era, when RISC Zero's executor wrote it; it is the reference journal the aggregate's stream carries and
+/// hzengine prove-block checks) with its engine cost (chunk_NN.cycles: the scheduler's size, largest first); the collect
+/// run on the engine (dry: it takes no proofs); the trie update (and its split parts) executed on the engine
+/// (trie.r0journal); this image's id (method_id: the engine image, as bytes 4..36 of agg.in carry it). The aggregate
+/// itself is not executed here: it verifies its children in-guest and there are no proofs yet (hzengine prove-block
+/// proves it with the chunk and trie proofs as children); agg.in is written for it.
 pub(crate) fn engine_export(dir: &str) {
-    if crate::engine_backend::active() { return engine_export_on_engine(dir); }
-    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
-    use crate::sink::Stream;
-    std::fs::create_dir_all(dir).unwrap();
-    let put = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
-    let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
-    put("method_id", &idb);
-    *EXPORT_DIR.lock().unwrap() = Some(dir.to_string());
-    let (anchor, mut w) = build_full();
-    let bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-    let pred: u64 = crate::chunks::input_costs(&w).iter().sum();
-    println!("  predicted cost {pred} ({} inputs, {} chunks)", w.inputs.len(), bounds.len());
-    put("predicted_cost", format!("{pred}\n").as_bytes());
-    let mut receipts = Vec::with_capacity(bounds.len());
-    for (i, &(lo, hi)) in bounds.iter().enumerate() {
-        let mut st = Stream::default();
-        {
-            use crate::sink::Sink;
-            st.write(&4u32);
-            st.write(&w.height);
-            st.write(&chunk_block_hash(&w.header));
-        }
-        write_chunk_inputs(&mut st, &w, lo, hi);
-        put(&format!("chunk_{i:02}.in"), &st.0);
-        let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2());
-        b.write(&4u32).unwrap();
-        b.write(&w.height).unwrap();
-        b.write(&chunk_block_hash(&w.header)).unwrap();
-        write_chunk_inputs(&mut b, &w, lo, hi);
-        let s = default_executor().execute(b.build().unwrap(), METHOD_ELF)
-            .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)));
-        require_committed(s.exit_code, &format!("chunk {i} execution"));
-        put(&format!("chunk_{i:02}.r0journal"), &s.journal.bytes);
-        // the chunk's measured size, for the engine's scheduler (largest first); RISC Zero's cycles rank chunks as the
-        // engine's costs do (364,292: both fall chunk by chunk)
-        put(&format!("chunk_{i:02}.cycles"), format!("{}\n", s.cycles()).as_bytes());
-        println!("  chunk {i:>3} [{lo}..{hi}) exported: {} bytes in, {} cycles", st.0.len(), s.cycles());
-        let claim = s.receipt_claim.clone().expect("chunk session has no receipt claim");
-        receipts.push(Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), s.journal.bytes.clone()));
-    }
-    libzync_agg_prep(&mut w);
-    let mut anchor = anchor;
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
-    if let Some(t) = TRIE_RCPT.lock().unwrap().as_ref() { put("trie.r0journal", &t.journal.bytes); }
-    let mut st = Stream::default();
-    write_aggregate_env(&mut st, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut st, &w);
-    assert!(st.0[4..36] == idb[..], "aggregate stream: METHOD_ID is not at bytes 4..36");
-    put("agg.in", &st.0);
-    put("chunks", format!("{}\n", bounds.len()).as_bytes());
-    let mut b = ExecutorEnv::builder();
-    write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut b, &w);
-    std::env::set_var("HAZYNC_JOURNAL_DUMP", format!("{dir}/agg.r0journal"));
-    report_agg_execute_only(b);
-    println!("ENGINE_EXPORT_DONE {dir}: {} chunks, aggregate stream {} bytes", bounds.len(), st.0.len());
-}
-
-/// `engine-export <dir>` with HAZYNC_ENGINE set (CUTOVER C8): the same files, every execution on the ENGINE (its key dir:
-/// HAZYNC_ENGINE_KEYS), none on RISC Zero. The chunks' journals (chunk_NN.r0journal: the name kept, it is the reference
-/// journal the aggregate's stream carries and hzengine prove-block checks; here the engine's own execution's) and their
-/// engine cost (chunk_NN.cycles: the scheduler's size, largest first); the collect run on the engine (dry: it takes no
-/// proofs); the trie update (and its split parts) executed on the engine (trie.r0journal). The aggregate itself is not
-/// executed here: it verifies its children in-guest and there are no proofs yet (hzengine prove-block proves it with the
-/// chunk and trie proofs as children); agg.in is written as before.
-fn engine_export_on_engine(dir: &str) {
     use crate::sink::Stream;
     use crate::engine_backend::JournalOnly;
+    crate::engine_backend::require();
     std::fs::create_dir_all(dir).unwrap();
     let put = |name: &str, b: &[u8]| std::fs::write(format!("{dir}/{name}"), b).unwrap_or_else(|e| panic!("{dir}/{name}: {e}"));
-    let idb: Vec<u8> = METHOD_ID.iter().flat_map(|w| w.to_le_bytes()).collect();
+    let idb: Vec<u8> = crate::engine_backend::image_id().iter().flat_map(|w| w.to_le_bytes()).collect();
     put("method_id", &idb);
     *EXPORT_DIR.lock().unwrap() = Some(dir.to_string());
     *crate::engine_backend::TRIE.lock().unwrap() = None;
@@ -549,61 +342,50 @@ fn engine_export_on_engine(dir: &str) {
     }
     libzync_agg_prep(&mut w);
     let mut anchor = anchor;
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, false); }
+    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w); }
     if let Some(t) = crate::engine_backend::TRIE.lock().unwrap().as_ref() { put("trie.r0journal", &t.journal); }
     let mut st = Stream::default();
     write_aggregate_env(&mut st, &receipts, &anchor, &w);
     libzync_agg_tail(&mut st, &w);
-    assert!(st.0[4..36] == idb[..], "aggregate stream: METHOD_ID is not at bytes 4..36");
+    assert!(st.0[4..36] == idb[..], "aggregate stream: the image id is not at bytes 4..36");
     put("agg.in", &st.0);
     put("chunks", format!("{}\n", bounds.len()).as_bytes());
     println!("ENGINE_EXPORT_DONE {dir}: {} chunks, aggregate stream {} bytes (executed on the engine; the aggregate is proved by prove-block)", bounds.len(), st.0.len());
 }
 
-/// Coin log, single-block measurement (agg-exec-fake, agg-chunks): a collect run for the block's spends, then a
-/// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: cycles, not history.
-/// `prove`: the modelled trie update (mode 17) is PROVED (succinct), for an aggregate that will be proved for real
-/// (agg-chunks, seg-serve HAZYNC_AGG): an executed one is a fake receipt the aggregate's proof could never resolve.
 /// Set by engine_export: where cl_synth_around writes the collect run's stream (agg_collect.in).
 static EXPORT_DIR: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 
-pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], anchor: &mut ChainState, w: &mut BlockWitness, prove: bool) {
-    let eng = crate::engine_backend::active();
+/// Coin log, single-block measurement (engine-export): a collect run on the engine for the block's spends, then a
+/// modelled log around them (cl_synth) set as the anchor's coin state. A demonstration anchor: costs, not history. The
+/// modelled trie update (mode 17) is executed on the engine; its journal is what the aggregate's stream carries.
+pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], anchor: &mut ChainState, w: &mut BlockWitness) {
     let edir = EXPORT_DIR.lock().unwrap().clone().unwrap_or_else(|| ".".into());
     // collect run for the block's spends, then a modelled log around them (cl_synth)
     let hints = std::env::var("HAZYNC_LZ_HINTS").ok();
     std::env::remove_var("HAZYNC_LZ_HINTS");
-    let mut log = Vec::new();
-    // engine-export: the collect run's own stream too (agg_collect.in), written BEFORE RISC Zero runs it, so a block
-    // RISC Zero refuses here (a bad header or coinbase: refused before any commit) can be given to the engine as well
+    // engine-export: the collect run's own stream too (agg_collect.in), written BEFORE the engine runs it, so a block
+    // refused here (a bad header or coinbase: refused before any commit) can be given to the engine's tools as well
     if let Some(dir) = EXPORT_DIR.lock().unwrap().as_ref() {
         let mut st = crate::sink::Stream::default();
         write_aggregate_env(&mut st, receipts, anchor, w);
         libzync_agg_tail(&mut st, w);
         std::fs::write(format!("{dir}/agg_collect.in"), &st.0).unwrap_or_else(|e| panic!("{dir}/agg_collect.in: {e}"));
     }
-    if eng {
-        // the collect run on the engine: DRY (it takes no proofs and can never commit), as libzync-prove-range's
+    // the collect run on the engine: DRY (it takes no proofs and can never commit), as libzync-prove-range's
+    let log = {
         let mut st = crate::sink::Stream::default();
         write_aggregate_env(&mut st, receipts, anchor, w);
         libzync_agg_tail(&mut st, w);
         let x = crate::engine_backend::with(&edir, |e| e.execute_ex("agg_collect", &st.0, &[], true, true));
         assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "coin-log collect run: exit {:?}, not a finished collect run", x.exit);
-        log = x.log.into_bytes();
-    } else {
-        let mut b = ExecutorEnv::builder();
-        b.stdout(&mut log);
-        write_aggregate_env(&mut b, receipts, anchor, w);
-        libzync_agg_tail(&mut b, w);
-        let r = lz_execute(b.build().unwrap());
-        drop(b);
-        expect_collected(r, "coin-log collect run");
-    }
+        x.log.into_bytes()
+    };
     if let Some(h) = hints { std::env::set_var("HAZYNC_LZ_HINTS", h); }
     let (spends, appends) = cl_parse(&String::from_utf8_lossy(&log));
     let (roots, n, wit) = cl_synth(&std::env::var("HAZYNC_BLOCK").unwrap(), &spends);
     // The counting trie: the keys the collect run logged. The aggregate takes no trie witness (the trie is applied in its
-    // own receipt, guest mode 17); for measurement the host synthesises the trie's witness around a modelled population.
+    // own proof, guest mode 17); for measurement the host synthesises the trie's witness around a modelled population.
     if methods::TRIE {
         let (mut marks, ins) = crate::trie::trie_parse(&String::from_utf8_lossy(&log));
         let envu = |k: &str, d: u64| -> u64 { std::env::var(k).ok().and_then(|v| v.parse().ok()).unwrap_or(d) };
@@ -626,7 +408,7 @@ pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], a
             crate::trie::trie_env(&mut st, &wit, &marks, &ins);
             std::fs::write(format!("{d}/trie.in"), &st.0).expect("engine export: trie.in");
             // HAZYNC_TRIE_SPLIT=k: also the split update (parts at depth k of the top trie + the combine), each part
-            // executed on RISC Zero too, its journal checked against the one the combine's stream carries
+            // executed on the engine too, its journal checked against the one the combine's stream carries
             if let Some(k) = std::env::var("HAZYNC_TRIE_SPLIT").ok().and_then(|v| v.parse::<u32>().ok()) {
                 match crate::trie::trie_split(&wit, &marks, &ins, k) {
                     None => println!("  trie split at depth {k}: no part (left whole)"),
@@ -634,16 +416,10 @@ pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], a
                         for (i, (st, j)) in parts.iter().enumerate() {
                             std::fs::write(format!("{d}/trie_part_{i:02}.in"), &st.0).expect("engine export: trie part");
                             let jb: Vec<u8> = j.iter().flat_map(|x| x.to_le_bytes()).collect();
-                            let (got, size) = if eng {
+                            let (got, size) = {
                                 let x = crate::engine_backend::with(&edir, |e| e.try_execute(&format!("trie_part_{i:02}"), &st.0))
                                     .unwrap_or_else(|e| panic!("trie part (mode 19) on the engine: {e}"));
                                 (x.journal.unwrap_or_default(), format!("engine cost {}", x.cost))
-                            } else {
-                                let words: Vec<u32> = st.0.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
-                                let mut b = ExecutorEnv::builder();
-                                b.write_slice(&words);
-                                let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie part (mode 19)", &e)));
-                                (t.journal.bytes.clone(), format!("{} cycles", t.cycles))
                             };
                             assert!(got == jb, "trie part {i}: the guest's journal != the host's");
                             std::fs::write(format!("{d}/trie_part_{i:02}.r0journal"), &got).expect("engine export: part journal");
@@ -656,9 +432,8 @@ pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], a
                 }
             }
         }
-        if eng {
+        {
             // the trie update executed on the engine; its journal is what the aggregate's stream carries (engine TRIE)
-            assert!(!prove, "cl_synth_around on the engine: execute only");
             let mut st = crate::sink::Stream::default();
             crate::trie::trie_env(&mut st, &wit, &marks, &ins);
             let x = crate::engine_backend::with(&edir, |e| e.try_execute("trie", &st.0)).unwrap_or_else(|e| panic!("trie update (mode 17) on the engine: {e}"));
@@ -669,29 +444,6 @@ pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], a
             anchor.trie_root = libzync::coinlog::h_of(&root);
             if neg == "root" { anchor.trie_root[0] ^= 1; }
             if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
-        } else {
-        let mut b = ExecutorEnv::builder();
-        crate::trie::trie_env(&mut b, &wit, &marks, &ins);
-        b.segment_limit_po2(seg_po2()); // trie_env sets it too; restated for check_seg_guards.sh's 25-line window
-        let rcpt = if prove {
-            let t0 = std::time::Instant::now();
-            let r = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &ProverOpts::succinct())
-                .unwrap_or_else(|e| panic!("{}", guest_failure("trie update (mode 17) proof", &e))).receipt;
-            r.verify(METHOD_ID).expect("trie receipt verifies");
-            println!("  trie: {} marks, {} inserts, witness {} words; trie update PROVED in {:.1} s",
-                     marks.len(), ins.len(), wit.len(), t0.elapsed().as_secs_f64());
-            r
-        } else {
-            let t = lz_execute(b.build().unwrap()).unwrap_or_else(|e| panic!("{}", guest_failure("trie update (mode 17)", &e)));
-            println!("  trie: {} marks, {} inserts, witness {} words; trie update executed: {} cycles, padded {} ({} segments)",
-                     marks.len(), ins.len(), wit.len(), t.cycles, t.padded, t.segments);
-            let claim = t.receipt_claim.expect("trie session has no receipt claim");
-            risc0_zkvm::Receipt::new(risc0_zkvm::InnerReceipt::Fake(risc0_zkvm::FakeReceipt::new(claim)), t.journal.bytes.clone())
-        };
-        *TRIE_RCPT.lock().unwrap() = if neg == "none" { None } else { Some(rcpt) };
-        anchor.trie_root = libzync::coinlog::h_of(&root);
-        if neg == "root" { anchor.trie_root[0] ^= 1; }
-        if !neg.is_empty() { println!("  trie: NEGATIVE CONTROL HAZYNC_TEST_TRIE={neg}"); }
         }
     }
     println!("  coinlog: {} spends of earlier coins, {} appends", spends.len(), appends.len());
@@ -705,7 +457,7 @@ pub(crate) fn cl_synth_around(receipts: &[impl crate::engine_backend::Proven], a
 
 /// libzync: what the aggregate is NOT sent. SwiftSync takes no inclusion proofs; agg-lite takes every
 /// transaction fact from the chunk journals, so no transactions, prevouts, inputs or txids at all.
-/// Shared by `agg-exec-fake` and `agg-chunks` (the real-receipt aggregate) so both send one stream.
+/// Shared by every aggregate stream this host writes (libzync-prove-range, libzync-hints, engine-export).
 pub(crate) fn libzync_agg_prep(w: &mut BlockWitness) {
     for inp in w.inputs.iter_mut() {
         inp.proof_i.siblings = PackedHashes(Vec::new());
@@ -744,49 +496,16 @@ pub(crate) fn libzync_agg_tail(b: &mut impl crate::sink::Sink, w: &BlockWitness)
         b.write(&((order.len() / 2) as u32));
         if !order.is_empty() { b.write_slice(&order); }
     }
-    // E2: the trie receipt's journal (empty in a collect run), its receipt an assumption the aggregate verifies
+    // E2: the trie proof's journal (empty in a collect run); the proof is a child the aggregate verifies in-guest
     if methods::TRIE {
-        let r = if bundle.is_none() { None } else { TRIE_RCPT.lock().unwrap().clone() };
-        // the engine's trie proof (engine_backend), when this run proves on the engine
-        let ej = if bundle.is_none() || r.is_some() { None } else { crate::engine_backend::TRIE.lock().unwrap().as_ref().map(|p| p.journal.clone()) };
-        let tjb: Option<&[u8]> = r.as_ref().map(|r| r.journal.bytes.as_slice()).or(ej.as_deref());
-        let tj: Vec<u32> = tjb.map(|b| b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()).unwrap_or_default();
+        let ej = if bundle.is_none() { None } else { crate::engine_backend::TRIE.lock().unwrap().as_ref().map(|p| p.journal.clone()) };
+        let tj: Vec<u32> = ej.map(|b| b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()).unwrap_or_default();
         b.write(&(tj.len() as u32));
         if !tj.is_empty() { b.write_slice(&tj); }
-        if let Some(r) = r { b.add_assumption(r); }
     }
     match &bundle {
         Some(bd) => println!("  libzync: {} bytes of ECMH hints, no hints file", bd.ecmh.len()),
         None => println!("  libzync: ECMH COLLECT (no bundle)"),
-    }
-}
-
-/// libzync: the guest's memory image, built ONCE per process. `default_executor().execute` goes through
-/// ExecutorImpl::from_elf, which decodes the ELF and builds the image again on every call; the laptop
-/// tools (hints, sweeps) execute the guest thousands of times. Same ExecutorImpl, same image, same
-/// session -- only the rebuild is skipped. A profiled run (RISC0_PPROF_OUT) takes the normal path,
-/// because the profiler is attached in from_elf.
-pub(crate) static LZ_IMAGE: std::sync::OnceLock<risc0_binfmt::MemoryImage> = std::sync::OnceLock::new();
-
-/// What the libzync tools read from an execution (risc0's SessionInfo is #[non_exhaustive]).
-pub(crate) struct Exec {
-    pub(crate) journal: risc0_zkvm::Journal,
-    receipt_claim: Option<risc0_zkvm::ReceiptClaim>,
-    /// user cycles, padded (proven) cycles, segments
-    pub(crate) cycles: u64,
-    pub(crate) padded: u64,
-    pub(crate) segments: usize,
-    /// the guest stopped as a finished ECMH collect run (lz_wire COLLECT_EXIT): leaves logged, nothing committed
-    pub(crate) collected: bool,
-}
-
-/// Halted(0) is a run that committed; Halted(COLLECT_EXIT) a finished collect run; anything else is a failure
-/// (a run must never pass on an exit code that no verifier accepts).
-fn exit_ok(code: risc0_zkvm::ExitCode) -> Result<bool, String> {
-    match code {
-        risc0_zkvm::ExitCode::Halted(0) => Ok(false),
-        risc0_zkvm::ExitCode::Halted(c) if c == libzync::wire::COLLECT_EXIT as u32 => Ok(true),
-        c => Err(format!("guest exited with {c:?}")),
     }
 }
 
@@ -849,47 +568,6 @@ pub(crate) fn write_atomic(path: &str, bytes: &[u8]) {
     }
 }
 
-/// For a run that must COMMIT (anything proved, or measured as a block): Halted(0) or a panic naming `what`. A collect
-/// run (no ECMH hints) exits COLLECT_EXIT having skipped every ECMH add and subtract, so it is neither a proof nor a
-/// cost figure; any other exit is a failure. Call it right after execution, before any proving or reporting.
-pub(crate) fn require_committed(code: risc0_zkvm::ExitCode, what: &str) {
-    match exit_ok(code) {
-        Ok(false) => {}
-        Ok(true) => panic!("{what}: a collect run (no ECMH hints): it commits nothing and is not a block's cost"),
-        Err(e) => panic!("{what}: {e}"),
-    }
-}
-
-/// A collect run (no ECMH hints) checks the whole block, logs every leaf, then exits with COLLECT_EXIT before
-/// committing: a collect run never yields a chain state. Any other outcome, a commit included, is a real failure.
-pub(crate) fn expect_collected(r: Result<Exec, String>, what: &str) {
-    match r {
-        Ok(e) if e.collected => {}
-        Ok(_) => panic!("{what}: the collect run committed a chain state"),
-        Err(e) => panic!("{what} failed: {e}"),
-    }
-}
-
-pub(crate) fn lz_execute(env: ExecutorEnv<'_>) -> Result<Exec, String> {
-    if std::env::var("RISC0_PPROF_OUT").is_ok() {
-        let s = default_executor().execute(env, METHOD_ELF).map_err(|e| format!("{e:#}"))?;
-        let padded = s.segments.iter().map(|g| 1u64 << g.po2).sum();
-        let collected = exit_ok(s.exit_code)?;
-        return Ok(Exec { cycles: s.cycles(), padded, segments: s.segments.len(), journal: s.journal, receipt_claim: s.receipt_claim, collected });
-    }
-    let image = LZ_IMAGE.get_or_init(|| {
-        risc0_binfmt::ProgramBinary::decode(METHOD_ELF).and_then(|b| b.to_image()).expect("guest image")
-    }).clone();
-    let session = risc0_zkvm::ExecutorImpl::new(env, image).map_err(|e| format!("{e:#}"))?
-        .run_with_callback(|_| Ok(Box::new(risc0_zkvm::NullSegmentRef)))
-        .map_err(|e| format!("{e:#}"))?;
-    let collected = exit_ok(session.exit_code)?;
-    let claim = session.claim().map_err(|e| format!("{e:#}"))?;
-    // Session::total_cycles = every segment padded to its power of two (what proving pays)
-    let padded = session.total_cycles;
-    Ok(Exec { cycles: session.user_cycles, padded, segments: session.segments.len(), journal: session.journal.unwrap_or_default(), receipt_claim: Some(claim), collected })
-}
-
 /// A chunk's whole input stream (mode 4, height, block hash, write_chunk_inputs), as the engine takes it.
 pub(crate) fn chunk_stream(w: &BlockWitness, lo: usize, hi: usize) -> Vec<u8> {
     use crate::sink::Sink;
@@ -904,87 +582,15 @@ pub(crate) fn chunk_stream(w: &BlockWitness, lo: usize, hi: usize) -> Vec<u8> {
 
 /// A chunk's input range `lo..hi` (indices into the block's inputs).
 pub(crate) type Span = (usize, usize);
-/// One chunk executed: its FakeReceipt and the guest's captured stdout.
-pub(crate) type ChunkExec = (risc0_zkvm::Receipt, Vec<u8>);
 /// One round of `resplit_on_oom`: runs the given chunks, one result each, in order.
 pub(crate) type ExecRound<'a, T> = dyn FnMut(&[Span]) -> Vec<Result<T, String>> + 'a;
 
-/// One chunk executed (collect mode unless the $HAZYNC_LZ_HINTS bundle has an entry for exactly `lo..hi`): a
-/// FakeReceipt carrying its claim and journal, plus the guest's captured stdout (BATCHREC lines in collect mode).
-pub(crate) fn exec_chunk(w: &BlockWitness, lo: usize, hi: usize) -> Result<ChunkExec, String> {
-    use risc0_zkvm::{FakeReceipt, InnerReceipt, Receipt};
-    let mut log = Vec::new();
-    let session = {
-        let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2());
-        b.stdout(&mut log);
-        b.write(&4u32).unwrap();
-        b.write(&w.height).unwrap();
-        b.write(&chunk_block_hash(&w.header)).unwrap();
-        write_chunk_inputs(&mut b, w, lo, hi);
-        lz_execute(b.build().unwrap())?
-    };
-    let claim = session.receipt_claim.clone().expect("chunk session has no receipt claim");
-    Ok((Receipt::new(InnerReceipt::Fake(FakeReceipt::new(claim)), session.journal.bytes.clone()), log))
-}
-
-/// `exec_chunk` for every chunk at once, `threads` at a time, in input order; one result per chunk, in order.
-///
-/// After a failure that is not out-of-memory no further chunk is STARTED (the block fails anyway; chunks already
-/// running finish), and the results end at the first such failure in input order: chunks are taken in index order,
-/// so every chunk before it was started and has a result. Out-of-memory failures let the round finish, so all of a
-/// round's pieces re-split together (`resplit_on_oom`).
-pub(crate) fn execute_chunks_parallel_res(w: &BlockWitness, bounds: &[Span], threads: usize)
-    -> Vec<Result<ChunkExec, String>> {
-    type R = Result<ChunkExec, String>;
-    let next = std::sync::atomic::AtomicUsize::new(0);
-    let stop = std::sync::atomic::AtomicBool::new(false);
-    let done: std::sync::Mutex<Vec<Option<R>>> = std::sync::Mutex::new((0..bounds.len()).map(|_| None).collect());
-    std::thread::scope(|s| {
-        for _ in 0..threads.min(bounds.len()).max(1) {
-            s.spawn(|| loop {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) { break }
-                let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let Some(&(lo, hi)) = bounds.get(i) else { break };
-                let r = exec_chunk(w, lo, hi);
-                if matches!(&r, Err(e) if !is_guest_oom(e)) { stop.store(true, std::sync::atomic::Ordering::Relaxed); }
-                done.lock().unwrap()[i] = Some(r);
-            });
-        }
-    });
-    first_results(done.into_inner().unwrap())
-}
-
-/// The results of a round up to and including its first failure that is not out-of-memory (all of them when there is
-/// none). Every slot up to that point must be filled.
-pub(crate) fn first_results<T>(slots: Vec<Option<Result<T, String>>>) -> Vec<Result<T, String>> {
-    let mut out = Vec::with_capacity(slots.len());
-    for x in slots {
-        let r = x.expect("a chunk before the round's first failure has no result");
-        let fatal = matches!(&r, Err(e) if !is_guest_oom(e));
-        out.push(r);
-        if fatal { break }
-    }
-    out
-}
-
-/// libzync: execute every chunk of a block at once, one thread each (HAZYNC_HINT_THREADS, default all
-/// cores). Returns per chunk a FakeReceipt carrying its claim and journal, plus the guest's captured
-/// stdout (BATCHREC lines in collect mode). Used by seg-serve's HAZYNC_AGG_EARLY and prove-chunk's collect: a failed
-/// chunk panics (no re-split, see `collect_chunks`).
-pub(crate) fn execute_chunks_parallel(w: &BlockWitness, bounds: &[(usize, usize)], threads: usize)
-    -> Vec<(risc0_zkvm::Receipt, Vec<u8>)> {
-    execute_chunks_parallel_res(w, bounds, threads).into_iter()
-        .map(|r| r.unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))).collect()
-}
-
-/// The guest ran out of heap (#794): risc0's bump allocator never frees, so a chunk whose inputs leave enough
-/// unreclaimed memory panics with this exact message (risc0-zkvm-platform heap/bump.rs), prefixed by the executor's
-/// "Guest panicked: ". Nothing else is read as out-of-memory: every other failure (a REJECT, a C abort) passes through.
+/// The guest ran out of heap (#794): a chunk whose inputs need more guest memory than the image has stops with this
+/// exact message (openvm-platform's heap/bump.rs), at the end of the guest's log, as engine_backend::try_execute reports
+/// it. Nothing else is read as out-of-memory: every other failure (a REJECT, a C abort) passes through. (Until CUTOVER
+/// C8 the text of risc0-zkvm-platform's bump allocator was read too.)
 pub(crate) fn is_guest_oom(msg: &str) -> bool {
-    msg.contains("Guest panicked: Out of memory! You have been using the default bump allocator which does not reclaim memory.")
-        // the OpenVM engine's guest (openvm-platform heap/bump.rs), as engine_backend::try_execute reports it
-        || msg.contains("ERROR: Maximum memory exceeded, program terminating.")
+    msg.contains("ERROR: Maximum memory exceeded, program terminating.")
 }
 
 /// One chunk run on the engine (collect or hinted: write_chunk_inputs decides by the bundle), failures as Err so
@@ -1054,29 +660,22 @@ pub(crate) fn resplit_on_oom<T>(
     Ok(nodes.into_iter().map(|n| match n { Node::Done(b, t) => (b, t), Node::Todo(_) => unreachable!() }).collect())
 }
 
-/// The block's collect pass with `resplit_on_oom`: every chunk executed in parallel, and a chunk that runs out of
-/// guest memory re-split and run again. Returns the final chunks (the layout to prove) with each one's execution.
-/// A failure that is not out-of-memory panics as `execute_chunks_parallel` does.
-pub(crate) fn collect_chunks(w: &BlockWitness, bounds: &[Span], threads: usize) -> Vec<(Span, ChunkExec)> {
-    let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
-    let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w.inputs, costs.get_or_init(|| crate::chunks::input_costs(w)), lo, hi);
-    resplit_on_oom(bounds, &split, &mut |todo| execute_chunks_parallel_res(w, todo, threads))
-        .unwrap_or_else(|e| panic!("{}", guest_failure("chunk execution", &e)))
-}
-
-pub(crate) fn hint_threads() -> usize {
-    std::env::var("HAZYNC_HINT_THREADS").ok().and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4)).max(1)
-}
-
-/// `libzync-hints <out>` with HAZYNC_ENGINE set (CUTOVER C8): the same bundle from runs on the ENGINE (HAZYNC_ENGINE_KEYS),
-/// none on RISC Zero: every chunk in collect mode (in turn, one engine server; a chunk out of guest memory re-split as
-/// below), R from its BATCHREC records, then the aggregate's DRY collect run (it takes no proofs) for the ECMH leaves.
-/// The same work libzync-prove-range's engine path does before it proves (its collect pass); the bundle file is the same
-/// format, so engine-export and the multi-process paths read it as before.
-fn libzync_hints_on_engine(out: &str) {
+/// libzync: `libzync-hints <out>` — the block's hint bundle (libzync::host::BlockBundle), from runs on the ENGINE
+/// (HAZYNC_ENGINE + HAZYNC_ENGINE_KEYS):
+///
+/// - every chunk in COLLECT mode (in turn, one engine server); the guest's BATCHREC lines come from its log, and
+///   R = u1·G + u2·Q is computed with libsecp (libzync::host::sig_hint);
+/// - then the aggregate's DRY collect run (it takes no proofs) on those chunks' journals, for the ECMH leaves.
+///
+/// ⛔ The hints are untrusted input to the guest (it re-checks every one), so a bug here can only make a chunk fail,
+/// never make a bad signature pass. Uses the same chunk layout as proving (HAZYNC_CHUNKS, HAZYNC_CHUNK_TARGET,
+/// HAZYNC_PROFILE_LAYOUT), and records it: a bundle applied under another layout is ignored per chunk. A chunk that runs
+/// out of guest memory is re-split (#794), and the bundle then records the re-split layout (a WARNING says so).
+/// The same work libzync-prove-range does before it proves (its collect pass).
+pub(crate) fn libzync_hints_cmd(out: &str) {
     use std::time::Instant;
     use crate::engine_backend::JournalOnly;
+    crate::engine_backend::require();
     let t0 = Instant::now();
     std::env::remove_var("HAZYNC_LZ_HINTS");
     let (anchor, mut w) = build_full();
@@ -1098,7 +697,7 @@ fn libzync_hints_on_engine(out: &str) {
     let bounds: Vec<Span> = done.iter().map(|(b, _)| *b).collect();
     if bounds != packed {
         eprintln!("WARNING: block {}: chunks ran out of guest memory and were re-split ({} chunks instead of {}): this bundle \
-                   serves libzync-prove-range only (#794)", w.height, bounds.len(), packed.len());
+                   records the re-split layout (#794)", w.height, bounds.len(), packed.len());
     }
     let t_chunks = t0.elapsed().as_secs_f64();
     let mut bundle = libzync::host::BlockBundle { height: w.height, block_hash: header_hash(&w.header), ..Default::default() };
@@ -1127,77 +726,6 @@ fn libzync_hints_on_engine(out: &str) {
     bundle.write(out).unwrap_or_else(|e| panic!("{out}: {e}"));
     let _ = std::fs::remove_dir_all(&work);
     println!("libzync-hints: block {} {} chunks on the ENGINE -> {out}", w.height, bounds.len());
-    println!("  batch: {nrec} verifies, {nvalid} valid, {} left to libsecp", nrec - nvalid);
-    println!("  ecmh: {} operations, {} bytes", leaves.len(), bundle.ecmh.len());
-    println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
-             t_batch - t_chunks, t0.elapsed().as_secs_f64() - t_batch, t0.elapsed().as_secs_f64());
-}
-
-/// libzync: `libzync-hints <out>` — the block's hint bundle (libzync::host::BlockBundle), in ONE pass.
-///
-/// - Every chunk executes in COLLECT mode at once, one thread each; the guest's BATCHREC lines come back
-///   from each session's stdout, and R = u1·G + u2·Q is computed with libsecp (libzync::host::sig_hint).
-/// - The aggregate's ECMH collect reuses those chunk executions: a collect-mode chunk commits the same
-///   journal as a hinted one, so no second pass over the chunks.
-/// ⛔ The hints are untrusted input to the guest (it re-checks every one), so a bug here can only make a
-/// chunk fail, never make a bad signature pass. Uses the same chunk layout as proving (HAZYNC_CHUNKS,
-/// HAZYNC_PROFILE_LAYOUT), and records it: a bundle applied under another layout is ignored per chunk.
-///
-/// A chunk that runs out of guest memory is re-split (#794), and the bundle then records the re-split layout, which only
-/// libzync-prove-range uses (it prints a WARNING): the multi-process paths keep chunk_bounds' layout.
-pub(crate) fn libzync_hints_cmd(out: &str) {
-    if crate::engine_backend::active() { return libzync_hints_on_engine(out); }
-    use risc0_zkvm::Receipt;
-    use std::time::Instant;
-    let t0 = Instant::now();
-    // Collect mode for every hint kind: no bundle.
-    std::env::remove_var("HAZYNC_LZ_HINTS");
-    let (anchor, mut w) = build_full();
-    let threads = hint_threads();
-    // A chunk that runs out of guest memory is re-split (#794) and the bundle records the layout that ran. Only
-    // libzync-prove-range proves with such a layout: the multi-process paths (prove-chunk, agg-chunks, seg-serve,
-    // agg-exec-fake) derive theirs from chunk_bounds in every process and would not find these pieces in the bundle.
-    let packed = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-    let (bounds, done): (Vec<(usize, usize)>, Vec<_>) = collect_chunks(&w, &packed, threads).into_iter().unzip();
-    if bounds != packed {
-        eprintln!("WARNING: block {}: chunks ran out of guest memory and were re-split ({} chunks instead of {}): this bundle \
-                   serves libzync-prove-range only; prove-chunk / agg-chunks / seg-serve / agg-exec-fake use the packed \
-                   layout, find no hints for it and run those chunks unhinted, where they run out of memory again (#794)",
-                  w.height, bounds.len(), packed.len());
-    }
-    let t_chunks = t0.elapsed().as_secs_f64();
-
-    let mut bundle = libzync::host::BlockBundle { height: w.height, block_hash: header_hash(&w.header), ..Default::default() };
-    let (mut nrec, mut nvalid) = (0usize, 0usize);
-    for (i, &(lo, hi)) in bounds.iter().enumerate() {
-        let mut blob = Vec::new();
-        for rec in libzync::host::sig_records(&String::from_utf8_lossy(&done[i].1)) {
-            let h = libzync::host::sig_hint(&rec);
-            nrec += 1;
-            nvalid += (h[0] == 1) as usize;
-            blob.extend_from_slice(&h);
-        }
-        bundle.chunks.push((lo as u32, hi as u32, blob));
-    }
-    let t_batch = t0.elapsed().as_secs_f64();
-
-    // ECMH: run the aggregate in collect mode from the chunk claims; its log lists every leaf in order.
-    libzync_agg_prep(&mut w);
-    let receipts: Vec<Receipt> = done.into_iter().map(|(r, _)| r).collect();
-    let mut log = Vec::new();
-    {
-        let mut b = ExecutorEnv::builder();
-        b.stdout(&mut log);
-        write_aggregate_env(&mut b, &receipts, &anchor, &w);
-        libzync_agg_tail(&mut b, &w);
-        // A collect aggregate checks the whole block, logs every leaf, then STOPS before committing
-        // (a collect run must never yield a chain state). Any other failure is a real one.
-        expect_collected(lz_execute(b.build().unwrap()), "collect aggregate");
-    }
-    let leaves = libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log));
-    for leaf in &leaves { bundle.ecmh.extend_from_slice(&libzync::host::ecmh_hint(leaf)); }
-    bundle.write(out).unwrap_or_else(|e| panic!("{out}: {e}"));
-    println!("libzync-hints: block {} {} chunks on {} threads -> {out}", w.height, bounds.len(), threads);
     println!("  batch: {nrec} verifies, {nvalid} valid, {} left to libsecp", nrec - nvalid);
     println!("  ecmh: {} operations, {} bytes", leaves.len(), bundle.ecmh.len());
     println!("  time: chunks {t_chunks:.1} s, batch hints {:.1} s, aggregate + ecmh {:.1} s, total {:.1} s",
@@ -1257,144 +785,66 @@ pub(crate) fn guest_failure(what: &str, e: &dyn std::fmt::Display) -> String {
     }
 }
 
-/// SHA-256 of a receipt's journal bytes (`journal-sha <rcpt>`): two runs proved the same statement iff these match.
-pub(crate) fn journal_sha(r: &risc0_zkvm::Receipt) -> String {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(&r.journal.bytes).iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// `libzync-join <left.rcpt> <right.rcpt> <out.rcpt>` (ROADMAP H-B): one join (guest mode 18) of two adjacent chain proofs
-/// of this image, the right one starting exactly where the left one ends (its anchor_id is the digest of the left's
-/// journal; the guest checks it). Writes the joined receipt: the left's start, the right's tip. Succinct, so a join can
-/// itself be joined. Leaves: `libzync-prove-range h h <json> state_<h-1>.json <out>` (a base step on any state).
+/// `libzync-join <left> <right> <out>` (ROADMAP H-B): one join (guest mode 18) of two adjacent chain proofs of this
+/// image on the engine, the right one starting exactly where the left one ends (its anchor_id is the digest of the
+/// left's journal); the guest verifies both in-guest and checks they are adjacent. left/right: HZE1 files (the board's)
+/// or P.proof.json + P.journal pairs; out: HZE1 when it names one file (.bin, .hze), else a pair. The joined proof has
+/// the left's start and the right's tip, and can itself be joined. Leaves: `libzync-prove-range h h <json>
+/// state_<h-1>.json <out>` (a base step on any state), or the board's `prove-range-bridge`.
 pub(crate) fn lz_join_cmd(left: &str, right: &str, out: &str) {
-    use risc0_zkvm::Receipt;
-    // HAZYNC_ENGINE: left/right/out are engine proofs (P = P.proof.json + P.journal), mode 18 on the engine; the guest
-    // verifies both in-guest and checks they are adjacent, exactly as below.
-    if crate::engine_backend::active() {
-        use crate::sink::Sink;
-        // left/right: HZE1 files (the board's) or pairs; out: HZE1 when it names one file (.bin, .hze), else a pair
-        let (l, r) = (crate::engine_backend::read_any(left), crate::engine_backend::read_any(right));
-        let (ls, rs) = (crate::engine_backend::decode_state(&l.journal), crate::engine_backend::decode_state(&r.journal));
-        let mut st = crate::sink::Stream::default();
-        st.write(&18u32);
-        st.write(&METHOD_ID);
-        st.write(&l.journal);
-        st.write(&r.journal);
-        let dir = std::path::Path::new(out).parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
-        let t = std::time::Instant::now();
-        let j = crate::engine_backend::with(&dir, |e| e.prove("join", &st.0, &[&l, &r], true));
-        let j = if crate::engine_backend::wants_hze(out) {
-            crate::engine_backend::with(&dir, |e| e.pack(&j.path, std::path::Path::new(out)));
-            for ext in ["proof.json", "journal"] { let _ = std::fs::remove_file(crate::engine_backend::with_ext(&j.path, ext)); }
-            crate::engine_backend::EngineProof { path: out.into(), journal: j.journal }
-        } else {
-            crate::engine_backend::keep(&j, out)
-        };
-        let s = crate::engine_backend::decode_state(&j.journal);
-        assert!(s.anchor_id == ls.anchor_id && s.height == rs.height && s.tip_hash == rs.tip_hash, "join: unexpected output state");
-        use sha2::Digest;
-        println!("JOURNAL_SHA256 {}", hex(&sha2::Sha256::digest(&j.journal)));
-        println!("JOINED left tip {} + right tip {} -> {out} (engine), {:.1} s", ls.height, rs.height, t.elapsed().as_secs_f64());
-        return;
-    }
-    let rd = |p: &str| -> Receipt {
-        let r: Receipt = crate::verify::read_receipt(p).unwrap_or_else(|e| panic!("{e}"));
-        r.verify(METHOD_ID).unwrap_or_else(|e| panic!("{p} does not verify against this image: {e}"));
-        r
-    };
-    let (l, r) = (rd(left), rd(right));
-    let (ls, rs): (ChainState, ChainState) = (crate::verify::decode_journal(&l.journal).expect("left ChainState"),
-                                             crate::verify::decode_journal(&r.journal).expect("right ChainState"));
-    let mut b = ExecutorEnv::builder();
-    b.segment_limit_po2(seg_po2());
-    b.add_assumption(l.clone());
-    b.add_assumption(r.clone());
-    b.write(&18u32).unwrap();
-    b.write(&METHOD_ID).unwrap();
-    b.write(&l.journal.bytes).unwrap();
-    b.write(&r.journal.bytes).unwrap();
+    use crate::sink::Sink;
+    crate::engine_backend::require();
+    let (l, r) = (crate::engine_backend::read_any(left), crate::engine_backend::read_any(right));
+    let (ls, rs) = (crate::engine_backend::decode_state(&l.journal), crate::engine_backend::decode_state(&r.journal));
+    let mut st = crate::sink::Stream::default();
+    st.write(&18u32);
+    st.write(&crate::engine_backend::image_id());
+    st.write(&l.journal);
+    st.write(&r.journal);
+    let dir = std::path::Path::new(out).parent().map(|d| d.display().to_string()).unwrap_or_else(|| ".".into());
     let t = std::time::Instant::now();
-    let opts = ProverOpts::succinct();
-    let j = risc0_zkvm::default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
-        .unwrap_or_else(|e| panic!("join {left} + {right}: {e}"));
-    j.receipt.verify(METHOD_ID).expect("joined receipt verifies");
-    let st: ChainState = j.receipt.journal.decode().unwrap();
-    assert!(st.anchor_id == ls.anchor_id && st.height == rs.height && st.tip_hash == rs.tip_hash, "join: unexpected output state");
-    write_atomic(out, &bincode::serialize(&j.receipt).unwrap());
-    println!("JOURNAL_SHA256 {}", journal_sha(&j.receipt));
-    let a: String = ls.anchor_id.iter().take(8).map(|x| format!("{x:02x}")).collect();
-    println!("JOINED left tip {} + right tip {} (anchor {a}..) -> {out}: {} cycles, {:.1} s",
-             ls.height, rs.height, j.stats.total_cycles, t.elapsed().as_secs_f64());
+    let j = crate::engine_backend::with(&dir, |e| e.prove("join", &st.0, &[&l, &r], true));
+    let j = if crate::engine_backend::wants_hze(out) {
+        crate::engine_backend::with(&dir, |e| e.pack(&j.path, std::path::Path::new(out)));
+        for ext in ["proof.json", "journal"] { let _ = std::fs::remove_file(crate::engine_backend::with_ext(&j.path, ext)); }
+        crate::engine_backend::EngineProof { path: out.into(), journal: j.journal }
+    } else {
+        crate::engine_backend::keep(&j, out)
+    };
+    let s = crate::engine_backend::decode_state(&j.journal);
+    assert!(s.anchor_id == ls.anchor_id && s.height == rs.height && s.tip_hash == rs.tip_hash, "join: unexpected output state");
+    use sha2::Digest;
+    println!("JOURNAL_SHA256 {}", hex(&sha2::Sha256::digest(&j.journal)));
+    println!("JOINED left tip {} + right tip {} -> {out} (engine), {:.1} s", ls.height, rs.height, t.elapsed().as_secs_f64());
 }
 
-/// `libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>`: PROVE blocks lo..=hi as one
-/// recursive chain on this machine's prover (GPU with the cuda feature). Block lo is a base step on the
-/// given anchor (the committed state at lo-1, e.g. from `libzync-anchor-json`); every
-/// later block's aggregate VERIFIES the previous block's receipt (is_base = 0). Writes block_<h>.rcpt
-/// (bincode Receipt) and state_<h>.json per block, and times.tsv.
-/// Per block: chunks proved (succinct), the aggregate's ECMH hints learned by one collect execution,
-/// then the aggregate proved (succinct, so the next block can resolve it cheaply).
-/// `<anchor.json>` may be the word `genesis`: the network's genesis state, built here, so lo must be 1.
-/// HAZYNC_RESUME=1: continue after the highest block_<k>.rcpt in <out dir>. The receipt is verified against this
-/// image, the BIP30 tree is replayed to k and must equal the receipt's smt_root, and block k+1 verifies that receipt
-/// in the guest, so a resumed chain is the same statement as an unbroken one. Needs block files 1..k.
-/// One proof's session statistics, one line each (the paper's cycle counts; also printed in dev mode, where the session
-/// is really executed): segments, total (proven, padded) cycles, user cycles.
-pub(crate) fn lz_stats(what: &str, h: u32, s: &risc0_zkvm::SessionStats) {
-    println!("LZ_STATS {what} h={h} segments={} total_cycles={} user_cycles={}", s.segments, s.total_cycles, s.user_cycles);
-}
-
+/// `libzync-prove-range <lo> <hi> <json dir> <anchor.json> <out dir>`: PROVE blocks lo..=hi as one recursive chain on
+/// the engine (HAZYNC_ENGINE + HAZYNC_ENGINE_KEYS; HAZYNC_ENGINE_GPUS / _PER_GPU spread the proofs). Block lo is a base
+/// step on the given anchor (the committed state at lo-1, e.g. from `libzync-anchor-json`); every later block's
+/// aggregate VERIFIES the previous block's proof in-guest (is_base = 0). Writes block_<h>.ovm (P.proof.json + P.journal)
+/// and state_<h>.json per block, and times.tsv.
+/// Per block: every chunk executed in collect mode (signature hints), then hinted (its journal); the aggregate's ECMH
+/// hints learned by one DRY collect run; the chunks and the trie update proved at once; then the aggregate proved.
+/// `<anchor.json>` may be the word `genesis`: the network's genesis state, built here, so lo must be 1; or `leaf` with
+/// HAZYNC_LEAF_BUNDLE (one block from prep's bundle). HAZYNC_HANDOVER_PROOF: the first block is a handover step on a
+/// pinned engine predecessor (engine/HANDOVER.md). HAZYNC_ENGINE_DEV=1 (a metering image): executions, no proofs (the
+/// core-rules rig). Resuming a run (HAZYNC_RESUME) is not supported on the engine yet.
 pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &str) {
+    crate::engine_backend::require();
     lock_run_dirs(out);
-    use risc0_zkvm::Receipt;
     use std::io::Write as _;
     use std::time::Instant;
     std::fs::create_dir_all(out).unwrap();
-    // HAZYNC_HANDOVER_RECEIPT=<receipt>: the first block is a handover step on the pinned predecessor's receipt. The
-    // anchor argument is unused (pass the word `handover`): the chain state comes from the verified receipt.
-    let handover: Option<(Receipt, ChainState)> = std::env::var("HAZYNC_HANDOVER_RECEIPT").ok().map(|p| {
-        let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_RECEIPT: this image has no predecessor pinned");
-        let r: Receipt = crate::verify::read_receipt(&p).unwrap_or_else(|e| panic!("{e}"));
-        // the same RISC Zero: Receipt::verify; an older one: its vendored circuit (src/xver), as the guest will
-        crate::verify_pred_receipt(&r, last).unwrap_or_else(|e| panic!("{p} does not verify against the pinned predecessor: {e}"));
-        let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
-        let tamper = std::env::var("HAZYNC_TEST_HANDOVER").ok();
-        if tamper.is_some() { assert!(dev_mode_env(), "HAZYNC_TEST_HANDOVER is a dev-mode test hook"); }
-        else {
-            assert!(st.kind == KIND_CHAIN && st.self_id == last.image, "{p} is not the predecessor's chain state");
-            assert_eq!(st.height + 1, last.first_height, "{p}: the pin hands over at {}", last.first_height);
-        }
-        // Negative tests (experimental/libzync-bench/handover/): a dev-mode receipt for a state the predecessor never
-        // committed, so one guest check at a time is reached with its assumption resolved, not stopped earlier.
-        let mut st = st;
-        let mut claim_id: risc0_zkvm::sha::Digest = last.image.into();
-        match tamper.as_deref() {
-            None | Some("height") => {}
-            Some("self_id") => st.self_id[0] ^= 1,
-            Some("profile") => st.profile ^= 2,
-            Some("lineage") => st.lineage[0] ^= 1,
-            Some("forest") => st.block_leaves -= 1,
-            Some("kind") => st.kind ^= 1,
-            Some("wrong_image") => claim_id = METHOD_ID.into(),
-            Some("no_receipt") => {}
-            Some(x) => panic!("HAZYNC_TEST_HANDOVER: unknown case {x}"),
-        }
-        let r = if tamper.is_some() {
-            use risc0_zkvm::{FakeReceipt, InnerReceipt, ReceiptClaim};
-            let j = state_journal_bytes(&st);
-            Receipt::new(InnerReceipt::Fake(FakeReceipt::new(ReceiptClaim::ok(claim_id, j.clone()))), j)
-        } else { r };
-        (r, st)
-    });
-    // HAZYNC_HANDOVER_PROOF=<P> (HAZYNC_ENGINE; engine/HANDOVER.md step 2): the first block is a handover step on the
-    // pinned ENGINE predecessor's proof P (P.journal, and P.bin: its plain encoding, `hzengine wasm-inputs`) from another
-    // OpenVM version: the lineage entry's verifier is that predecessor's key pin and the image is built with ovm-xver,
-    // whose xver checks P in-guest. The chain state comes from P's journal (the guest checks P itself); the anchor
-    // argument is unused, as for HAZYNC_HANDOVER_RECEIPT.
+    assert!(std::env::var_os("HAZYNC_HANDOVER_RECEIPT").is_none(),
+            "HAZYNC_HANDOVER_RECEIPT: a handover on a RISC Zero receipt is not available since CUTOVER C8 (an engine chain has no \
+             RISC Zero predecessor); an engine predecessor is HAZYNC_HANDOVER_PROOF");
+    assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_RESUME: resume is not supported on the engine yet");
+    // HAZYNC_HANDOVER_PROOF=<P> (engine/HANDOVER.md step 2): the first block is a handover step on the pinned ENGINE
+    // predecessor's proof P (P.journal, and P.bin: its plain encoding, `hzengine wasm-inputs`) from another OpenVM
+    // version: the lineage entry's verifier is that predecessor's key pin and the image is built with ovm-xver, whose
+    // xver checks P in-guest. The chain state comes from P's journal (the guest checks P itself); the anchor argument is
+    // unused (pass the word `handover`).
     let ehandover: Option<(crate::engine_backend::EngineProof, Vec<u8>, ChainState)> = std::env::var("HAZYNC_HANDOVER_PROOF").ok().map(|p| {
-        assert!(crate::engine_backend::active(), "HAZYNC_HANDOVER_PROOF needs HAZYNC_ENGINE");
-        assert!(handover.is_none(), "HAZYNC_HANDOVER_PROOF and HAZYNC_HANDOVER_RECEIPT: one or the other");
         let last = pinned_lineage().last().expect("HAZYNC_HANDOVER_PROOF: this image has no predecessor pinned");
         assert!(last.verifier != crate::handover_pin::SAME_ZKVM,
                 "HAZYNC_HANDOVER_PROOF: the pinned predecessor is on the SAME OpenVM (a child proof, not ovm-xver): not built yet");
@@ -1407,23 +857,14 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
     });
     // HAZYNC_LEAF_BUNDLE=<leaf_<h>.bin> (ROADMAP H-B 8): a LEAF proof of the one block h, a base step on S(h-1) taken from
     // prep's bundle with every witness in it: no coin log, trie or BIP30 tree, and no block files but block h's. The
-    // receipt joins with its neighbours (libzync-join). HAZYNC_LEAF_CHECK=<dir>: an ordinary run that asserts each
+    // proof joins with its neighbours (libzync-join). HAZYNC_LEAF_CHECK=<dir>: an ordinary run that asserts each
     // block's witnesses are byte-identical to <dir>/leaf_<h>.bin's (the test of prep's bundles).
     let leaf: Option<crate::prep::LeafBundle> = std::env::var("HAZYNC_LEAF_BUNDLE").ok().map(|p| crate::prep::leaf_read(&p));
     let leaf_check = std::env::var("HAZYNC_LEAF_CHECK").ok();
     if let Some(b) = &leaf {
         assert!(lo == hi && b.prev.height + 1 == lo, "HAZYNC_LEAF_BUNDLE: the bundle is for block {}; prove exactly that block", b.prev.height + 1);
         crate::tracked::check_bundle_json(lo, &b.block_json);
-        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_LEAF_BUNDLE: no resume");
         assert!(leaf_check.is_none(), "HAZYNC_LEAF_BUNDLE and HAZYNC_LEAF_CHECK: one or the other");
-        // A leaf-mode handover (the board's, docs/HANDOVER.md §5): the bundle's witnesses were cut against S(h-1), so
-        // that state must be exactly what the predecessor's receipt committed, byte for byte. No replay is needed: the
-        // bundle carries the BIP30, coin-log and trie witnesses, and the guest checks them against that state.
-        if let Some((r, _)) = &handover {
-            assert!(state_journal_bytes(&b.prev) == r.journal.bytes,
-                    "HAZYNC_LEAF_BUNDLE + HAZYNC_HANDOVER_RECEIPT: the bundle's S({}) is not the predecessor receipt's state \
-                     (prep's state differs from what the predecessor proved: a rule changed that is not keyed by height?)", b.prev.height);
-        }
     }
     // the bundle carries the block: written into the out dir, which then serves as the block dir
     let leaf_dir: String;
@@ -1435,36 +876,25 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         }
         None => dir,
     };
-    let mut prev: ChainState = if let Some((_, st)) = &handover { st.clone() } else if let Some((_, _, st)) = &ehandover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
+    let mut prev: ChainState = if let Some((_, _, st)) = &ehandover { st.clone() } else if let Some(b) = &leaf { b.prev.clone() } else if anchor_path == "genesis" { genesis_anchor() } else {
         serde_json::from_str(&std::fs::read_to_string(anchor_path).unwrap_or_else(|e| panic!("{anchor_path}: {e}"))).unwrap()
     };
     demo_block_forest(&mut prev, true);
     assert_eq!(prev.height + 1, lo, "anchor is at height {}, range starts at {lo}", prev.height);
     // history.bin starts at height 0 only on a run from genesis (libzync::history).
-    let prev_is_genesis = handover.is_none() && ehandover.is_none() && leaf.is_none() && anchor_path == "genesis";
-    // The coin log at the run's start. Disk mode (HAZYNC_COINLOG_DIR) with HAZYNC_RESUME and a store already there: leave
-    // it alone (loading the anchor would WIPE it, review 11-03); the resume below loads it at its receipt, and only if no
-    // receipt is found is the anchor's log loaded after all.
-    let disk_resume = methods::COINLOG && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
-        && cl_dir().map_or(false, |d| d.join("L0.bin").exists());
-    // The counting trie at the run's start (a resume below replaces it with the snapshot at its receipt). A disk trie
-    // (HAZYNC_TRIE_DIR) is advanced in place, so on a resume it is at the receipt's height, not the anchor's: open it
-    // there below, and at the anchor only if no receipt is found (as the disk coin log; review 11-06).
-    // Opened BEFORE the coin log (review 11-12, #3): it only checks, while the coin log's load rewinds its journal.
-    let disk_trie_resume = methods::TRIE && std::env::var("HAZYNC_RESUME").as_deref() == Ok("1")
-        && crate::trie::trie_dir().map_or(false, |d| d.join("meta").exists());
-    if methods::TRIE && !disk_trie_resume && leaf.is_none() { crate::trie::trie_init_at_start(handover.is_some() || ehandover.is_some(), anchor_path, &prev); }
-    if methods::COINLOG && !disk_resume && leaf.is_none() {
-        cl_init_at_start(handover.is_some() || ehandover.is_some(), anchor_path, &prev);
-    }
+    let prev_is_genesis = ehandover.is_none() && leaf.is_none() && anchor_path == "genesis";
+    // The counting trie and the coin log at the run's start (the trie first, review 11-12, #3: it only checks, while the
+    // coin log's load rewinds its journal).
+    if methods::TRIE && leaf.is_none() { crate::trie::trie_init_at_start(ehandover.is_some(), anchor_path, &prev); }
+    if methods::COINLOG && leaf.is_none() { cl_init_at_start(ehandover.is_some(), anchor_path, &prev); }
     // The BIP30 tree at the anchor. With every block file 1..lo-1 present it is REPLAYED, and must equal the
     // anchor's own smt_root (a sweep anchor from genesis). Otherwise this is a demonstration anchor: the tree
     // is seeded with the coinbases the range spends from before lo, and the anchor's smt_root is SET to it --
     // written to anchor_effective.json, which is what libzync-verify must be given.
     let replay = leaf.is_none() && (1..lo).all(|h| std::path::Path::new(&format!("{dir}/block_{h}.json")).exists());
-    // A handover continues a proved chain: its BIP30 tree must be replayed and equal the receipt's, never seeded (the
+    // A handover continues a proved chain: its BIP30 tree must be replayed and equal the predecessor's, never seeded (the
     // seeding path rewrites smt_root, and the state sent would no longer be the predecessor's journal).
-    assert!(replay || (handover.is_none() && ehandover.is_none()) || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
+    assert!(replay || ehandover.is_none() || leaf.is_some(), "a handover needs every block file 1..{} to replay the BIP30 tree (or a leaf bundle)", lo - 1);
     // An anchor written before ChainState carried max_time loads it as 0. With the block files present it is
     // exact (genesis and every block to lo-1: timestamps are not monotonic, so the recent window is not enough);
     // for a demonstration anchor only the anchor's own window exists, and the result says so.
@@ -1501,79 +931,22 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
         t
     };
     std::fs::write(format!("{out}/anchor_effective.json"), serde_json::to_string(&prev).unwrap()).unwrap();
-    let mut handover_pending = handover.is_some() || ehandover.is_some();
-    let mut prev_rcpt: Option<Receipt> = handover.map(|(r, _)| r);
-    // HAZYNC_ENGINE (engine_backend): every execution and proof of the range on the OpenVM engine. An engine chain
-    // starts at genesis or a leaf bundle: no handover (no RISC Zero predecessor), and no resume yet (block_<h>.rcpt).
-    let eng = crate::engine_backend::active();
+    let mut handover_pending = ehandover.is_some();
+    // the previous block's proof (a recursive step verifies it in-guest), and the predecessor's proof as the guest's
+    // xver reads it after the tail (xver_ovm.rs): its byte length, then the bytes packed little-endian, zero-padded to a
+    // word. Only for the handover block (step 2).
     let mut eprev: Option<crate::engine_backend::EngineProof> = None;
-    // the predecessor's proof as the guest's xver reads it after the tail (xver_ovm.rs): its byte length, then the bytes
-    // packed little-endian, zero-padded to a word. Only for the handover block (step 2).
     let mut eforeign: Option<Vec<u32>> = None;
-    if eng {
-        assert!(!handover_pending || ehandover.is_some(), "HAZYNC_ENGINE: no RISC Zero handover (an engine chain has no RISC Zero predecessor)");
-        if let Some((p, bin, _)) = ehandover {
-            let mut b = bin.clone();
-            b.resize(bin.len().div_ceil(4) * 4, 0);
-            let mut w = vec![bin.len() as u32];
-            w.extend(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())));
-            eforeign = Some(w);
-            eprev = Some(p);
-        }
-        assert!(std::env::var("HAZYNC_RESUME").as_deref() != Ok("1"), "HAZYNC_ENGINE: resume is not supported yet");
+    if let Some((p, bin, _)) = ehandover {
+        let mut b = bin.clone();
+        b.resize(bin.len().div_ceil(4) * 4, 0);
+        let mut w = vec![bin.len() as u32];
+        w.extend(b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())));
+        eforeign = Some(w);
+        eprev = Some(p);
     }
-    let mut first = lo;
-    if std::env::var("HAZYNC_RESUME").map(|v| v == "1").unwrap_or(false) {
-        // With the coin log, only a receipt whose log file was also written (the log is saved after the receipt).
-        // A disk trie (HAZYNC_TRIE_DIR) is at the height its own metadata says: a crash between its flush and the
-        // marker file leaves the trie at k with no state_<k>.trie, so ask the store too (round 9).
-        let disk_trie_h: Option<u64> = if methods::TRIE {
-            crate::trie::trie_dir().filter(|d| d.join("meta").exists())
-                .and_then(|d| libzync::trie_store::TrieStore::open_dir(&d, true).ok()).map(|t| t.height)
-        } else { None };
-        let done = |k: &u32| std::path::Path::new(&format!("{out}/block_{k}.rcpt")).exists()
-            && (!methods::COINLOG || std::path::Path::new(&format!("{out}/state_{k}.coinlog")).exists())
-            && (!methods::TRIE || std::path::Path::new(&format!("{out}/state_{k}.trie")).exists() || disk_trie_h == Some(*k as u64));
-        if let Some(k) = (lo..=hi).rev().find(done) {
-            assert!(replay, "HAZYNC_RESUME needs every block file 1..{}", lo - 1);
-            let bin = std::fs::read(format!("{out}/block_{k}.rcpt")).unwrap();
-            let r: Receipt = crate::verify::decode_receipt(&bin).unwrap_or_else(|e| panic!("block_{k}.rcpt: {e}"));
-            r.verify(METHOD_ID).unwrap_or_else(|e| panic!("block_{k}.rcpt does not verify against this image: {e}"));
-            let st: ChainState = crate::verify::decode_journal(&r.journal).expect("ChainState");
-            assert!(st.height == k && st.kind == KIND_CHAIN && st.self_id == METHOD_ID, "block_{k}.rcpt is not this chain's state at {k}");
-            // The same chain as this run's anchor: an output directory reused with another anchor must not be resumed.
-            // From an anchor, the chain's anchor_id is the anchor's digest; after a handover, the predecessor's anchor_id.
-            let aid = if handover_pending { prev.anchor_id }
-                      else { crate::link_digest(&prev) };
-            assert!(st.anchor_id == aid, "block_{k}.rcpt was proved from another anchor (anchor_id {}, this run's {})", hex(&st.anchor_id), hex(&aid));
-            let (t, _) = lz_smt_replay(dir, k);
-            assert_eq!(t.root(), st.smt_root, "replayed BIP30 tree at {k} != the receipt's smt_root");
-            // The coin log at k: the file the run left next to the receipt, checked against the receipt's own roots.
-            if methods::COINLOG {
-                cl_load(&format!("{out}/state_{k}.coinlog"));
-                let g = CL.lock().unwrap();
-                let cl = &g.as_ref().unwrap().store;
-                assert!(cl.len() == st.utxo_leaves && normalize_host(cl.roots()) == normalize_host(st.utxo_roots.clone()),
-                        "state_{k}.coinlog does not match block_{k}.rcpt's utxo_roots / utxo_leaves");
-            }
-            // The trie at k: its snapshot, checked against the receipt's trie root, height and block.
-            if methods::TRIE { crate::trie::trie_load(&format!("{out}/state_{k}.trie"), &st); }
-            smt = t;
-            prev = st;
-            prev_rcpt = Some(r);
-            handover_pending = false; // a receipt of this image means the handover is already behind us
-            first = k + 1;
-            println!("resuming after block {k}");
-        }
-    }
-    if disk_trie_resume && first == lo {
-        crate::trie::trie_init_at_start(handover_pending, anchor_path, &prev);
-    }
-    if disk_resume && first == lo {
-        cl_init_at_start(handover_pending, anchor_path, &prev);
-    }
+    let first = lo;
     let mut times = std::fs::OpenOptions::new().create(true).append(true).open(format!("{out}/times.tsv")).unwrap();
-    let opts = ProverOpts::succinct();
     let t_all = Instant::now();
     for h in first..=hi {
         let t0 = Instant::now();
@@ -1600,9 +973,9 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
                     "HAZYNC_LEAF_CHECK: leaf_{h}.bin's BIP30 witness != this run's");
         }
         let mut bounds = chunk_bounds(&w, crate::chunks::nchunks_for(&w));
-        // Signature hints first: every chunk executes once in collect mode (in parallel), and R for each
-        // logged verify comes from libsecp -- the same bundle `libzync-hints` writes. Without this every chunk
-        // would be PROVED with libsecp verifying each signature itself: valid, but the unbatched cost.
+        // Signature hints first: every chunk executes once in collect mode, and R for each logged verify comes from
+        // libsecp -- the same bundle `libzync-hints` writes. Without this every chunk would be PROVED with libsecp
+        // verifying each signature itself: valid, but the unbatched cost.
         // A chunk that runs out of guest memory is re-split here (#794), and `bounds` becomes the layout that ran.
         let bp = format!("{out}/bundle_{h}.lzb");
         let mut bd = libzync::host::BlockBundle { height: h, block_hash: header_hash(&w.header), ..Default::default() };
@@ -1610,8 +983,8 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             libzync::host::sig_records(&String::from_utf8_lossy(log)).iter().flat_map(libzync::host::sig_hint).collect()
         };
         if !bounds.is_empty() {
-            let done: Vec<(Span, Vec<u8>)> = if eng {
-                // collect-mode engine runs, re-split on running out of guest memory as RISC Zero's are (#794)
+            let done: Vec<(Span, Vec<u8>)> = {
+                // collect-mode engine runs, re-split on running out of guest memory (#794)
                 let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
                 let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w.inputs, costs.get_or_init(|| crate::chunks::input_costs(&w)), lo, hi);
                 let mut round = |todo: &[Span]| -> Vec<Result<Vec<u8>, String>> {
@@ -1625,8 +998,6 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
                     res
                 };
                 resplit_on_oom(&bounds, &split, &mut round).unwrap_or_else(|e| panic!("block {h}: {}", guest_failure("chunk collect", &e)))
-            } else {
-                collect_chunks(&w, &bounds, hint_threads()).into_iter().map(|(b, (_, log))| (b, log)).collect()
             };
             bounds = done.iter().map(|(b, _)| *b).collect();
             for ((clo, chi), log) in &done {
@@ -1637,14 +1008,13 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             std::env::set_var("HAZYNC_LZ_HINTS", &bp);
         }
         let t_sig = t0.elapsed().as_secs_f64();
-        // The engine: each chunk EXECUTED now with its signature hints, for its journal; the proofs come later, all at
-        // once with the trie's, on every GPU (HAZYNC_ENGINE_GPUS). The collect aggregate below runs DRY on these journals.
+        // Each chunk EXECUTED now with its signature hints, for its journal; the proofs come later, all at once with the
+        // trie's, on every GPU (HAZYNC_ENGINE_GPUS). The collect aggregate below runs DRY on these journals.
         // A hinted run can run out of guest memory where its collect run did not: re-split the same way (#794), a piece
         // the bundle has no hints for collected first (write_chunk_inputs runs it in collect mode), then run hinted.
         let mut estreams: Vec<Vec<u8>> = Vec::new();
         let mut ejournals: Vec<crate::engine_backend::JournalOnly> = Vec::new();
-        let mut echunks: Vec<crate::engine_backend::EngineProof> = Vec::new();
-        let chunks: Vec<Receipt> = if eng {
+        {
             let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
             let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w.inputs, costs.get_or_init(|| crate::chunks::input_costs(&w)), lo, hi);
             let mut exec_one = |clo: usize, chi: usize| -> Result<(Vec<u8>, Vec<u8>), String> {
@@ -1676,101 +1046,26 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
                 estreams.push(st);
                 ejournals.push(crate::engine_backend::JournalOnly(j));
             }
-            Vec::new()
-        } else {
-            // Proving: a hinted chunk holds its signature hints in guest memory, so it can run out where its collect run
-            // did not. It is re-split the same way (#794); a piece the bundle has no hints for is collected first (the
-            // bundle has no entry for it, so write_chunk_inputs runs it in collect mode), then proved hinted.
-            let proved = {
-                let costs: std::cell::OnceCell<Vec<u64>> = std::cell::OnceCell::new();
-                let split = |lo: usize, hi: usize| crate::chunks::split_chunk(&w.inputs, costs.get_or_init(|| crate::chunks::input_costs(&w)), lo, hi);
-                let mut prove_one = |clo: usize, chi: usize| -> Result<Receipt, String> {
-                    if bd.chunk_sig(clo as u32, chi as u32).is_none() {
-                        let (_, log) = exec_chunk(&w, clo, chi)
-                            .map_err(|e| format!("collect (the hints of re-split piece {clo}..{chi}) failed: {e}"))?;
-                        rig_echo(&log);
-                        bd.chunks.push((clo as u32, chi as u32, sig_blob(&log)));
-                        bd.write(&bp).unwrap();
-                        std::env::set_var("HAZYNC_LZ_HINTS", &bp);
-                    }
-                    let mut b = ExecutorEnv::builder();
-                    b.segment_limit_po2(seg_po2());
-                    b.write(&4u32).unwrap();
-                    b.write(&w.height).unwrap();
-                    b.write(&chunk_block_hash(&w.header)).unwrap();
-                    write_chunk_inputs(&mut b, &w, clo, chi);
-                    let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
-                        .map_err(|e| format!("proof of inputs {clo}..{chi} failed: {e:#}"))?;
-                    lz_stats("chunk", h, &info.stats);
-                    let r = info.receipt;
-                    r.verify(METHOD_ID).expect("chunk receipt verifies");
-                    Ok(r)
-                };
-                // in turn; the round stops at the first failure that is not out-of-memory (a GPU fault, a reject)
-                let mut round = |todo: &[Span]| -> Vec<Result<Receipt, String>> {
-                    let mut out = Vec::with_capacity(todo.len());
-                    for &(clo, chi) in todo {
-                        let r = prove_one(clo, chi);
-                        let fatal = matches!(&r, Err(e) if !is_guest_oom(e));
-                        out.push(r);
-                        if fatal { break }
-                    }
-                    out
-                };
-                resplit_on_oom(&bounds, &split, &mut round)
-                    .unwrap_or_else(|e| panic!("block {h}: {}", guest_failure("chunk", &e)))
-            };
-            // the bundle keeps only the layout proved (a re-split in proving leaves its parent's entry behind)
-            bounds = proved.iter().map(|(b, _)| *b).collect();
-            if bd.chunks.len() != bounds.len() {
-                bd.chunks.retain(|c| bounds.contains(&(c.0 as usize, c.1 as usize)));
-                // in input order, so the bundle's bytes do not depend on which chunk re-split in proving
-                bd.chunks.sort_by_key(|c| (c.0, c.1));
-                bd.write(&bp).unwrap();
-            }
-            proved.into_iter().map(|(_, r)| r).collect()
-        };
-        if eng && bd.chunks.len() != bounds.len() {
+        }
+        // the bundle keeps only the layout that ran (a re-split in the hinted pass leaves its parent's entry behind)
+        if bd.chunks.len() != bounds.len() {
             bd.chunks.retain(|c| bounds.contains(&(c.0 as usize, c.1 as usize)));
+            // in input order, so the bundle's bytes do not depend on which chunk re-split
             bd.chunks.sort_by_key(|c| (c.0, c.1));
             bd.write(&bp).unwrap();
         }
         let t_chunks = t0.elapsed().as_secs_f64();
         std::env::remove_var("HAZYNC_LZ_HINTS"); // the aggregate's collect pass below runs without ECMH hints
         libzync_agg_prep(&mut w);
-        let is_base = if eng { eprev.is_none() } else { prev_rcpt.is_none() };
+        let is_base = eprev.is_none();
         let step = if handover_pending { 2 } else { is_base as u32 };
-        // A cross-version handover (src/xver): the predecessor's seal goes in as input words after the tail, not as an
-        // assumption (this RISC Zero's recursion cannot resolve an older one's receipt).
-        let foreign: Option<Vec<u32>> = match (handover_pending, pinned_lineage().last(), &prev_rcpt) {
-            (true, Some(e), Some(p)) if e.verifier != crate::handover_pin::SAME_ZKVM => match &p.inner {
-                risc0_zkvm::InnerReceipt::Succinct(s) => Some(crate::xver::encode(s)),
-                _ => panic!("a cross-version predecessor receipt must be succinct"),
-            },
-            _ => None,
-        };
-        let env_for = |b: &mut risc0_zkvm::ExecutorEnvBuilder| {
-            b.segment_limit_po2(seg_po2());
-            if let Some(p) = &prev_rcpt {
-                // Negative test: a handover with the predecessor's journal and no receipt behind it.
-                if std::env::var("HAZYNC_TEST_HANDOVER").as_deref() != Ok("no_receipt") && foreign.is_none() { b.add_assumption(p.clone()); }
-            }
-            write_aggregate_env_ex(b, &chunks, &prev, prev_rcpt.as_ref().map(|p| p.journal.bytes.as_slice()), &w, step);
-            libzync_agg_tail(b, &w);
-            if let Some(words) = &foreign {
-                b.write(&(words.len() as u32)).unwrap();
-                b.write_slice(words);
-            }
-        };
         // collect pass: the leaves the ECMH hints are for (and, for a coin-log image, the log's spends and appends)
         CL_WIT.lock().unwrap().clear();
-        *TRIE_RCPT.lock().unwrap() = None;
         *crate::engine_backend::TRIE.lock().unwrap() = None;
         let mut etrie_stream: Option<Vec<u8>> = None;
-        let mut log = Vec::new();
-        // the engine's aggregate stream (as env_for writes it), and its children in the guest's env::verify order:
-        // the chunks, the trie (once proved), the previous block's proof (a recursive step)
-        if eng {
+        // the aggregate's stream, and its children in the guest's env::verify order: the chunks, the trie (once
+        // proved), the previous block's proof (a recursive step)
+        let log = {
             // DRY: on the chunks' executed journals, no proofs (it can never commit); prev's journal is in the stream
             let mut st = crate::sink::Stream::default();
             write_aggregate_env_ex(&mut st, &ejournals, &prev, eprev.as_ref().map(|p| p.journal.as_slice()), &w, step);
@@ -1782,17 +1077,10 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             }
             let x = crate::engine_backend::with(out, |e| e.execute_ex(&format!("b{h}_agg_collect"), &st.0, &[], true, true));
             assert!(x.exit == Some(libzync::wire::COLLECT_EXIT as u32), "block {h}: collect aggregate: exit {:?}, not a finished collect run", x.exit);
-            log = x.log.into_bytes();
+            let log = x.log.into_bytes();
             rig_echo(&log);
-        } else {
-            let mut b = ExecutorEnv::builder();
-            b.stdout(&mut log);
-            env_for(&mut b);
-            let collected = lz_execute(b.build().unwrap());
-            drop(b); // releases its borrow of `log`
-            rig_echo(&log);
-            expect_collected(collected, &format!("block {h}: collect aggregate"));
-        }
+            log
+        };
         for leaf in libzync::host::ecmh_leaves(&String::from_utf8_lossy(&log)) {
             bd.ecmh.extend_from_slice(&libzync::host::ecmh_hint(&leaf));
         }
@@ -1812,24 +1100,20 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             if let Some(b) = &check_b { assert!(b.cl_wit == wit, "HAZYNC_LEAF_CHECK: leaf_{h}.bin's coin-log witness != this run's"); }
             *CL_WIT.lock().unwrap() = wit;
         }
-        // The trie update (mode 17), proved from the store's witness; the aggregate verifies it as an assumption.
+        // The trie update (mode 17), from the store's witness; the aggregate verifies its proof in-guest.
         let trie_lists = if methods::TRIE { crate::trie::trie_parse(&String::from_utf8_lossy(&log)) } else { (Vec::new(), Vec::new()) };
         if methods::TRIE {
             let wit = match &leaf { Some(b) => b.trie_wit.clone(), None => crate::trie::trie_witness(h, &trie_lists.0, &trie_lists.1, &prev) };
             if let Some(b) = &check_b { assert!(b.trie_wit == wit, "HAZYNC_LEAF_CHECK: leaf_{h}.bin's trie witness != this run's"); }
-            if eng {
-                let mut st = crate::sink::Stream::default();
-                crate::trie::trie_env(&mut st, &wit, &trie_lists.0, &trie_lists.1);
-                etrie_stream = Some(st.0);
-            } else {
-                *TRIE_RCPT.lock().unwrap() = Some(crate::trie::trie_prove_wit(h, &wit, &trie_lists.0, &trie_lists.1, &prev, &opts));
-            }
+            let mut st = crate::sink::Stream::default();
+            crate::trie::trie_env(&mut st, &wit, &trie_lists.0, &trie_lists.1);
+            etrie_stream = Some(st.0);
         }
         bd.write(&bp).unwrap();
         std::env::set_var("HAZYNC_LZ_HINTS", &bp);
-        // The engine: every chunk and the trie update proved at once (one job per GPU at a time), each against the
-        // journal its execution committed; the aggregate then verifies all of them in-guest.
-        if eng {
+        // Every chunk and the trie update proved at once (one job per GPU at a time), each against the journal its
+        // execution committed; the aggregate then verifies all of them in-guest.
+        let echunks: Vec<crate::engine_backend::EngineProof> = {
             let mut jobs: Vec<crate::engine_backend::Job> = estreams.into_iter().zip(ejournals.into_iter()).enumerate()
                 .map(|(ci, (st, j))| (format!("b{h}_c{ci:02}"), st, Vec::new(), false, Some(j.0))).collect();
             let nchunks = jobs.len();
@@ -1843,12 +1127,11 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             }
             let mut proofs = crate::engine_backend::prove_many(out, jobs);
             let trie = if proofs.len() > nchunks { proofs.pop() } else { None };
-            echunks = proofs;
             *crate::engine_backend::TRIE.lock().unwrap() = trie;
-        }
+            proofs
+        };
         let t_hints = t0.elapsed().as_secs_f64();
-        let mut next_rcpt: Option<Receipt> = None;
-        let st: ChainState = if eng {
+        let st: ChainState = {
             let trie = crate::engine_backend::TRIE.lock().unwrap().clone();
             let ch: Vec<&crate::engine_backend::EngineProof> =
                 echunks.iter().chain(trie.iter()).chain(eprev.iter().filter(|_| step == 0)).collect();
@@ -1866,20 +1149,6 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             assert_eq!(st.height, h);
             eprev = Some(p);
             st
-        } else {
-        let mut b = ExecutorEnv::builder();
-        b.segment_limit_po2(seg_po2()); // env_for sets it too; restated here for check_seg_guards.sh's 25-line window
-        env_for(&mut b);
-        let info = default_prover().prove_with_opts(b.build().unwrap(), METHOD_ELF, &opts)
-            .unwrap_or_else(|e| panic!("block {h}: aggregate proof failed: {e}"));
-        lz_stats("aggregate", h, &info.stats);
-        let r = info.receipt;
-        r.verify(METHOD_ID).expect("aggregate receipt verifies");
-        let st: ChainState = r.journal.decode().expect("ChainState");
-        assert_eq!(st.height, h);
-        write_atomic(&format!("{out}/block_{h}.rcpt"), &bincode::serialize(&r).unwrap());
-        next_rcpt = Some(r);
-        st
         };
         write_atomic(&format!("{out}/state_{h}.json"), serde_json::to_string(&st).unwrap().as_bytes());
         // a leaf has no stores to advance (the guest checked its witnesses against S(h-1))
@@ -1888,12 +1157,12 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             if h == 1 && prev_is_genesis {
                 hist_append(&out, &libzync::history::Rec { height: 0, hash: genesis_anchor().tip_hash, value: 0, flips: vec![], appends: vec![], undo: None });
             }
-            let undo = crate::handover_pin::leaf_has_undo(&METHOD_ID, pinned_lineage(), h).then_some(undo.0);
+            let undo = crate::handover_pin::leaf_has_undo(&st.self_id, pinned_lineage(), h).then_some(undo.0);
             hist_append(&out, &libzync::history::Rec { height: h, hash: st.tip_hash, value: st.utxo_value, flips, appends: cl_lists.1.clone(), undo });
-            // The log next to each receipt, so a run can resume after it (HAZYNC_RESUME) or be anchored on it. The last
-            // two are kept (a checkpoint copier takes the second newest receipt, which may still be complete while
-            // the newest is being written); HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log
-            // needs a disk-backed store instead (COINLOG.md §8).
+            // The log next to each state, so a run can be anchored on it. The last two are kept (a checkpoint copier
+            // takes the second newest, which may still be complete while the newest is being written);
+            // HAZYNC_COINLOG_SAVE_EACH=1 keeps every one (tests). A mainnet-sized log needs a disk-backed store instead
+            // (COINLOG.md §8).
             cl_save(&format!("{out}/state_{h}.coinlog"), h);
             // test hook: die between the coin log's save and the trie's (the window the journal covers)
             if std::env::var("HAZYNC_CRASH_AT").as_deref() == Ok(&format!("after-coinlog-save:{h}")) { std::process::exit(9); }
@@ -1902,7 +1171,7 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             }
         }
         // The trie: the same update list applied to the store must reach the committed root; its snapshot beside the
-        // receipt (the last two kept, as the coin log's; HAZYNC_COINLOG_SAVE_EACH=1 keeps every one).
+        // state (the last two kept, as the coin log's; HAZYNC_COINLOG_SAVE_EACH=1 keeps every one).
         if methods::TRIE && leaf.is_none() {
             crate::trie::trie_commit(&trie_lists.0, &trie_lists.1, &st);
             crate::trie::trie_save(&format!("{out}/state_{h}.trie"));
@@ -1911,69 +1180,20 @@ pub(crate) fn lz_prove_range_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str,
             }
         }
         // The block's commit point: the coin log and the trie are both saved at h, so its journal record can go. A crash
-        // before this line resumes at h-1, and the coin log's record undoes the block (11-06).
+        // before this line leaves the coin log's record, which undoes the block (11-06).
         if methods::COINLOG && leaf.is_none() { cl_journal_commit(); }
         let dt = t0.elapsed().as_secs_f64();
-        // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, receipt bytes
-        let rbytes = std::fs::metadata(if eng { format!("{out}/block_{h}.ovm.proof.json") } else { format!("{out}/block_{h}.rcpt") }).map(|m| m.len()).unwrap_or(0);
+        // height, chunks, sig-hint s, chunk-prove s, ecmh-hint s, total s, kind, proof bytes
+        let rbytes = std::fs::metadata(format!("{out}/block_{h}.ovm.proof.json")).map(|m| m.len()).unwrap_or(0);
         writeln!(times, "{h}\t{}\t{t_sig:.1}\t{:.1}\t{:.1}\t{dt:.1}\t{}\t{rbytes}", bounds.len(),
                  t_chunks - t_sig, t_hints - t_chunks, ["recursive", "base", "handover"][step as usize]).unwrap();
         println!("  block {h}: {} chunks, proved in {dt:.1} s ({}), forest {} live_set {}  [{:.0} s total]",
                  bounds.len(), ["verifies prev", "base on anchor", "handover: verifies predecessor"][step as usize], st.utxo_leaves, st.live_set, t_all.elapsed().as_secs_f64());
         prev = st;
-        if !eng { prev_rcpt = next_rcpt; }
         handover_pending = false;
     }
-    println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final receipt {out}/block_{hi}.rcpt{}", t_all.elapsed().as_secs_f64(),
-             if crate::verify::dev_mode_env() { " (DEV MODE: fake receipts, not proofs; the times are execution, not proving)" } else { "" });
-}
-
-pub(crate) fn agg_chunks() {
-    use std::time::Instant;
-    let (anchor, mut w) = build_full();
-    // The partition decides how many chunk files exist — an uneven pack can yield fewer runs than
-    // HAZYNC_CHUNKS asked for, and reading a fixed count would look for a file that was never written.
-    let nchunks = chunk_bounds(&w, crate::chunks::nchunks_for(&w)).len();
-    let receipts = read_chunk_receipts(nchunks);
-    println!("=== AGGREGATING {} chunk receipts for block {} ===", receipts.len(), w.height);
-    let t = Instant::now();
-    // libzync: same stream as agg-exec-fake (chunk_bounds above needed the full witness first).
-    libzync_agg_prep(&mut w);
-    let mut anchor = anchor;
-    let execute_only = std::env::var("HAZYNC_AGG_EXECUTE").is_ok();
-    if methods::COINLOG { cl_synth_around(&receipts, &mut anchor, &mut w, !execute_only); }
-    let mut b = ExecutorEnv::builder();
-    write_aggregate_env(&mut b, &receipts, &anchor, &w);
-    libzync_agg_tail(&mut b, &w);
-    // Execute-only mode returns before proving; see report_agg_execute_only.
-    if std::env::var("HAZYNC_AGG_EXECUTE").is_ok() { report_agg_execute_only(b); return; }
-
-    // Prove the aggregate to SUCCINCT too: the assumptions are already succinct (cheap resolve), and a
-    // succinct block proof is a single fixed-size STARK — directly composable in the chain range-fold.
-    //
-    // EXECUTE FIRST, then prove, rather than one opaque prove_with_opts (#145). Execution is a
-    // couple of percent of the work and it yields the segment count, so the fold can say how much
-    // there is to do BEFORE it starts doing it. Without that the only honest thing anyone could say
-    // about a running fold was "it has not finished".
-    let opts = ProverOpts::succinct();
-    let server = risc0_zkvm::get_prover_server(&opts).expect("prover server");
-    let ctx = risc0_zkvm::VerifierContext::default();
-    let session = risc0_zkvm::ExecutorImpl::from_elf(b.build().unwrap(), METHOD_ELF)
-        .unwrap().run().unwrap_or_else(|e| panic!("{}", guest_failure("aggregate execution", &e)));
-    // stop before proving anything that no verifier accepts (a collect run exits COLLECT_EXIT: the hints are missing)
-    require_committed(session.exit_code, "aggregate execution (nothing proved)");
-    let nseg = session.segments.len();
-    println!("  {nseg} segments to prove at po2 {}", seg_po2());
-    // #237: the aggregate had the SAME unprotected `prove_session` as `prove-chunk`. A #119 fault
-    // here loses the whole fold, which is the most expensive single unit of work in the pipeline.
-    let agg = prove_session_resilient(&server, &ctx, &session);
-    agg.verify(METHOD_ID).unwrap();
-    let tip: ChainState = agg.journal.decode().unwrap();
-    assert!(tip.self_id == METHOD_ID, "S1: proof recursed against wrong image id");
-    let out = std::env::var("HAZYNC_AGG_OUT").unwrap_or_else(|_| format!("block_{}.receipt", w.height));
-    std::fs::write(&out, bincode::serialize(&agg).unwrap()).ok();
-    println!(">>> BLOCK {} AGGREGATED in {:.1}s — succinct receipt VERIFIED, saved {out}.", w.height, t.elapsed().as_secs_f64());
-    println!("  tip_hash {}  cum_work {}  UTXO leaves {}", hex(&tip.tip_hash), work_u128(&tip.cum_work), tip.utxo_leaves);
+    println!("LZ_PROVE_RANGE_DONE {lo}..={hi} in {:.0} s; final proof {out}/block_{hi}.ovm{}", t_all.elapsed().as_secs_f64(),
+             if crate::engine_backend::dev() { " (ENGINE DEV MODE: executions, not proofs)" } else { "" });
 }
 
 // ---- libzync coin log, host side (HAZYNC_COINLOG=1 builds; libzync/src/coinlog.rs) ----------------------------
@@ -1990,24 +1210,20 @@ pub(crate) struct ClHost {
 }
 pub(crate) static CL: std::sync::Mutex<Option<ClHost>> = std::sync::Mutex::new(None);
 pub(crate) static CL_WIT: std::sync::Mutex<Vec<u32>> = std::sync::Mutex::new(Vec::new());
-/// E2: the block's trie receipt (guest mode 17) for the aggregate (measurement: executed, a FakeReceipt).
-pub(crate) static TRIE_RCPT: std::sync::Mutex<Option<risc0_zkvm::Receipt>> = std::sync::Mutex::new(None);
 
 /// `state_<h>.json` -> `state_<h>.coinlog`; `anchor.json` -> `anchor.coinlog`.
 pub(crate) fn cl_path_for(state_json: &str) -> String {
     match state_json.strip_suffix(".json") { Some(s) => format!("{s}.coinlog"), None => format!("{state_json}.coinlog") }
 }
 
-/// The coin log for a run starting after `prev`: the handover receipt's log, an empty log (genesis), or the anchor's.
 /// The directory a handover's predecessor files sit in (state_<h>.coinlog, state_<h>.trie): the one of the
-/// predecessor's receipt (HAZYNC_HANDOVER_RECEIPT) or, on the engine, of its proof (HAZYNC_HANDOVER_PROOF). A bare file
-/// name has the parent "" (review 11-03): then ".".
+/// predecessor's proof (HAZYNC_HANDOVER_PROOF). A bare file name has the parent "" (review 11-03): then ".".
 pub(crate) fn handover_dir() -> String {
-    let p = std::env::var("HAZYNC_HANDOVER_RECEIPT").or_else(|_| std::env::var("HAZYNC_HANDOVER_PROOF"))
-        .expect("a handover run names its predecessor (HAZYNC_HANDOVER_RECEIPT or HAZYNC_HANDOVER_PROOF)");
+    let p = std::env::var("HAZYNC_HANDOVER_PROOF").expect("a handover run names its predecessor's proof (HAZYNC_HANDOVER_PROOF)");
     std::path::Path::new(&p).parent().map(|x| x.to_string_lossy().to_string()).filter(|x| !x.is_empty()).unwrap_or_else(|| ".".to_string())
 }
 
+/// The coin log for a run starting after `prev`: the handover predecessor's log, an empty log (genesis), or the anchor's.
 pub(crate) fn cl_init_at_start(handover: bool, anchor_path: &str, prev: &ChainState) {
     if handover {
         let d = handover_dir();
@@ -2521,7 +1737,7 @@ pub(crate) fn hist_append(out: &str, rec: &libzync::history::Rec) {
     *g = Some(Some(n + 1));
 }
 
-/// Gate / single-block measurement (agg-exec-fake): a coin log of the modelled size around ONE real block. Each spend's
+/// Gate / single-block measurement (engine-export): a coin log of the modelled size around ONE real block. Each spend's
 /// position comes from its coin's real creation height (block file `coin_height`), the log size from k x cumulative
 /// transactions ($HAZYNC_COINLOG_TXCOUNTS, getchaintxstats pairs; k = $HAZYNC_COINLOG_K, default 1.64), a random rank
 /// inside the creation block. Untouched subtrees are random; the touched trees' old roots are what the witness folds
@@ -2612,14 +1828,13 @@ mod guest_failure_tests {
 
 #[cfg(test)]
 mod resplit_tests {
-    use super::{first_results, is_guest_oom, resplit_on_oom};
+    use super::{is_guest_oom, resplit_on_oom};
     use crate::chunks::{split_chunk, split_cut};
 
-    // The text of risc0-zkvm-platform 2.2.3's bump allocator (src/heap/bump.rs, alloc_aligned), as the executor reports
-    // it. The crate builds into the GUEST, not this host, so its source is not reachable here: the test below pins the
-    // version the guest locks instead, and a bump of it must re-check this text.
-    const OOM: &str = "Guest panicked: Out of memory! You have been using the default bump allocator which does not reclaim \
-        memory. Enable the `heap-embedded-alloc` feature to reclaim memory. This will result in extra cycle cost.";
+    // The engine guest's out-of-memory stop (openvm-platform v2.1.0's heap/bump.rs), as engine_backend::try_execute
+    // reports it. The crate builds into the GUEST, not this host, so its source is not reachable here: the test below
+    // pins the OpenVM version the engine guest takes instead, and a bump of it must re-check this text.
+    const OOM: &str = "engine execute of b5_collect_0_9 failed: \"VM error\"; guest log ends: ERROR: Maximum memory exceeded, program terminating.";
 
     fn halve(lo: usize, hi: usize) -> Result<usize, &'static str> { if hi - lo >= 2 { Ok(lo + (hi - lo) / 2) } else { Err("a single input") } }
 
@@ -2633,14 +1848,12 @@ mod resplit_tests {
     fn only_the_bump_allocator_message_is_out_of_memory() {
         assert!(is_guest_oom(OOM));
         assert!(is_guest_oom(&format!("chunk proof: {OOM}")));
-        assert!(!is_guest_oom("Guest panicked: agg-lite: REJECT bad-txns-inputs-missingorspent"));
-        assert!(!is_guest_oom("Guest panicked: C abort()"));
-        assert!(!is_guest_oom("Out of memory"));
-        assert!(!is_guest_oom("Guest panicked: Out of memory!"));
-        // the OpenVM engine's guest, as engine_backend::try_execute reports it (openvm-platform heap/bump.rs)
-        assert!(is_guest_oom("engine execute of b5_collect_0_9 failed: \"VM error\"; guest log ends: ERROR: Maximum memory exceeded, program terminating."));
         assert!(!is_guest_oom("engine execute of b5_collect_0_9 failed: \"VM error\"; guest log ends: agg-lite: REJECT x"));
+        assert!(!is_guest_oom("engine execute of b5 failed: \"VM error\"; guest log ends: C abort()"));
         assert!(!is_guest_oom("Maximum memory exceeded"));
+        assert!(!is_guest_oom("Out of memory"));
+        // RISC Zero's bump allocator text (the RISC Zero era's guest): no executor here produces it any more
+        assert!(!is_guest_oom("Guest panicked: Out of memory! You have been using the default bump allocator which does not reclaim memory."));
     }
 
     #[test]
@@ -2717,21 +1930,10 @@ mod resplit_tests {
     }
 
     #[test]
-    fn a_parallel_round_ends_at_its_first_failure_in_input_order() {
-        let oom = || Some(Err::<(), _>(OOM.to_string()));
-        // a failure at 2: what ran after it is dropped, an out-of-memory chunk before it kept
-        let r = first_results(vec![oom(), Some(Ok(())), Some(Err("REJECT".to_string())), Some(Ok(())), None]);
-        assert_eq!(r.len(), 3);
-        assert_eq!(r[2].as_ref().err().map(String::as_str), Some("REJECT"));
-        // no failure: every result, out-of-memory ones included
-        assert_eq!(first_results(vec![oom(), Some(Ok(())), oom()]).len(), 3);
-    }
-
-    #[test]
-    fn the_oom_text_is_pinned_to_the_guest_s_risc0_zkvm_platform() {
-        let lock = include_str!("../../methods/guest/Cargo.lock");
-        assert!(lock.contains("name = \"risc0-zkvm-platform\"\nversion = \"2.2.3\"\n"),
-                "the guest's risc0-zkvm-platform moved: re-check OOM (and is_guest_oom) against its heap/bump.rs");
+    fn the_oom_text_is_pinned_to_the_engine_guest_s_openvm() {
+        let manifest = include_str!("../../../engine/guest/Cargo.toml.in");
+        assert!(manifest.contains("openvm = { git = \"https://github.com/openvm-org/openvm.git\", tag = \"v2.1.0\""),
+                "the engine guest's OpenVM moved: re-check OOM (and is_guest_oom) against openvm-platform's heap/bump.rs");
         assert!(is_guest_oom(OOM));
     }
 

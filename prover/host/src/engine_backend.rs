@@ -1,11 +1,11 @@
-//! The OpenVM engine as this host's prover (engine/ENGINE.md). Set HAZYNC_ENGINE=<hzengine binary> and
-//! HAZYNC_ENGINE_KEYS=<key dir> and `libzync-prove-range` runs every guest execution and proof of a block on the
-//! engine instead of RISC Zero: the chunks' signature-collect runs, the chunk proofs, the aggregate's collect run,
-//! the trie update and the aggregate, which verifies the chunk, trie and previous-block proofs in-guest. Everything
-//! else (blocks, prep, the coin log and trie stores, the BIP30 tree, history) is this host's own code, unchanged.
+//! The OpenVM engine, this host's only prover (engine/ENGINE.md; RISC Zero's backend went with CUTOVER C8 step 4). Set
+//! HAZYNC_ENGINE=<hzengine binary> and HAZYNC_ENGINE_KEYS=<key dir> and every guest execution and proof runs on it:
+//! the chunks' signature-collect runs, the chunk proofs, the aggregate's collect run, the trie update and the
+//! aggregate, which verifies the chunk, trie and previous-block proofs in-guest. Everything else (blocks, prep, the
+//! coin log and trie stores, the BIP30 tree, history) is this host's own code.
 //!
-//! The engine runs as one long-lived `hzengine serve` process (its keys load once). Inputs are the same streams the
-//! RISC Zero path writes (crate::sink::Stream); outputs are the same journals.
+//! The engine runs as one long-lived `hzengine serve` process (its keys load once). Inputs are the guest's word streams
+//! (crate::sink::Stream); outputs are its journals.
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
@@ -54,9 +54,20 @@ pub(crate) fn dev() -> bool {
     })
 }
 
+/// What a command that runs the guest needs, said once: since CUTOVER C8 the engine is the only prover.
+pub(crate) const NEEDS_ENGINE: &str = "this host runs the guest on the OpenVM engine: set HAZYNC_ENGINE=<hzengine binary> and \
+    HAZYNC_ENGINE_KEYS=<the image's key directory> (RISC Zero's backend is gone since CUTOVER C8; v0.27.1 is its last release)";
+
+/// Stop (a panic: libzync-verify's hook reads it as a FAIL) unless the engine is set up (HAZYNC_ENGINE, HAZYNC_ENGINE_KEYS).
+pub(crate) fn require() {
+    if !active() || std::env::var_os("HAZYNC_ENGINE_KEYS").is_none() {
+        panic!("{NEEDS_ENGINE}");
+    }
+}
+
 fn start(work: &str, gpu: Option<usize>, tag: &str) -> Engine {
-    let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
-    let keys = std::env::var("HAZYNC_ENGINE_KEYS").expect("HAZYNC_ENGINE_KEYS: the engine's key directory");
+    let bin = std::env::var("HAZYNC_ENGINE").unwrap_or_else(|_| panic!("{NEEDS_ENGINE}"));
+    let keys = std::env::var("HAZYNC_ENGINE_KEYS").unwrap_or_else(|_| panic!("{NEEDS_ENGINE}"));
     let mut cmd = Command::new(&bin);
     cmd.args(["serve", "--dir", &keys]).stdin(Stdio::piped()).stdout(Stdio::piped());
     if let Some(g) = gpu { cmd.env("CUDA_VISIBLE_DEVICES", g.to_string()); }
@@ -86,7 +97,7 @@ fn share() -> usize {
         if let Some(n) = std::env::var("HAZYNC_ENGINE_PER_GPU").ok().and_then(|v| v.parse::<usize>().ok()) {
             return n.max(1);
         }
-        let bin = std::env::var("HAZYNC_ENGINE").expect("HAZYNC_ENGINE");
+        let bin = std::env::var("HAZYNC_ENGINE").unwrap_or_else(|_| panic!("{NEEDS_ENGINE}"));
         let mut c = Command::new(&bin);
         c.arg("gpu-share");
         if gpus() > 1 { c.env("CUDA_VISIBLE_DEVICES", "0"); }
@@ -193,7 +204,8 @@ impl Engine {
     }
 
     /// Execute (no proof). `children` are verified in-guest in env::verify order; `self_id` puts the engine's image
-    /// id where the stream carries this host's METHOD_ID (bytes 4..36: an aggregate or a join).
+    /// id where the stream carries its image id (bytes 4..36: an aggregate, a join or a trie combine; this host writes
+    /// the same id there, `image_id`).
     pub(crate) fn execute(&mut self, name: &str, stream: &[u8], children: &[&EngineProof], self_id: bool) -> Exec {
         self.execute_ex(name, stream, children, self_id, false)
     }
@@ -207,8 +219,8 @@ impl Engine {
         let (log, journal) = (input.with_extension("log"), input.with_extension("journal"));
         let ch: Vec<String> = children.iter().map(|c| c.path.display().to_string()).collect();
         // A failed run panics with the end of the guest's log, as try_execute reports it: the guest's own verdict
-        // (e.g. "agg-lite: block INVALID ...", then its refusal to commit) is there, where RISC Zero's executor prints
-        // guest output straight to this process's output (the core-rules rig reads it; 26.11.2026).
+        // (e.g. "agg-lite: block INVALID ...", then its refusal to commit) is there (the core-rules rig reads it;
+        // 26.11.2026).
         let r = self.try_req(serde_json::json!({"op": "execute", "input": input, "children": ch, "self_id": self_id,
                                                 "dry": dry, "journal": journal, "log": log}))
             .unwrap_or_else(|e| {
@@ -299,15 +311,10 @@ pub(crate) fn keep(p: &EngineProof, dst: &str) -> EngineProof {
     EngineProof { path: d, journal: p.journal.clone() }
 }
 
-/// What write_aggregate_env_ex needs from a child proof: its journal, and the RISC Zero assumption if it is one.
+/// What write_aggregate_env_ex needs from a child: its journal (the proof itself is passed to the engine beside the
+/// stream, in env::verify order).
 pub(crate) trait Proven {
     fn journal_bytes(&self) -> &[u8];
-    fn assumption(&self) -> Option<risc0_zkvm::Receipt>;
-}
-
-impl Proven for risc0_zkvm::Receipt {
-    fn journal_bytes(&self) -> &[u8] { &self.journal.bytes }
-    fn assumption(&self) -> Option<risc0_zkvm::Receipt> { Some(self.clone()) }
 }
 
 /// A journal from an execution: what a collect aggregate's stream carries for a chunk not yet proved.
@@ -315,18 +322,32 @@ pub(crate) struct JournalOnly(pub Vec<u8>);
 
 impl Proven for JournalOnly {
     fn journal_bytes(&self) -> &[u8] { &self.0 }
-    fn assumption(&self) -> Option<risc0_zkvm::Receipt> { None }
 }
 
 impl Proven for EngineProof {
     fn journal_bytes(&self) -> &[u8] { &self.journal }
-    fn assumption(&self) -> Option<risc0_zkvm::Receipt> { None }
 }
 
-/// The trie update's engine proof for the aggregate being built (the engine's counterpart of lz::TRIE_RCPT).
+/// The trie update's engine proof (or, in engine-export, its execution's journal) for the aggregate being built.
 pub(crate) static TRIE: Mutex<Option<EngineProof>> = Mutex::new(None);
 
-/// A ChainState from a journal (RISC Zero's serde words, as both backends commit it).
+/// One execution on the engine for a command that runs a single guest stream (exec-chunk, test-locks, test-merkle,
+/// signet-check-test): its work files under HAZYNC_ENGINE_WORK (default `.`); a failed run is an Err (the engine's error
+/// and the end of the guest's log).
+pub(crate) fn execute_once(name: &str, stream: &[u8]) -> Result<Exec, String> {
+    require();
+    let work = std::env::var("HAZYNC_ENGINE_WORK").unwrap_or_else(|_| ".".into());
+    with(&work, |e| e.try_execute(name, stream))
+}
+
+/// A journal (the guest's serde words, little-endian) decoded as `T`.
+pub(crate) fn decode_words<T: serde::de::DeserializeOwned>(j: &[u8]) -> T {
+    assert!(j.len() % 4 == 0, "engine: journal is not whole words");
+    let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    hazync_journal::serde::from_slice(&w).expect("engine: the journal does not decode")
+}
+
+/// A ChainState from a journal (the guest's serde words).
 pub(crate) fn decode_state(j: &[u8]) -> crate::ChainState {
     assert!(j.len() % 4 == 0, "engine: journal is not whole words");
     let w: Vec<u32> = j.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
@@ -390,7 +411,7 @@ pub(crate) fn board_key() -> Option<Result<(Vec<u8>, [u8; 32]), String>> {
 }
 
 /// The engine image id this host proves or verifies as, 8 words: the board key's image, else HAZYNC_ENGINE_KEYS'
-/// image.json; None for a RISC Zero host.
+/// image.json; None for a host set up for neither.
 pub(crate) fn engine_image_words() -> Option<Result<[u32; 8], String>> {
     if let Some(k) = board_key() {
         return Some(k.and_then(|(key, _)| {
@@ -407,4 +428,12 @@ pub(crate) fn engine_image_words() -> Option<Result<[u32; 8], String>> {
 pub(crate) fn engine_image_cached() -> Option<[u32; 8]> {
     static I: std::sync::OnceLock<Option<[u32; 8]>> = std::sync::OnceLock::new();
     *I.get_or_init(|| engine_image_words().map(|r| r.unwrap_or_else(|e| panic!("engine image: {e}"))))
+}
+
+/// THIS host's image id, where a stream or a state names it (an aggregate's, a join's or a trie combine's bytes 4..36,
+/// which the engine overwrites with its own when it runs them, `self_id`): the engine image, never a constant (until
+/// CUTOVER C8 it was RISC Zero's METHOD_ID). A command that writes such a stream needs the engine set up.
+pub(crate) fn image_id() -> [u32; 8] {
+    engine_image_cached().unwrap_or_else(|| panic!("{NEEDS_ENGINE} (or HAZYNC_ENGINE_VK + HAZYNC_ENGINE_VK_PIN for a board): \
+        the image id this command writes comes from the engine's image"))
 }
