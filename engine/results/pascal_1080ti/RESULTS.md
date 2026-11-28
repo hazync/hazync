@@ -65,3 +65,20 @@ stark-backend-pascal.patch with the race fix, 308f79a1; exe sha256 a1f0608f...).
 - For scale (same input, measured): RTX PRO 6000 Workstation 268.0 s; RTX A6000 722.0 s; A40 (unfused forced) 756 s.
 
 Files: xesktop2_28.11.2026/ (the journal, the Linux verify lines).
+
+## A real block across the 1080 Tis: 976,379 (8,130 inputs) on Windows (28.11.2026, same session)
+
+`hzengine prove-block --dir keys --export export/976379t` (bundle-def: keys-def image, the 24.11 export with 5 chunks +
+the trie), all 10 GPUs visible (workers = GPUs x share; this block has 6 leaf jobs, so 6 workers on GPUs 0-5).
+
+- **Run 1, the automatic segment cap (7 GiB on an 11 GiB card): 4 of the 6 workers died OUT OF MEMORY**
+  (`vpmm_set_access failed ... out of memory`, d_buffer.rs:83; block976379_run1_oom_excerpt.txt); stopped by me after ~5
+  min. The header chain fit at 7 GiB; chunk proofs need more per segment, and WDDM keeps part of each card.
+- **Run 2, HZ_SEG_MEM_GB=4: PROVED in 405.6 s** (16:59:16-17:06:02), rc 0. The 6 leaf workers on GPUs 0-5 (~6.5-7.2 GiB
+  each), then the aggregate on GPU 0 with its segments spread over the workers (segpar). Verified on Linux (hazync-coord,
+  bundle-def keys): **OK, journal 5,284 bytes sha256 fb8e05582022bd67...**; against the export's RISC Zero journal
+  (agg.r0journal): 32 bytes differ (2908-2939), the image's self_id, as on every Linux run of this block.
+- For scale (measured, same block): one A40, Linux, 409 s (engine/results/gpu_a40_block976379); one RTX A6000 183-289 s
+  by setting (gpu_a6000_tuning).
+- To do: the automatic segment cap must leave room on small cards under Windows (7 GiB on 11 GiB fails for chunks; 4 GiB
+  works): a lower default below ~16 GiB, or a WDDM margin (engine/host engine.rs segment cap).

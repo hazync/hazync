@@ -1,0 +1,8 @@
+thread 'main' (5800) panicked at D:\a\_temp\openvm-src\stark-backend\crates\cuda-common\src\d_buffer.rs:83:67:
+GPU allocation failed: Cuda(CudaError { code: 2, name: "cudaErrorMemoryAllocation", message: "out of memory" })
+ERROR             Γöé  Γö¥Γöü ≡ƒÜ¿ [error]: vpmm_set_access failed: addr=0x54fb800000, size=4441767936, 
+thread 'main' (3980) panicked at D:\a\_temp\openvm-src\stark-backend\crates\cuda-common\src\d_buffer.rs:83:67:
+GPU allocation failed: Cuda(CudaError { code: 2, name: "cudaErrorMemoryAllocation", message: "out of memory" })
+ERROR       Γöé     Γöé  ΓöòΓöü ≡ƒÜ¿ [error]: vpmm_set_access failed: addr=0x25bb600000, size=2252341248, 
+thread 'main' (9088) panicked at D:\a\_temp\openvm-src\stark-backend\crates\cuda-common\src\d_buffer.rs:83:67:
+GPU allocation failed: Cuda(CudaError { code: 2, name: "cudaErrorMemoryAllocation", message: "out of memory" })
