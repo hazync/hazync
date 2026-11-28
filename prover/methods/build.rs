@@ -4,25 +4,9 @@
 // engine builds it (hzengine build) and the image id comes from its key directory (engine_backend). RISC Zero's
 // risc0-build, METHOD_ELF and METHOD_ID are gone with the RISC Zero backend.
 //
-// (Below, the comment block of the RISC Zero era is kept where it still describes this file's rerun rules.)
-//
-// The `rerun-if-changed` lines below are not boilerplate — they are the difference between a stale
-// METHOD_ID and a correct one.
-//
-// Cargo's DEFAULT for a build script is "re-run if anything in this package changed", and that default
-// is silently DISABLED the moment a build script emits any `rerun-if-changed` of its own. So this list
-// has to be complete: `guest` and `build.rs` are here to restore what the default covered, not as
-// decoration. Deleting either re-introduces the bug in the other direction.
-//
-// What the default never covered is the reason this exists. Since #88 the guest `#[path]`-includes
-// source from OUTSIDE this package (`coinbase-smt/src/roots.rs`, `bip30.rs`). Cargo does not watch
-// those, so editing the SMT would leave the previously-built guest ELF in place and the build would
-// report success while the id silently described the OLD source. A wrong id that looks like a clean
-// build is worse than a build failure.
-//
-// The includes are PARSED from the guest rather than listed here, because a hand-maintained copy of
-// that list is exactly what goes stale — and it would go stale in the direction that fails silently.
-// `scripts/check-guest-inputs.sh` independently asserts that every `#[path]` include is covered here.
+// Re-run rules: this script, libzync/src/profile.rs and the env vars it reads, nothing else. The guest's own inputs
+// (its #[path] includes from libzync and coinbase-smt) are the engine build's concern (engine/guest/assemble.sh copies
+// them; the image id is the record of what was built), not this crate's.
 
 use std::path::Path;
 

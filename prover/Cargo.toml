@@ -2,7 +2,7 @@
 resolver = "2"
 members = ["host", "methods", "zyncapps/host"]
 
-# Always optimize; building and running the guest takes much longer without optimization.
+# Always optimize: the host's prep, coin log and trie stores are slow unoptimised.
 [profile.dev]
 opt-level = 3
 
@@ -10,70 +10,8 @@ opt-level = 3
 debug = 1
 lto = true
 
-[patch.crates-io]
-risc0-zkvm = { path = "../vendor/risc0-zkvm" }
-# risc0-circuit-rv32im-sys 4.1.0, vendored for the Windows CUDA build only (build.rs, search
-# HAZYNC_631_MSVC_FLAGS). The hazync#119 accum-pass fix we carried on 4.0.3 is upstream since 4.1.0.
-# Prover-only: METHOD_ID, circuit and verifier are unchanged.
-risc0-circuit-rv32im-sys = { path = "../vendor/risc0-circuit-rv32im-sys" }
-# hazync#616: risc0-circuit-keccak 4.1.0 with ONE fix, in build.rs (search
-# HAZYNC_WINDOWS_PATH_ESCAPE). generate_zkr_table() interpolated an ABSOLUTE PATH straight into a
-# Rust string literal; on Windows `canonicalize` returns `\\?\C:\Users\...` and every `\U`, `\r`,
-# `\k` became an invalid character escape -- 40 errors, measured in run 36907036212. Backslashes are
-# now escaped, which is a no-op on Linux.
-# ⚠ WE NEVER EXECUTE THIS CIRCUIT: the Bitcoin guest uses SHA-256 and RIPEMD-160, never Keccak. But
-# risc0-zkvm declares risc0-circuit-keccak UNCONDITIONALLY (no `optional = true` anywhere) and its
-# `prove` feature turns on `risc0-circuit-keccak/prove`, so it must COMPILE regardless.
-# ⛔ Prover-side: METHOD_ID, the circuit and the verifier are unchanged. Drop once upstream fixes it.
-risc0-circuit-keccak = { path = "../vendor/risc0-circuit-keccak" }
-# hazync#631: risc0-build-kernel 2.0.1 with ONE branch, in src/lib.rs (search
-# HAZYNC_631_MSVC_HOST_FLAGS). compile_cuda() forwards `-Wno-missing-braces,-Wno-unused-function`
-# through `-Xcompiler` straight to nvcc's host compiler, which on Windows is cl.exe:
-#     cl : Command line error D8021 : invalid numeric argument '/Wno-missing-braces'
-# measured on windows-latest, run 37015079476, compiling risc0-sys's supra/{api,ntt}.cu.
-# ⭐ THIS IS THE SHARED LAYER. Five crates compile their CUDA kernels through that one function
-# (risc0-sys, risc0-circuit-rv32im-sys, risc0-circuit-keccak-sys, risc0-circuit-recursion-sys,
-# risc0-groth16-sys), which is why #632's per-crate flag branch in risc0-circuit-rv32im-sys did not
-# help: this line re-added the GCC flags for all five, including a crate nobody had vendored.
-# ⛔ The non-MSVC branch is BYTE-IDENTICAL to what shipped; test_kernel_host_flags.py asserts it.
-# ⛔ Prover-side only: METHOD_ID, the circuit and the verifier are unchanged. Drop once upstream
-# builds for MSVC.
-risc0-build-kernel = { path = "../vendor/risc0-build-kernel" }
-# hazync#631: risc0-groth16-sys 0.1.0 with ONE gate, in kernels/cuda/groth16_coeffs.cuh (search
-# HAZYNC_631_WIN_NO_MMAP). It includes <sys/mman.h>, <unistd.h> and <fcntl.h> to mmap a coefficient
-# blob, and Windows has none of them:
-#     groth16_coeffs.cuh(4): fatal error C1083: Cannot open include file: 'sys/mman.h'
-# ⚠ WE NEVER EXECUTE IT. The crate exports risc0_groth16_cuda_prove/_setup — SNARK WRAPPING. Hazync
-# proves STARK receipts (`host prove-block`), and the wrap is a separate step; but risc0-zkvm's
-# `cuda` feature pulls this crate in unconditionally, so it must COMPILE. Same shape as the vendored
-# keccak circuit and the cfg(unix) IPC prover.
-# ⛔ GATED, NOT PORTED. A Windows mmap port means CreateFileMapping/MapViewOfFile and is upstream's
-# design call. On MSVC the two file paths throw a clear error naming why, so SNARK wrapping on
-# native Windows fails loudly rather than silently. Non-MSVC targets are byte-identical.
-risc0-groth16-sys = { path = "../vendor/risc0-groth16-sys" }
-# hazync#631: sppark 0.1.15 with FOUR CHARACTERS changed, in sppark/ff/mont_t.cuh (search
-# HAZYNC_631_QUALIFY_N). MSVC/EDG rejects `size_t n=n` as a default argument —
-#     mont_t.cuh(49): error: a parameter is not allowed
-# because it resolves the unqualified `n` to the parameter being declared. The intent is the class
-# member `static const size_t n = (N+31)/32;` above it, which is what GCC's lookup finds, so
-# `mont_t::n` names the same value explicitly and is identical on every compiler.
-# ⚠ #632's own comment predicted this crate would be next: "sppark comes through DEP_SPPARK_ROOT
-# below and its Windows support is also untested."
-# ⛔ Prover-side only: METHOD_ID, the circuit and the verifier are unchanged.
-sppark = { path = "../vendor/sppark" }
-# hazync#631: risc0-circuit-keccak-sys 4.1.0 with its flag block branched, in build.rs (search
-# HAZYNC_631_MSVC_FLAGS). It carries its OWN `-Xcompiler -Wno-unused-function,...`, so neither
-# #632's fix in risc0-circuit-rv32im-sys nor the one in the SHARED risc0-build-kernel reached it:
-#     cl : Command line error D8021 : invalid numeric argument '/Wno-unused-function'
-# ⚠ 43 MB, of which 38 MB is kernels/cxx — nothing trimmable, and the cheaper route was checked
-# first: dropping `risc0-circuit-keccak-sys/cuda` from the vendored circuit's `cuda` feature would
-# have avoided this entirely, but src/prove/hal/cuda.rs imports keccak-sys under that same feature,
-# so it trades a compile error for a LINK error.
-# ⛔ The non-MSVC arm is byte-identical. Prover-side only; the circuit and METHOD_ID are unchanged.
-risc0-circuit-keccak-sys = { path = "../vendor/risc0-circuit-keccak-sys" }
-
-# libzync experiment: laptop builds of the host for execute-mode profiling. The guest is built by
-# risc0-build in its own workspace with its own [profile.release], so this cannot change guest cycles.
+# Laptop builds of the host (no LTO). The guest is built by the engine (hzengine build) from its own manifest, so this
+# cannot change the guest.
 [profile.fasthost]
 inherits = "release"
 lto = false
