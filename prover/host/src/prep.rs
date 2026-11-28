@@ -628,7 +628,9 @@ pub(crate) fn lz_prep_cmd(lo: u32, hi: u32, dir: &str, anchor_path: &str, out: &
         // and the state files since the last save point (written by rename, not yet synced)
         if save {
             for k in last_save + 1..h {
-                if let Ok(f) = std::fs::File::open(format!("{out}/state_{k}.json")) { f.sync_data().unwrap_or_else(|e| panic!("{out}/state_{k}.json: {e}")); }
+                // opened for writing (no truncation): Windows' FlushFileBuffers refuses a read-only handle ("Access is
+                // denied", windows-prove run 46156577125); Linux syncs either
+                if let Ok(f) = std::fs::OpenOptions::new().write(true).open(format!("{out}/state_{k}.json")) { f.sync_data().unwrap_or_else(|e| panic!("{out}/state_{k}.json: {e}")); }
             }
         }
         let t = std::time::Instant::now();

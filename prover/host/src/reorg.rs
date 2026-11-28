@@ -153,7 +153,8 @@ pub(crate) fn write(d: &std::path::Path, r: &UndoRecord) {
 pub(crate) fn sync_since(d: &std::path::Path, from: u32, to: u32) -> Option<u32> {
     let mut missing = None;
     for h in from.saturating_add(1)..=to {
-        match std::fs::File::open(path(d, h)) {
+        // opened for writing (no truncation): Windows' FlushFileBuffers refuses a read-only handle (as prep's state files)
+        match std::fs::OpenOptions::new().write(true).open(path(d, h)) {
             Ok(f) => f.sync_data().unwrap_or_else(|e| panic!("{}: {e}", path(d, h).display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => missing = Some(h),
             Err(e) => panic!("{}: {e}", path(d, h).display()),
