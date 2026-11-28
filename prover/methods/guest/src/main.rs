@@ -1975,6 +1975,13 @@ fn chunk_prove() {
         #[cfg(feature = "agg-lite")]
         agg_lite::begin_tx();
         let tx_len: u32 = env::read();
+        // A transaction larger than a block is refused HERE, before its bytes are read and before any of Core's code
+        // (verify_inputs_batch*, then lite.record) sees them: nothing over 4,000,000 bytes is in a valid block, and on
+        // rv32 Core's 32-bit size and weight arithmetic wraps past 2^30 bytes (review R3-2 L-1). No proof exists.
+        if tx_len as i64 > MAX_BLOCK_WEIGHT {
+            env::log("core-reject: bad-blk-length");
+            panic!("chunk: a transaction larger than a block");
+        }
         let prevouts_len: u32 = env::read();
         let n_owned: u32 = env::read();
         let raw_tx = read_bytes(tx_len);

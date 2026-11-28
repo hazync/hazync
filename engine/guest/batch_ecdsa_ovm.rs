@@ -51,6 +51,8 @@ pub unsafe extern "C" fn hazync_batch_defer(kind: i32, u1: *const u32, u2: *cons
     let (mut a, mut b) = (Fr::from_le_bytes_unchecked(&le(&u1l)), Fr::from_le_bytes_unchecked(&le(&u2l)));
     let rr_s = Fr::from_le_bytes_unchecked(&le(&rl));
     let mut kind = kind;
+    // s != 0 here: libsecp refuses r = 0 or s = 0 before the hook (secp-0201); OpenVM's div of 0 by 0 is unconstrained
+    // (review R3-1 #1, msm_ovm.rs INVARIANTS)
     if kind == 2 { let s = b.clone(); a = a.div_unsafe(&s); b = rr_s.clone().div_unsafe(&s); kind = 0; }
     if COLLECT {
         let hx = |b: &[u8]| -> alloc::string::String { b.iter().rev().map(|x| alloc::format!("{x:02x}")).collect() };

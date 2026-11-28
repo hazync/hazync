@@ -1,8 +1,10 @@
-# Host test of ../msm_ovm.rs against openvm-ecc-guest's msm (both on OpenVM's software curve arithmetic off-zkvm).
+# Host test of ../msm_ovm.rs against openvm-ecc-guest's msm (both on OpenVM's software curve arithmetic off-zkvm), and
+# (review R3-1 #1) against an INDEPENDENT reference, RustCrypto's k256, with a branch-coverage copy made by build.rs.
 [package]
 name = "msm-test"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [workspace]
 
@@ -10,3 +12,7 @@ edition = "2021"
 openvm-algebra-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 openvm-ecc-guest = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0" }
 k256 = { git = "https://github.com/openvm-org/openvm.git", tag = "v2.1.0", package = "k256" }
+
+[dev-dependencies]
+# RustCrypto's k256, renamed: an implementation that shares no code with OpenVM's curve arithmetic
+rc_k256 = { package = "k256", version = "=0.13.4", default-features = false, features = ["arithmetic"] }

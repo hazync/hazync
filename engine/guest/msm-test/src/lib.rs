@@ -3,6 +3,22 @@ extern crate alloc;
 #[path = "../../msm_ovm.rs"]
 pub mod msm;
 
+/// Branch counters for the instrumented copy of msm_ovm.rs (build.rs; review R3-1 #1). Test builds only.
+#[cfg(test)]
+pub mod cov {
+    use core::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTS: [AtomicUsize; 11] = [const { AtomicUsize::new(0) }; 11];
+    pub fn hit(k: usize) { COUNTS[k].fetch_add(1, Ordering::Relaxed); }
+    pub fn counts() -> [usize; 11] { core::array::from_fn(|k| COUNTS[k].load(Ordering::Relaxed)) }
+}
+#[cfg(test)]
+pub mod msm_cov {
+    include!(concat!(env!("OUT_DIR"), "/msm_cov.rs"));
+}
+#[cfg(test)]
+#[path = "r3_reference.rs"]
+mod r3_reference;
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -20,7 +36,7 @@ mod tests {
             b
         }
     }
-    fn fr(b: &[u8; 32]) -> Fr { let mut x = Fr::from_le_bytes_unchecked(b); x.assert_reduced(); x }
+    fn fr(b: &[u8; 32]) -> Fr { let x = Fr::from_le_bytes_unchecked(b); x.assert_reduced(); x }
     fn fr_reduced(b: &[u8; 32]) -> Fr { use openvm_algebra_guest::Reduce; Fr::reduce_le_bytes(b) }
     fn reference(s: &[Fr], p: &[P]) -> P { <k256::Secp256k1 as IntrinsicCurve>::msm(s, p) }
     fn mul_g(k: &Fr) -> P { reference(core::slice::from_ref(k), &[<P as CyclicGroup>::GENERATOR]) }

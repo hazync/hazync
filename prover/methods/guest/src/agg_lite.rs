@@ -15,7 +15,7 @@
 //! - PREVOUTS: a transaction's inputs can be split across chunks, each holding its own copy of the
 //!   prevouts blob. Every record carries SHA-256(prevouts) and the aggregate requires all runs of a
 //!   transaction to agree, so the fee and sigops computed by the input-0 chunk used the same coins the
-//!   other chunks verified. The coins themselves are bound by the SwiftSync total, as before.
+//!   other chunks verified. The coins themselves are bound by the coin log (each input's leaf opened there).
 //! - COVERAGE: runs must tile every transaction's inputs exactly once, in block order, against the
 //!   input count the input-0 chunk committed.
 //! - CONTEXT: each chunk commits the height, block hash, median-time-past and block time it used; the
@@ -233,9 +233,10 @@ impl ChunkCtx {
         use sha2::{Digest, Sha256};
         let mut ok = true;
         let k = idx.len();
-        // A transaction larger than a block is refused BEFORE any FFI call: below, `need` sizes the buffer that
-        // tx_out_leaves_mv writes, and on rv32 the old `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8 into a short
-        // buffer and an out-of-bounds write (review 11-14). Nothing over MAX_BLOCK_SERIALIZED_SIZE is in a valid block.
+        // A transaction larger than a block never reaches here: the chunk loop (main.rs) refuses it before reading its
+        // bytes or calling Core (review R3-2 L-1). Kept as a second guard for this function's own arithmetic: below,
+        // `need` sizes the buffer tx_out_leaves_mv writes, and on rv32 `(len / 8 + 1) * 32` wrapped at len >= 2^30 - 8
+        // (review 11-14). Nothing over MAX_BLOCK_SERIALIZED_SIZE is in a valid block.
         if raw_tx.len() > MAX_BLOCK_WEIGHT as usize {
             env::log("core-reject: bad-blk-length");
             return false;
@@ -282,8 +283,8 @@ impl ChunkCtx {
         // (core_tx_rules.cpp), on this run's inputs. The output arguments are set only when `first`.
         let lock_time = if self.height >= NET.csv_height { self.mtp } else { self.block_time };
         let (mut fee, mut weight, mut sigops) = (0i64, 0i64, 0i64);
-        // (A transaction over MAX_BLOCK_WEIGHT bytes was refused at the top, before any FFI call: Core's 32-bit size and
-        // weight arithmetic would wrap past 2^30 bytes.)
+        // (A transaction over MAX_BLOCK_WEIGHT bytes was refused in the chunk loop, before any FFI call: Core's 32-bit
+        // size and weight arithmetic would wrap past 2^30 bytes.)
         if ok && k > 0 {
             let r = unsafe { hz_tx_rules_c(tp, tl, prevouts.as_ptr(), prevouts.len() as u32, start, k as u32,
                                            ch.as_ptr(), cb.as_ptr(), cmtp.as_ptr(), self.height, self.mtp,

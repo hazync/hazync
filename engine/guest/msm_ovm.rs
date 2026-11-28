@@ -6,10 +6,24 @@
 //! are ~2% of cells. This version computes every digit once, negates each point once, adds in place, and reuses one
 //! bucket buffer.
 //!
-//! Exactness: every addition and doubling is a complete one (`add_assign_impl`, `double_assign_impl`: identity,
-//! equal and opposite operands handled), so the result is Σ sᵢ·Pᵢ for EVERY input, adversarial ones included; the
-//! batch check's accept/reject cannot differ from openvm's `msm`. Scalars are read as their stored little-endian
-//! bytes (as openvm's `msm` reads them; callers assert them reduced).
+//! Exactness: the result is Σ sᵢ·Pᵢ for EVERY input, adversarial ones included, so the batch check's accept/reject
+//! cannot differ from openvm's `msm`. Scalars are read as their stored little-endian bytes (as openvm's `msm` reads
+//! them; callers assert them reduced).
+//!
+//! INVARIANTS (review R3-1 #1). OpenVM's `add_ne` leaves λ, and so the sum, UNCONSTRAINED when both x are equal, its
+//! `double` leaves λ unconstrained on the (0,0) encoding of the identity, and `div` of 0 by 0 is unconstrained: a
+//! prover could then choose the result and push the batch sum to the identity, a signature forgery. This file never
+//! reaches those cases, and every change to it must keep that so:
+//! - identity bases are dropped before any arithmetic (`live`), so every point below is non-identity;
+//! - `add_into` is the ONLY addition: an empty accumulator takes a copy; equal x is tested first (canonical `eq_impl`)
+//!   and becomes the identity (a = -p) or a doubling of a non-identity point (a = p); `add_ne` runs only on
+//!   different x;
+//! - every doubling (`double_assign_nonidentity`) acts on a non-identity point: `add_into`'s a = p case, and the
+//!   accumulators only while their `filled` flag is set; secp256k1 has prime order, so 2a != O for a != O;
+//! - the Straus tables hold (k+1)·P with k+1 < n, never the identity.
+//! The `div` (ECDSA's u1 = e/s, u2 = r/s, batch_ecdsa_ovm.rs) only divides by an s that libsecp has already refused
+//! when zero (secp-0201's verify, before the hook). msm-test checks this file against RustCrypto's k256 on inputs that
+//! reach every guarded branch, and counts them (msm-test/build.rs).
 use alloc::vec::Vec;
 use k256::{Secp256k1Coord as Fq, Secp256k1Point as P, Secp256k1Scalar as Fr};
 use openvm_algebra_guest::IntMod;
