@@ -11,13 +11,13 @@
 # of another project's release script), and a set that only has to contain some names cannot tell.
 #
 # THE ENGINE (OpenVM) RELEASE, 28.11.2026 (engine/RELEASE_TOOLING.md, engine/RELEASE_PLAN.md: the user's decisions of
-# 27.11.2026: full package, Windows in, v1.0.0 if the reviews go well). A PROPOSAL until the user has gone through the
-# contents. Lines marked PENDING have no build route yet: release.sh's exact-set check refuses a release without them,
+# 27.11.2026: full package, Windows in, v1.0.0 if the reviews go well). The user went through it on 28.11.2026: the old host's CUDA build dropped,
+# the zeroconf zAPP gets a browser module. Lines marked PENDING have no build route yet: release.sh's exact-set check refuses a release without them,
 # which is the intended state until each route exists. release.sh itself refuses at preflight until its engine steps
 # are written.
 
 # The product host (Linux, CPU): the engine's driver (prep, engine-export, the board's commands). PENDING CUTOVER C8:
-# its RISC Zero backend is removed first. No CUDA build: the CUDA prover is hzengine.
+# its RISC Zero backend is removed first. No CUDA build (user 28.11.2026: dropped; the CUDA prover is hzengine).
 release hazync-host-x86_64-linux-gnu
 # hzengine, the OpenVM prover, Linux CPU and CUDA 12.9. PENDING: no reproducible release build of hzengine exists
 # (reproduce/engine-ids.sh builds it inside its container but does not export it); package-release.sh stages
@@ -42,8 +42,8 @@ release hazync-zapp-liveness-x86_64-linux-gnu
 release hazync-zapp-statement-x86_64-linux-gnu
 release hazync-zapp-utreexo-x86_64-linux-gnu
 release hazync-zapp-zeroconf-x86_64-linux-gnu
-# Every zAPP's browser module (its wasm/build.sh, the pinned container) and its glue. The zeroconf zAPP has no wasm
-# module yet (PENDING, so no line: add hazync-zapp-zeroconf.wasm / .js when it is built).
+# Every zAPP's browser module (its wasm/build.sh, the pinned container) and its glue. The zeroconf zAPP's module is
+# PENDING (user 28.11.2026: it ships with one; add hazync-zapp-zeroconf.wasm / .js when zapps/zeroconf/wasm is built).
 release hazync-zapp-assume.wasm
 release hazync-zapp-assume.js
 release hazync-zapp-deposit.wasm

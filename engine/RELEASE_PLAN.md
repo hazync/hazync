@@ -51,3 +51,6 @@ reader to reproduce the ids.
   longer parked; it is part of the first release, with the Windows GPU gate.
 - **Full package**: every zAPP CLI and wasm module ships as a release asset, in the signed manifest.
 - **Version v1.0.0**, if the reviews go well and the user is happy with them.
+- **28.11.2026 (user):** (1) the old product host's CUDA build is DROPPED from the release assets (hzengine proves; the
+  product host stays for prep, export and the board); (2) the zeroconf zAPP NEEDS a browser (wasm) module before the
+  release, like every other zAPP.
