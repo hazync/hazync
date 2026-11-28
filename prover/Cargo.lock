@@ -6938,10 +6938,8 @@ dependencies = [
 name = "zyncapp-host"
 version = "0.1.0"
 dependencies = [
- "bincode",
  "hazync-journal",
  "libzync",
- "risc0-zkvm",
  "rustreexo",
  "serde",
  "serde_json",
@@ -6949,12 +6947,4 @@ dependencies = [
  "swiftsync-verify",
  "zapp-headers",
  "zapp-hints",
- "zyncapp-methods",
-]
-
-[[package]]
-name = "zyncapp-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
 ]

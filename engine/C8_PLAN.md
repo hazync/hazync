@@ -86,4 +86,27 @@ store, history); the zAPP hosts' `--stream` writers; experimental/ (records); en
 
 ## Status
 
-See CUTOVER.md's log.
+**Step 1 done (28.11.2026, bd10e3cd):** both hosts encode with hazync-journal. prover/host's test `sink::serde_identity`
+writes the anchor state, the witness and three chunk splits of five real blocks (130,000, 140,000, 741,000, 962,000,
+965,500) through hazync-journal and through risc0_zkvm::serde: byte-identical. Host suite 109 passed, 1 ignored.
+
+**Step 2 done (28.11.2026):** prover/zyncapps/host writes engine streams only, and prover/zyncapps/methods (risc0-build,
+the coin guest, hashbench, triebench) is gone; the zAPP guest directories (headers, hints, utreexo, utreexo-tip,
+zeroconf) stay. Gone from the zAPP host: `id`, headers-exec, headers-prove, bench-hash, bench-trie, verify-zeroconf,
+prove-coin, inspect-coin, verify-coin, hints-verify (a stub), and every RISC Zero prove / execute / receipt path; each
+`*-prove` needs `--stream`; a core statement is an engine `.journal` or a state JSON. risc0-zkvm and bincode are out of
+its graph. Checked: the RISC Zero-era host (the same source with RISC0_SKIP_BUILD=1, before the change) and the new one
+write byte-identical streams for hints-prove at 200 and 150, HINTS_TAMPER=lineage and core_id, utreexo-prove at 200
+and 100, UTREEXO_TAMPER=lineage, utreexo-tip-prove 101..200 (native and forest sources), prove-zeroconf (the regtest
+fixture, record 0, 12,700 bytes), and the same core-info line (mainnet 1..200 blocks, the engine chain's state_200.json,
+its utreexo base journal at 100). The engine journal of block 200 as the core input gives the same hints stream as the
+state JSON. The binary is byte-identical before and after removing the methods crate from the workspace.
+
+Left by step 2, RISC Zero harnesses that drive the removed execute / prove paths (run by hand, or by the RISC Zero CI
+jobs below), to port to `--stream` + `hzengine execute` or delete with step 4d / 5:
+scripts/libzync/hints_test.sh, scripts/libzync/hints_verify_test.sh, zapps/utreexo/tip-exec-tests.sh,
+zapps/utreexo/tip-source-tests.sh, coordinator/deploy/utreexo (the follower, its check and tests) and
+coordinator/deploy/headers/test/test_follow.sh (the RISC Zero followers: 3.4 rebuilds them on the engine),
+reproduce/libzync-ids.sh (`zyncapp id`), and adversarial.yml's RISC Zero jobs (reproducible-image-id, libzync-hosts,
+libzync-chain, libzync-blocks, libzync-vectors, libzync-rig, libzync-signet; they run on main and pull requests, not on
+pushes to engine/openvm).
