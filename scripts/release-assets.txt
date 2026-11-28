@@ -42,8 +42,8 @@ release hazync-zapp-liveness-x86_64-linux-gnu
 release hazync-zapp-statement-x86_64-linux-gnu
 release hazync-zapp-utreexo-x86_64-linux-gnu
 release hazync-zapp-zeroconf-x86_64-linux-gnu
-# Every zAPP's browser module (its wasm/build.sh, the pinned container) and its glue. The zeroconf zAPP's module is
-# PENDING (user 28.11.2026: it ships with one; add hazync-zapp-zeroconf.wasm / .js when zapps/zeroconf/wasm is built).
+# Every zAPP's browser module (its wasm/build.sh, the pinned container) and its glue. The zeroconf zAPP's module
+# (user 28.11.2026: it ships with one) is zapps/zeroconf/wasm.
 release hazync-zapp-assume.wasm
 release hazync-zapp-assume.js
 release hazync-zapp-deposit.wasm
@@ -58,6 +58,8 @@ release hazync-zapp-statement.wasm
 release hazync-zapp-statement.js
 release hazync-zapp-utreexo.wasm
 release hazync-zapp-utreexo.js
+release hazync-zapp-zeroconf.wasm
+release hazync-zapp-zeroconf.js
 # The key files of each published image (sdk.pk agg.vk openvm.toml guest.vmexe baseline.json image.json vk.bin), so a
 # reader has the pinned key and anyone can rebuild the image and compare. One per record of reproduce/engine-release.tsv
 # (written at the Stage 4 freeze; the names below are the images reproduce/engine-ids.sh builds, the handover verifier

@@ -40,7 +40,7 @@ its record). It does not exist yet, so all of them refuse: that is the intended 
 | hazync-engine-x86_64-windows-cuda.zip | engine-windows.yml artifact | PENDING: a release step fetching it for the release commit; 2.9 (a real Windows prove) |
 | hazync-verify-x86_64-linux-gnu, .wasm, .js | release.sh step 3, package-release.sh | as before (engine verifier) |
 | hazync-zapp-<8>-x86_64-linux-gnu | build-linux-verifier.sh with the zAPP crate | built (dry run below) |
-| hazync-zapp-<7>.wasm / .js | each wasm/build.sh | zeroconf has no wasm module: PENDING, so not listed |
+| hazync-zapp-<8>.wasm / .js | each wasm/build.sh | zeroconf's module added 28.11.2026 (zapps/zeroconf/wasm, sha256 144a764d, 334,454 B; second-machine check pending); the dry run below predates it |
 | hazync-keys-<7>.tar.gz | package-release.sh from ENGINE_KEYS_ROOT | PENDING: reproduce/engine-ids.sh does not export the key files or vk.bin (`hzengine pack --key`); the set of published images is the freeze's |
 | worker, coordinator, run-workers | package-release.sh | PENDING 3.2 (engine-aware board) |
 | sign: hazync-verify-aarch64 | release-sign.yml build-aarch64-verifier | PENDING: that job still checks the RISC Zero id (marked in the workflow) |

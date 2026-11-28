@@ -7,8 +7,10 @@
 pin() { sha256sum "$1" | cut -c1-64; }
 set -euo pipefail
 cd "$(dirname "$0")"
+. ../../scripts/zapp-checks.sh
 D=$PWD/tests/data/engine
 cargo test --release
+wasm_crate_test ./wasm
 cargo build --manifest-path ./cli/Cargo.toml --features regtest-test
 Z=${CARGO_TARGET_DIR:-$PWD/cli/target}/debug/zapp-zeroconf
 ZC=$(cat $D/image_id); CORE=$(cat $D/core_image_id); TXID=$(python3 -c "import json;print(json.load(open('$D/T.json'))['txid'])")
@@ -40,3 +42,7 @@ want 1 "T with another wtxid"                                    "${B[@]}" --txi
 set +e; "$Z" "${B[@]}" --txid $TXID --expect $TIP --json 2> /dev/null > "$W/j"; set -e
 python3 -c "import json,sys;j=json.load(open('$W/j'));assert j['verdict']=='DEMO' and j['txid']=='$TXID' and j['next_block']==111, j" && { n=$((n+1)); echo "ok   --json: verdict, txid, next block"; }
 echo "ZAPP_ZEROCONF_CLI: $n cases as expected"
+# the browser module (wasm/README.md): its sha against the README, then its 23 cases on the same proof
+./wasm/build.sh
+wasm_sha_is_the_readmes wasm/target/wasm32-unknown-unknown/release/zapp_zeroconf_wasm.wasm wasm/README.md
+node wasm/test-zeroconf.mjs "$D"

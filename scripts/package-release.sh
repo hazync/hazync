@@ -116,7 +116,7 @@ hints:zapps/hints/cli:zapp-hints:zapps/hints/wasm:zapp_hints_wasm.wasm:zapp-hint
 liveness:zapps/liveness/cli:zapp-liveness:zapps/liveness/wasm:zapp_liveness_wasm.wasm:zapp-liveness.js
 statement:zapps/statement/cli:zapp-statement:zapps/statement/wasm:zapp_statement_wasm.wasm:zapp-statement.js
 utreexo:zapps/utreexo/cli:zapp-utreexo:zapps/utreexo/wasm:zapp_utreexo_wasm.wasm:zapp-utreexo.js
-zeroconf:zapps/zeroconf/cli:zapp-zeroconf:-:-:-"
+zeroconf:zapps/zeroconf/cli:zapp-zeroconf:zapps/zeroconf/wasm:zapp_zeroconf_wasm.wasm:zapp-zeroconf.js"
 HAVE_WASM_TOOLS=0
 command -v docker >/dev/null && command -v cargo >/dev/null && command -v python3 >/dev/null && command -v git >/dev/null && HAVE_WASM_TOOLS=1
 while IFS=: read -r name crate bin wdir wfile glue; do
