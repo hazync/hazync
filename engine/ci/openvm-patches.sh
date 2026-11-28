@@ -8,6 +8,10 @@
 #     shared memory per block, which Pascal lacks (cudaErrorInvalidValue in LogupZerocheck): use it only when the device
 #     offers it, else the unfused path (the same tree layers); and VPMM's 8 TB address reservation, refused by the
 #     driver there ("out of memory" before any work), is halved until accepted (>= 16 GiB).
+#     And the unfused path's first virtual layer (frac_build_tree_layer_kernel, apply_alpha) updated the layer in place
+#     ordered only by __syncthreads(): a cross-block race once it runs beyond one block (upstream runs it for <= 1024
+#     leaves); it now reads from a snapshot (engine/results/pascal_1080ti: NonzeroRootSum on any card with the unfused
+#     path forced). HZ_FORCE_UNFUSED_BITREV=1 forces the unfused path on any card.
 #   openvm-*.patch: C99 compound literals as std::array temporaries (rv32im mul/mulh/divrem, bigint); GCC's
 #     -Wno-maybe-uninitialized passed only when the target is not MSVC (crates/vm, crates/recursion build.rs).
 #     histogram.cuh: below sm_70 (Pascal, e.g. the GTX 1050 Ti) each thread adds its own count, where sm_70+ uses
